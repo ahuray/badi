@@ -155,10 +155,11 @@ publish need the user's go-ahead first; the rest can start at once.
    not yet:
    - global and per-app instructions, and personalized word choice (Badi's
      style samples are stored but not yet read, step 5);
-   - a numbered list of alternative words for the next word, and synonyms
-     for a selected word (added mid-2026; Badi's candidate panel and its
-     selection revision could carry both). Badi shows alternatives one at a
-     time on Ctrl+Shift+Space;
+   - a numbered list of alternative words for the next word (added
+     mid-2026; Badi's candidate panel could carry it). Badi shows
+     alternatives, and synonyms for a selected word or short phrase, one
+     at a time on Ctrl+Shift+Space
+     ([ADR 0013](docs/decisions/0013-synonyms-for-one-short-selection.md));
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.

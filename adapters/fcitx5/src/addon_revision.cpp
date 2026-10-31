@@ -73,6 +73,7 @@ private:
 }
 
 constexpr std::string_view waitingNotice(std::string_view mode) {
+    if (mode == "synonyms") return "Badi is finding a synonym…";
     return mode == "refine" ? "Badi is refining the selection…" : "Badi is checking the selection…";
 }
 
@@ -107,10 +108,9 @@ std::optional<SelectionWindow> BadiAddon::currentSelection(const Binding &bindin
 bool BadiAddon::revisionChord(Binding &binding) {
     const auto &app = binding.state.appId();
     if (const auto &shown = binding.state.visibleRevision()) {
-        const auto mode = shown->mode == "grammar" ? "refine" : "grammar";
         auto selection = binding.state.revisionRequest()->selection;
-        debug_.record("revision", app, mode == std::string_view("refine") ? "refine_requested"
-                                                                         : "grammar_requested");
+        const auto mode = nextRevisionMode(shown->mode, selection.selected);
+        debug_.record("revision", app, mode + "_requested");
         startRevision(binding, std::move(selection), mode);
         return true;
     }
@@ -263,8 +263,7 @@ void BadiAddon::sendRevision(Binding &binding, const std::optional<Json> &observ
         return endRevision(binding, notice::kRequestFailed, "request_failed");
     }
     binding.broker.coordinates = update->coordinates;
-    debug_.record("revision", app, update->mode == "refine" ? "refine_sent" : "grammar_sent",
-                  update->selection.selected.size());
+    debug_.record("revision", app, update->mode + "_sent", update->selection.selected.size());
     showRevisionNotice(binding, waitingNotice(update->mode));
 }
 
@@ -318,7 +317,7 @@ void BadiAddon::showRevisionCandidate(Binding &binding, const Revision &revision
     auto &panel = binding.inputContext->inputPanel();
     // The candidate list replaces the waiting notice in place.
     if (binding.revisionNoticeTimer) binding.revisionNoticeTimer->setEnabled(false);
-    binding.ownedAuxiliary = revisionHelp(revision.mode);
+    binding.ownedAuxiliary = revisionHelp(revision.mode, revision.original);
     panel.setAuxUp(::fcitx::Text(binding.ownedAuxiliary));
     panel.setCandidateList(std::move(list));
     binding.ownedCandidates = panel.candidateList();

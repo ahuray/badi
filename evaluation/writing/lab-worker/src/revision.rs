@@ -127,6 +127,7 @@ pub async fn run(
         language,
         before: &request.before,
         selected: &request.selected,
+        excluded: &[],
         timeout: REVISION_TIMEOUT,
     };
     let started = Instant::now();

@@ -280,6 +280,7 @@ void runRevision(const std::string &socket, const std::string &appId) {
     unsigned int shown = 0;
     bool applied = false;
     bool dismissed = false;
+    bool synonymsDone = false;
     bool unchanged = false;
     std::unique_ptr<::fcitx::EventSourceTime> readingTimer;
     const auto ask = [&](std::string_view text, std::size_t from, std::size_t to, std::string mode) {
@@ -322,18 +323,39 @@ void runRevision(const std::string &socket, const std::string &appId) {
                 readingTimer->setOneShot();
                 return;
             }
-            require(shown == 2 && revision.mode == "refine" && revision.text == "They're going home.");
+            if (shown == 2) {
+                require(revision.mode == "refine" && revision.text == "They're going home.");
+                const auto dismissal = state.requestRevisionDismissal(wire->nowMs(), kPanel);
+                require(dismissal && wire->requestDismissal(*dismissal));
+                return;
+            }
+            if (shown == 3) {
+                require(revision.mode == "synonyms" && revision.text == "lovely");
+                // Asking again offers another synonym for the same word.
+                ask("The view from the hill is beautiful today", 26, 35, "synonyms");
+                return;
+            }
+            require(shown == 4 && revision.mode == "synonyms" && revision.text == "pretty");
             const auto dismissal = state.requestRevisionDismissal(wire->nowMs(), kPanel);
             require(dismissal && wire->requestDismissal(*dismissal));
+            synonymsDone = true;
         },
         .onRevisionClear = [&](const RevisionClear &clear) {
             if (shown == 2 && !dismissed) {
                 require(clear.reason == "dismissed");
                 dismissed = true;
+                ask("The view from the hill is beautiful today", 26, 35, "synonyms");
+                return;
+            }
+            // The second synonyms request supersedes the first offer.
+            if (shown == 3 && clear.reason == "superseded") return;
+            if (shown == 4 && clear.reason == "dismissed") {
+                require(synonymsDone);
                 ask("Thanks for the reply.", 0, 21, "grammar");
                 return;
             }
-            require(dismissed && clear.reason == "no_change" && clear.coordinates == state.coordinates());
+            require(dismissed && synonymsDone && clear.reason == "no_change" &&
+                    clear.coordinates == state.coordinates());
             unchanged = true;
             loop.exit();
         },
@@ -345,7 +367,7 @@ void runRevision(const std::string &socket, const std::string &appId) {
     deadline->setOneShot();
     require(transport.connect());
     loop.exec();
-    require(applied && shown == 2 && dismissed && unchanged);
+    require(applied && shown == 4 && dismissed && synonymsDone && unchanged);
     transport.disconnect();
 }
 
@@ -358,7 +380,7 @@ int main(int argc, char **argv) {
             runReconnect(argv[2], argv[3]);
         } else if (argc == 4 && std::string(argv[1]) == "--revision") {
             runRevision(argv[2], argv[3]);
-            std::cout << "Native transport: revision shown, applied, refined, dismissed, unchanged passed\n";
+            std::cout << "Native transport: revision shown, applied, refined, synonyms cycled, dismissed, unchanged passed\n";
             return 0;
         } else if (argc == 4 && std::string(argv[1]) == "--alternatives") {
             runAlternatives(argv[2], argv[3]);

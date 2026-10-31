@@ -8,6 +8,10 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- A selected word or short phrase can take a synonym: Ctrl+Shift+Space
+  cycles grammar, a refined wording, then a synonym that fits the
+  sentence — and another on each further press — shown with its change
+  marked and applied by Tab like any revision (ADR 0013).
 - Rich editors on websites (mail composers, ProseMirror, Lexical, Quill)
   suggest after a space again: the observer reads a contenteditable's
   no-break spaces as Chromium sends them, and a block-scoped snapshot agrees

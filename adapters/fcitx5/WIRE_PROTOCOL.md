@@ -174,9 +174,12 @@ can share one; every binding holding the id retires it, which only withdraws.
 ## Revision
 
 An explicit revision of one selection
-([ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md)).
+([ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md);
+`synonyms` by [ADR 0013](../../docs/decisions/0013-synonyms-for-one-short-selection.md)).
 `revision.request` is a field revision of its own, with its own salted
-fingerprint over the selection: `mode` (`grammar` or `refine`), `before`
+fingerprint over the selection: `mode` (`grammar`, `refine` or `synonyms` —
+a synonyms selection is at most three words with no digit, address or
+sentence mark, answered `invalid_output` otherwise), `before`
 (≤512 scalars), `selected` (1–600 scalars on one line), `after` (≤128),
 `selection` (Fcitx's anchor and cursor, which span exactly `selected`),
 `field`, `activation: "manual"` and `language`. It supersedes the field's
