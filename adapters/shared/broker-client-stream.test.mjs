@@ -50,6 +50,21 @@ async function fakeBroker(onSuggest) {
               ttl_ms: ttl, provider: 'local_model' } });
           };
           onSuggest({ socket, show });
+        } else if (message.type === 'control.request' && message.payload.action === 'alternatives' && !message.payload.word) {
+          const coordinates = { session_id: message.session_id, focus_epoch: message.focus_epoch, revision: message.revision };
+          reply('control.result', { accepted: true }, coordinates);
+          socket.write(frame({ id: 'clear-1', type: 'suggestion.clear', ...coordinates, payload: {
+            fingerprint: message.payload.fingerprint, suggestion_id: message.payload.suggestion_id, reason: 'superseded' } }));
+          texts.set('s2', ' again soon');
+          socket.write(frame({ id: message.id, type: 'suggestion.list', ...coordinates, payload: {
+            fingerprint: message.payload.fingerprint, suggestion_id: message.payload.suggestion_id,
+            words: ['so', 'again'], ttl_ms: 15000, provider: 'local_model' } }));
+        } else if (message.type === 'control.request' && message.payload.action === 'alternatives' && message.payload.word) {
+          const coordinates = { session_id: message.session_id, focus_epoch: message.focus_epoch, revision: message.revision };
+          reply('control.result', { accepted: true }, coordinates);
+          socket.write(frame({ id: message.id, type: 'suggestion.show', ...coordinates, payload: {
+            fingerprint: message.payload.fingerprint, suggestion_id: 's2', text: ' again soon',
+            accept_word: ' again', ttl_ms: 15000, provider: 'local_model' } }));
         } else if (message.type === 'control.request') {
           reply('commit.prepare', { fingerprint: message.payload.fingerprint, suggestion_id: message.payload.suggestion_id,
             text: texts.get(message.payload.suggestion_id), acceptance: 'all' },
@@ -84,6 +99,26 @@ test('a streamed continuation grows the shown suggestion and acceptance binds to
     assert.deepEqual(updates, [' the opportunity to help'], 'only a continuation of the shown text');
     const grant = await client.authorize('all');
     assert.equal(grant.suggestion_id, 's3');
+  } finally {
+    client.close();
+    await broker.close();
+  }
+});
+
+test('a numbered list replaces the shown suggestion and a pick shows its continuation', async () => {
+  const broker = await fakeBroker(({ socket, show }) => socket.write(show(1, ' the opportunity')));
+  const client = new BrokerClient('obsidian');
+  try {
+    assert.equal(await client.connect(broker.path), true);
+    assert.equal(await client.suggest('Thank you for', { language: 'en' }), ' the opportunity');
+    const list = await client.alternative();
+    assert.deepEqual(list, { words: ['so', 'again'] }, 'the chord lists other first words');
+    assert.deepEqual(client.alternativeWords, ['so', 'again']);
+    await assert.rejects(client.pickAlternative('never'), 'an unlisted word is never picked');
+    assert.equal(await client.pickAlternative('again'), ' again soon');
+    assert.equal(client.acceptWord, ' again');
+    assert.equal(client.alternativeWords, null, 'the pick spends the list');
+    await assert.rejects(client.pickAlternative('again'), 'a spent list cannot pick twice');
   } finally {
     client.close();
     await broker.close();

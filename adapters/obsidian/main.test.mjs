@@ -119,6 +119,36 @@ test('Obsidian automatically requests, accepts one word or all, and isolates eac
   assert.equal(controller.key({ isTrusted: true, key: 'Tab', shiftKey: true }), false);
 });
 
+test('Obsidian Ctrl+Shift+Space lists other first words and a digit picks one', async context => {
+  const { controller, view, client, tick } = await harness(context);
+  await tick(250);
+  assert.equal(controller.text, ' for your time');
+  client.alternative = async () => ({ words: ['so', 'again'] });
+  const picks = [];
+  client.pickAlternative = async word => {
+    picks.push(word);
+    client.acceptWord = ' again';
+    return ' again soon';
+  };
+  const chord = { isTrusted: true, key: ' ', ctrlKey: true, shiftKey: true };
+  assert.equal(controller.key(chord), true);
+  await settle();
+  assert.equal(controller.text, null);
+  assert.deepEqual(controller.listWords, ['so', 'again']);
+  assert.equal(controller.decorations[0].widget.text, ' 1.so  2.again');
+  assert.equal(controller.decorations[0].widget.list, true);
+  assert.equal(controller.key({ isTrusted: true, key: '3' }), false, 'a digit past the list types normally');
+  assert.equal(controller.key({ isTrusted: true, key: '2' }), true);
+  await settle();
+  assert.deepEqual(picks, ['again']);
+  assert.equal(controller.text, ' again soon');
+  assert.equal(controller.listWords, null);
+  client.authorize = mode => Promise.resolve({ text: mode === 'word' ? ' again' : ' again soon' });
+  assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), true);
+  await settle();
+  assert.equal(view.state.doc.toString(), 'thank you again');
+});
+
 test('Obsidian Ctrl+Shift+Space on a shown suggestion replaces it with one that starts with another word', async context => {
   const { controller, view, client, tick } = await harness(context);
   await tick(250);

@@ -162,16 +162,14 @@ publish need the user's go-ahead first; the rest can start at once.
      for the larger-model work below: paired Lab probes found neither the
      raw-continuation prompt nor an instructed variant follows them on the
      current models;
-   - a numbered list of alternative words in the editor clients too. Fcitx
-     apps list up to four other first words on Ctrl+Shift+Space, picked by
-     digit or click ([ADR 0014](docs/decisions/0014-numbered-alternative-words.md));
-     Obsidian and Neovim still cycle one at a time, as synonyms do
-     everywhere ([ADR 0013](docs/decisions/0013-synonyms-for-one-short-selection.md));
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
 
    Badi already matches or beats it on:
+   - a numbered list of alternative words in Fcitx apps, Obsidian and
+     Neovim, picked by digit (or click in Fcitx), live-verified in
+     Omawrite ([ADR 0014](docs/decisions/0014-numbered-alternative-words.md));
    - words saved per day and per app or site, as counts only
      ([`badi stats`](README.md#usage-statistics));
    - inline grey text in the field's font with the word Tab takes drawn
@@ -212,8 +210,14 @@ publish need the user's go-ahead first; the rest can start at once.
    2026-10-20; on 2026-10-24 it had no reply and `master` no fix, so a fix
    would ship in 5.1.17 at the earliest. Debian forky and sid ship 5.1.16
    too; Debian 13 (5.1.9) and Ubuntu 24.04 to 26.10 (5.1.4–5.1.15) predate
-   the change. Offering the patch upstream is publication and needs the
-   user's go-ahead. *Done when* a fixed fcitx5-qt
+   the change. The patch is offered upstream as
+   [fcitx/fcitx5-qt#92](https://github.com/fcitx/fcitx5-qt/pull/92)
+   (2026-11-02), with a live A/B on this machine: a locally built patched
+   plugin restored the spelling replacement in Omawrite (the file read
+   `address`, two native undos brought back the commit then the deleted
+   typo), while the system 5.1.16 plugin left the typo untouched. Still
+   open: the PR landing in a shipped fcitx5-qt, and the Telegram check.
+   *Done when* a shipped fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
 3. **Finish the installed-flow matrix with someone present.** Still open: a

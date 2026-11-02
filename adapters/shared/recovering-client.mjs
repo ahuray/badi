@@ -22,6 +22,7 @@ export class RecoveringBrokerClient extends EventEmitter {
   get automaticAllowed() { return !this.#closed && this.#client?.automaticAllowed === true; }
   get replacementBefore() { return this.#client?.replacementBefore; }
   get acceptWord() { return this.#client?.acceptWord; }
+  get alternativeWords() { return this.#client?.alternativeWords ?? null; }
 
   connect(socketPath = this.#socketPath) {
     if (this.#closed) return Promise.reject(new Error('Adapter closed'));
@@ -80,6 +81,10 @@ export class RecoveringBrokerClient extends EventEmitter {
   alternative() {
     if (!this.allowed) return Promise.reject(new Error('App disabled or model paused'));
     return this.#client.alternative();
+  }
+  pickAlternative(...args) {
+    if (!this.allowed) return Promise.reject(new Error('App disabled or model paused'));
+    return this.#client.pickAlternative(...args);
   }
   authorize(...args) {
     if (!this.allowed) return Promise.reject(new Error('Suggestion expired'));

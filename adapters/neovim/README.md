@@ -12,7 +12,8 @@ virtual text and makes the edit itself, so native undo applies. Needs Neovim
 | **Ctrl+Right** | Accept it all |
 | Keep typing | Typing its next letters keeps the rest |
 | **Escape** | Leaving Insert mode dismisses it |
-| **Ctrl+Shift+Space** | Ask for one (`:BadiRequest` from any mapping). On a shown one, show one that starts with another word; after three, presses cycle through them |
+| **Ctrl+Shift+Space** | Ask for one (`:BadiRequest` from any mapping). On a shown one, list up to four other first words where it stood; a digit shows that word's continuation, and pressing again lists the rest |
+| **1–9** | While a numbered list is drawn, show the continuation of the word it numbers; any other digit types normally |
 
 `badi app nvim on` allows Neovim; `badi app nvim off` blocks it. The grant is
 Neovim's own (`{kind: linux_app, adapter: neovim, app_id: nvim}`), separate

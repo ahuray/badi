@@ -588,7 +588,13 @@ impl HelloPayload {
             return Err(ProtocolError::InvalidPayload);
         }
         if self.capabilities.contains(&Capability::AlternativeList)
-            && !matches!(self.adapter.kind, AdapterKind::Fcitx | AdapterKind::Test)
+            && !matches!(
+                self.adapter.kind,
+                AdapterKind::Fcitx
+                    | AdapterKind::Test
+                    | AdapterKind::Obsidian
+                    | AdapterKind::Neovim
+            )
         {
             return Err(ProtocolError::InvalidPayload);
         }
@@ -1911,6 +1917,34 @@ mod tests {
             .validate()
             .expect("the Fcitx addon");
         for kind in [AdapterKind::Obsidian, AdapterKind::Terminal] {
+            assert!(hello(kind).validate().is_err(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn alternative_lists_belong_to_the_addon_and_the_editors() {
+        let hello = |kind| HelloPayload {
+            min_v: CURRENT_PROTOCOL_VERSION,
+            max_v: CURRENT_PROTOCOL_VERSION,
+            adapter: AdapterDescriptor {
+                kind,
+                name: "adapter".to_owned(),
+                version: "1".to_owned(),
+            },
+            capabilities: vec![
+                Capability::Context,
+                Capability::Suggestion,
+                Capability::AlternativeList,
+            ],
+        };
+        for kind in [
+            AdapterKind::Fcitx,
+            AdapterKind::Obsidian,
+            AdapterKind::Neovim,
+        ] {
+            hello(kind).validate().expect("a list-capable adapter");
+        }
+        for kind in [AdapterKind::Terminal, AdapterKind::Libreoffice] {
             assert!(hello(kind).validate().is_err(), "{kind:?}");
         }
     }

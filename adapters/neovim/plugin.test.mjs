@@ -93,16 +93,21 @@ test('the request key on a shown suggestion shows one that starts with another w
   await markdown(editor, 'ithank you');
   await editor.until(current => current.preview === ' for your time', 'preview');
   await editor.send('<C-S-Space>');
-  let state = await editor.until(current => current.preview === ' so much', 'an alternative');
+  let state = await editor.until(current => current.preview === ' 1.so  2.again', 'a numbered list');
+  assert.equal(state.screen, 'thank you 1.so  2.again');
+  await editor.send('1');
+  state = await editor.until(current => current.preview === ' so much', 'a picked alternative');
   assert.deepEqual(state.chunks, [[' so', 'BadiSuggestionWord'], [' much', 'BadiSuggestion']]);
   assert.equal(state.screen, 'thank you so much');
   await editor.send('<C-S-Space>');
-  await editor.until(current => current.preview === ' again', 'another alternative');
+  await editor.until(current => current.preview === ' 1.again', 'the remaining list');
+  await editor.send('1');
+  await editor.until(current => current.preview === ' again', 'another picked alternative');
   await editor.send('<Tab>');
   state = await editor.until(current => current.lines[0] === 'thank you again', 'acceptance');
   const operations = await editor.operations();
-  assert.deepEqual(operations.filter(entry => ['alternative', 'accept'].includes(entry.op)).map(entry => entry.op),
-    ['alternative', 'alternative', 'accept']);
+  assert.deepEqual(operations.filter(entry => ['alternative', 'pick', 'accept'].includes(entry.op)).map(entry => entry.op),
+    ['alternative', 'pick', 'alternative', 'pick', 'accept']);
   assert.ok(!operations.some(entry => entry.op === 'suggest' && entry.explicit), 'The key replaced the shown one');
 
   // Without another one, the shown suggestion is withdrawn.

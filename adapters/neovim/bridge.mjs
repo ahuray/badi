@@ -75,7 +75,14 @@ async function handle(command) {
       return suggest(command);
     case 'alternative': {
       grant = null;
-      const text = await client.alternative();
+      const result = await client.alternative();
+      if (result && typeof result === 'object') return { ok: true, words: [...result.words] };
+      return result ? { ok: true, text: result, word: client.acceptWord } : { ok: true, text: null };
+    }
+    case 'pick': {
+      if (!validContext(command.word, 128)) return { ok: false, reason: 'invalid_request' };
+      grant = null;
+      const text = await client.pickAlternative(command.word);
       return text ? { ok: true, text, word: client.acceptWord } : { ok: true, text: null };
     }
     case 'accept': {
