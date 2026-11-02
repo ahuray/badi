@@ -8,6 +8,11 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Fixed suggestions never appearing in the Claude desktop app: its
+  composer sits 26 ancestors below its document, past the observer's
+  24-level origin climb, so every snapshot was denied. The context
+  climbs now take the frame bound and degrade quietly; origin
+  determination keeps its shallow fail-closed bound.
 - The numbered alternative list now works in Obsidian and Neovim too:
   Ctrl+Shift+Space shows the words where the suggestion stood, a digit
   picks one, and its continuation is accepted like any suggestion. The
