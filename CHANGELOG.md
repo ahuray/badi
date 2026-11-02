@@ -10,7 +10,9 @@ Unreleased in the same commit.
 
 - Fixed the numbered alternative list never appearing with the local
   model: the owned runtime did not forward the list-words call to its
-  client, so every ask answered with the shown continuation again.
+  client, so every ask answered with the shown continuation again; and
+  the addon dropped the list because the broker's superseded clear had
+  already retired the suggestion it named.
 - Ctrl+Shift+Space on a shown suggestion in an Fcitx app now lists up to
   four other first words as numbered candidates; a digit or a click shows
   that word's continuation, bound and accepted like any suggestion. The

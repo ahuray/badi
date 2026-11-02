@@ -783,6 +783,36 @@ void alternativeListBindsAndPicks() {
           "a pick names its word and spends the list");
     check(!listing.requestAlternativePick("again", 100, ownedCandidates),
           "a spent list cannot pick twice");
+
+    // The broker clears the shown suggestion (superseded) before its list
+    // arrives; the list naming that retired suggestion still shows.
+    auto cleared = focusedState();
+    const auto clearedUpdate = explicitContext(cleared);
+    const auto clearedShown = suggestionFor(clearedUpdate);
+    check(cleared.showSuggestion(clearedShown, 100), "cleared-list setup should display");
+    check(cleared.clearSuggestionIf(clearedShown.coordinates,
+                                    std::optional<std::string>{"suggestion-1"}),
+          "the superseded clear retires the shown suggestion");
+    check(cleared.showAlternativeList(
+              AlternativeList{clearedShown.coordinates, "request-2", "suggestion-1", {"so"}, 500},
+              100),
+          "a list naming the just-cleared suggestion shows");
+
+    // A newer suggestion ends the retired id's claim to a list.
+    auto replaced = focusedState();
+    const auto replacedUpdate = explicitContext(replaced);
+    const auto replacedShown = suggestionFor(replacedUpdate);
+    check(replaced.showSuggestion(replacedShown, 100), "replaced-list setup should display");
+    check(replaced.clearSuggestionIf(replacedShown.coordinates,
+                                     std::optional<std::string>{"suggestion-1"}),
+          "the clear retires the first suggestion");
+    auto newer = replacedShown;
+    newer.suggestionId = "suggestion-2";
+    check(replaced.showSuggestion(newer, 100), "the newer suggestion shows");
+    check(!replaced.showAlternativeList(
+              AlternativeList{replacedShown.coordinates, "request-3", "suggestion-1", {"so"}, 500},
+              100),
+          "no list for a suggestion a newer one replaced");
 }
 
 void preInputKeysConsumeOnlyBadiUi() {
