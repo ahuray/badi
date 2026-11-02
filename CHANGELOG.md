@@ -8,6 +8,9 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Fixed the numbered alternative list never appearing with the local
+  model: the owned runtime did not forward the list-words call to its
+  client, so every ask answered with the shown continuation again.
 - Ctrl+Shift+Space on a shown suggestion in an Fcitx app now lists up to
   four other first words as numbered candidates; a digit or a click shows
   that word's continuation, bound and accepted like any suggestion. The
