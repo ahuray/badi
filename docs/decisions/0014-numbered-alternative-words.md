@@ -46,6 +46,17 @@ would cost another model generation inside the one explicit request.
    phase, before a terminal's typed line could record them as text.
    The list never yields Tab or any other key's meaning.
 
+## Extension (2026-11-02): the editor clients list too
+
+Decision 2 limited the first taker to the Fcitx addon. The shared
+editor client now negotiates `alternative_list` for Obsidian and
+Neovim and handles `suggestion.list` with the same binding: the list
+is shown where the suggestion stood (numbered inline text), digits
+pick only while it is shown, and any other key keeps its meaning.
+Readline (Bash) still never negotiates it and keeps cycling. The
+broker admits the capability from those editor kinds only, never from
+terminal or other kinds.
+
 ## Consequences
 
 - The wire gains `suggestion.list`, the `alternative_list` capability

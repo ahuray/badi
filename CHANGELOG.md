@@ -8,6 +8,11 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- The numbered alternative list now works in Obsidian and Neovim too:
+  Ctrl+Shift+Space shows the words where the suggestion stood, a digit
+  picks one, and its continuation is accepted like any suggestion. The
+  broker admits `alternative_list` from those editor kinds, not just
+  the Fcitx addon (ADR 0014, extended).
 - Fixed the numbered alternative list never appearing with the local
   model: the owned runtime did not forward the list-words call to its
   client, so every ask answered with the shown continuation again; and

@@ -109,21 +109,24 @@ test('editor identities, native reading lease, revocation and one-shot commits a
       client.close();
     }
     {
-      // The request key on a shown continuation: another first word each
-      // press, then the shown ones again. The broker's clear of the replaced
-      // suggestion leaves the preview, and acceptance binds to the answer.
+      // The request key on a shown continuation lists the other first
+      // words; a pick shows its continuation, and acceptance binds to it.
+      // The broker's clear of the replaced suggestion leaves the preview.
       const client = new BrokerClient('obsidian');
       clients.push(client);
       assert.equal(await client.connect(endpoint), true);
       assert.equal(await client.suggest('thank you'), ' for your time');
       let clears = 0;
       client.on('clear', () => { clears++; });
-      const shown = [];
-      for (let press = 0; press < 4; press++) shown.push([await client.alternative(), client.acceptWord]);
-      assert.deepEqual(shown, [[' so much', ' so'], [' again', ' again'], [' for your time', ' for'], [' so much', ' so']]);
+      assert.deepEqual(await client.alternative(), { words: ['so', 'again'] });
+      assert.equal(await client.pickAlternative('so'), ' so much');
+      assert.equal(client.acceptWord, ' so');
+      assert.deepEqual(await client.alternative(), { words: ['again'] });
+      assert.equal(await client.pickAlternative('again'), ' again');
+      assert.equal(await client.alternative(), ' again', 'no new words: the shown one again');
       assert.equal(clears, 0, 'each answer replaces the preview without withdrawing it first');
       const grant = await client.authorize('word');
-      assert.equal(grant.text, ' so');
+      assert.equal(grant.text, ' again');
       client.report(grant, 'stale');
       await assert.rejects(client.alternative(), /No suggestion/);
       client.close();
