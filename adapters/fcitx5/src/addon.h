@@ -125,6 +125,11 @@ private:
         // An explicit revision on its way (ADR 0012): the selection and mode
         // waiting for the observer's field, its policy or its session.
         std::optional<std::pair<SelectionWindow, std::string>> revisionWaiting;
+        // The mode the chord asks next for this exact selection after a
+        // mode found nothing to change, so the cycle reaches synonyms
+        // for selections that are already correct (ADR 0013). An edit,
+        // Escape or a different selection starts over.
+        std::optional<std::pair<SelectionWindow, std::string>> revisionCycle;
         // Retries of that request's observer steps while the observer is
         // busy, the step to retry, and the timer that runs it.
         unsigned int revisionRetries = 0;

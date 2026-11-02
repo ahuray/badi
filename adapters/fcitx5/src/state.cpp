@@ -740,6 +740,7 @@ bool SessionState::showSuggestion(Suggestion suggestion, std::uint64_t nowMs) {
     }
     alternativeList_.reset();
     visible_ = std::move(suggestion);
+    retiredSuggestionId_.reset();
     pendingAcceptance_.reset();
     return true;
 }
@@ -756,7 +757,8 @@ bool SessionState::showAlternativeList(AlternativeList list, std::uint64_t nowMs
         list.words.size() > 4 || list.expiresAtMs <= nowMs ||
         list.expiresAtMs > kMaxSafeCounter || !validOpaqueId(list.requestId) ||
         !validOpaqueId(list.suggestionId) || list.coordinates != coordinates_ ||
-        !visible_ || visible_->suggestionId != list.suggestionId) {
+        !((visible_ && visible_->suggestionId == list.suggestionId) ||
+          (retiredSuggestionId_ && *retiredSuggestionId_ == list.suggestionId))) {
         return false;
     }
     std::vector<std::string> words;
@@ -772,6 +774,7 @@ bool SessionState::showAlternativeList(AlternativeList list, std::uint64_t nowMs
     alternativeList_ = std::move(list);
     // The broker retired the shown suggestion when it listed its words.
     visible_.reset();
+    retiredSuggestionId_.reset();
     return true;
 }
 
@@ -905,6 +908,7 @@ bool SessionState::clearSuggestionIf(
 }
 
 void SessionState::clearSuggestion() {
+    if (visible_) retiredSuggestionId_ = visible_->suggestionId;
     visible_.reset();
     pendingAcceptance_.reset();
     alternativeList_.reset();

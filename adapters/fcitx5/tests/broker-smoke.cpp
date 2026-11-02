@@ -262,7 +262,11 @@ void runAlternatives(const std::string &socket, const std::string &appId) {
             const auto pick = state.requestAlternativePick(picks[listed++], wire->nowMs(), kPanel);
             require(pick && wire->requestAlternativePick(*pick));
         },
-        .onClear = [](const ClearNotice &) {},
+        // Like the addon: the superseded clear retires the shown
+        // suggestion before its list arrives.
+        .onClear = [&](const ClearNotice &notice) {
+            state.clearSuggestionIf(notice.coordinates, notice.suggestionId);
+        },
         .onCommitPrepare = [](const CommitPrepare &) { require(false); },
         .onDisconnected = [&] { loop.exit(); },
         .onPolicy = {},

@@ -126,8 +126,21 @@ bool BadiAddon::revisionChord(Binding &binding) {
         showNotice(binding, notice::kRevisionSelection);
         return true;
     }
-    debug_.record("revision", app, "grammar_requested", selection->selected.size());
-    startRevision(binding, std::move(*selection), "grammar");
+    std::string mode = "grammar";
+    if (binding.revisionCycle) {
+        const auto &[cycledSelection, cycledMode] = *binding.revisionCycle;
+        if (cycledSelection.before == selection->before &&
+            cycledSelection.selected == selection->selected &&
+            cycledSelection.after == selection->after &&
+            cycledSelection.anchor == selection->anchor &&
+            cycledSelection.head == selection->head &&
+            cycledSelection.language == selection->language) {
+            mode = cycledMode;
+        }
+        binding.revisionCycle.reset();
+    }
+    debug_.record("revision", app, mode + "_requested", selection->selected.size());
+    startRevision(binding, std::move(*selection), mode);
     return true;
 }
 
@@ -342,7 +355,18 @@ void BadiAddon::showRevisionNotice(Binding &binding, std::string_view message) {
 
 void BadiAddon::onRevisionClear(const RevisionClear &clear) {
     auto *binding = bindingFor(clear.coordinates.sessionId);
-    if (!binding || !binding->state.clearRevisionIf(clear.coordinates, clear.revisionId)) return;
+    if (!binding) return;
+    // Nothing to change is not an edit or Escape: the cycle continues
+    // with the next mode for this exact selection (ADR 0013).
+    std::optional<std::pair<SelectionWindow, std::string>> cycle;
+    if (clear.reason == "no_change") {
+        if (const auto &request = binding->state.revisionRequest()) {
+            cycle = std::make_pair(request->selection,
+                                   nextRevisionMode(request->mode, request->selection.selected));
+        }
+    }
+    if (!binding->state.clearRevisionIf(clear.coordinates, clear.revisionId)) return;
+    binding->revisionCycle = std::move(cycle);
     debug_.record("revision_clear", binding->state.appId(), clear.reason);
     clearOwnedPanel(*binding);
     if (const auto text = revisionClearNotice(clear.reason)) showNotice(*binding, *text);
@@ -362,6 +386,7 @@ void BadiAddon::acceptRevision(Binding &binding) {
 // Escape, or any key that edits the field: tell the broker and clear Badi's
 // panel. The key itself keeps its meaning.
 void BadiAddon::cancelRevision(Binding &binding) {
+    binding.revisionCycle.reset();
     if (binding.revisionWaiting) {
         binding.revisionWaiting.reset();
         if (binding.revisionTimer) binding.revisionTimer->setEnabled(false);

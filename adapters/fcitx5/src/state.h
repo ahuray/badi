@@ -687,6 +687,9 @@ private:
     bool focused_ = false;
     std::optional<ContextUpdate> lastContext_;
     std::optional<Suggestion> visible_;
+    // The last cleared suggestion's id: the broker clears it (superseded)
+    // before its alternative list arrives, and only that list may name it.
+    std::optional<std::string> retiredSuggestionId_;
     std::optional<AcceptRequest> pendingAcceptance_;
     std::uint64_t alternativeSerial_ = 0;
     std::optional<AlternativeList> alternativeList_;
