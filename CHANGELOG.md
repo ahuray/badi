@@ -13,6 +13,9 @@ Unreleased in the same commit.
   client, so every ask answered with the shown continuation again; and
   the addon dropped the list because the broker's superseded clear had
   already retired the suggestion it named.
+- Ctrl+Shift+Space now cycles past a revision mode that found nothing
+  to change, so synonyms are reachable for selections that are already
+  correct instead of the cycle restarting at grammar.
 - Ctrl+Shift+Space on a shown suggestion in an Fcitx app now lists up to
   four other first words as numbered candidates; a digit or a click shows
   that word's continuation, bound and accepted like any suggestion. The
