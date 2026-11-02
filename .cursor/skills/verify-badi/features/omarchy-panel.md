@@ -9,7 +9,7 @@ The **b** mark on the Omarchy bar opens Badi's settings and shows whether sugges
 - `panel-model` shows the model in use on the hero pill. After All settings, the Writing model row names that model's licence, the device recommendation, and every model that fits, with ★ on the recommended one.
 - `panel-search` filters rows from `/`.
 - `panel-length` sets Short or Normal on Suggestion length.
-- `panel-snooze` shows a Snoozed row while an app or site is quiet, and ending it resumes that target.
+- `panel-snooze` shows a Snoozed row while an app or site is quiet, and Enter ends every snooze.
 - `panel-stats` shows seven-day bars and today's and the week's word counts in the History header. The leading-apps line and Forget usage statistics appear only after All settings. Forget asks Omarchy to confirm.
 
 ## How to get to it (user POV)
@@ -35,6 +35,6 @@ Preconditions:
 
 ## Gotchas
 
-- The popout polls the broker only while it is open. A status change made while it is closed shows up on the next open.
+- The popout polls the broker only while it is open. A pause, snooze, or settings write from a terminal or shortcut asks the mark to refresh at once. A change that does not refresh the mark shows up on the next open.
 - Installing the panel is a separate step from `install-desktop.py`. A locked desktop exits with `Desktop locked: no UI files changed. Unlock and rerun this command.` `--wait-for-unlock SECONDS` waits for an unlock before that exit.
 - Keyboard navigation is the popout's own model. Driving `badictl` does not prove j, k, or `/`.

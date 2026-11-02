@@ -1,18 +1,19 @@
 # Selection revision
 
-Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar, and the same chord again offers a refined wording. Fcitx's candidate list shows the change with removed words struck through and new ones bold. Tab applies it as one edit over the selection, Escape keeps the text ([ADR 0012](../../../../docs/decisions/0012-explicit-revision-of-one-selection.md)).
+Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar. The same chord again offers a refined wording, then — for a word or short phrase of at most three words, with no digit, address or sentence mark — a synonym, and another synonym on each further press. A longer selection cycles grammar and refine. Fcitx's candidate list shows the change with removed words struck through and new ones bold. Tab applies it as one edit over the selection, Escape keeps the text ([ADR 0012](../../../../docs/decisions/0012-explicit-revision-of-one-selection.md), [ADR 0013](../../../../docs/decisions/0013-synonyms-for-one-short-selection.md)).
 
 ## Sub-features
 
 - `revision-grammar` shows a grammar fix of the selection, or "Badi found nothing to change".
-- `revision-refine` replaces the shown fix with a refined wording on the second chord, and back.
+- `revision-refine` replaces the shown fix with a refined wording on the next chord.
+- `revision-synonym` offers a synonym after refine when the selection is one to three words, and another synonym on each further press. A longer selection returns to grammar instead. Synonyms are one at a time, not a numbered list, and only on the Fcitx path.
 - `revision-apply` replaces exactly the selection on Tab and records `revision_confirmed` after the read-back.
 - `revision-dismiss` leaves the text and the selection unchanged on Escape. Any other key retires the revision and is not swallowed, so typing replaces the selection as it would without Badi.
 - `revision-refused` sends nothing from a password, terminal or denied field, and answers pause, snooze and holds with a notice.
 
 ## How to get to it (user POV)
 
-- In an allowed Chromium-based app's plain text field, or a native exact field, select a line of disposable text with an error ("She dont know where is the station") and press Ctrl+Shift+Space.
+- In an allowed Chromium-based app's plain text field, or a native exact field, select a line of disposable text with an error ("She dont know where is the station") and press Ctrl+Shift+Space. Press it again for a refined wording. On a short selection such as one word, press it again for a synonym, and again for another. A longer line's next press returns to grammar. Escape or an edit starts the cycle over. Obsidian, Neovim and Writer do not revise a selection.
 - The first request starts the revision model and takes a few seconds. The model stops after ten idle minutes.
 - `badi revise` says whether the model is installed; `badi revise install` downloads it.
 
@@ -20,12 +21,12 @@ Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar, and
 
 Preconditions:
 
-- Desktop only. There is no headless driver. The phrase provider installs `FixtureReviser`, which rewrites a few known strings, but this harness never selects text or presses the chord. The protocol and engine tests in `broker/src/engine/tests/` and `protocol/v2/examples/` are the source contract.
+- Desktop only. There is no headless driver. The phrase provider installs `FixtureReviser`, which rewrites a few known strings and offers synonyms such as `beautiful` → `lovely`, then `pretty`, but this harness never selects text or presses the chord. The protocol and engine tests in `broker/src/engine/tests/` and `protocol/v2/examples/` are the source contract.
 - `badi doctor` names the installed commit and `badi revise` reports the model installed.
 - A throwaway browser profile on a disposable local page, and `badi debug on --text` for the trace.
 
 - **Grammar fix and apply.** Select the sentence, press the chord, check the marked change in Fcitx's candidate list, press Tab. The trace shows `revision_dispatched_unverified` then `revision_confirmed`, and the field reads the fixed sentence.
-- **Refine and dismiss.** Press the chord twice, then Escape. The field and the selection are unchanged.
+- **Refine, synonym, and dismiss.** On a one-to-three-word selection, press the chord three times (grammar, refine, synonym), then Escape. The field and the selection are unchanged. On a longer line, the second press is refine and the next returns to grammar.
 - **Nothing to change.** A correct selection shows "Badi found nothing to change" (`no_change`).
 - **Refusal.** In a password field the trace shows no `revision.request` and no key lines.
 

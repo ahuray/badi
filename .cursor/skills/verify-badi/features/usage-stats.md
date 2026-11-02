@@ -14,7 +14,7 @@ Usage statistics count suggestions shown, acceptances that landed, and words tho
 - Run `badi stats`. It prints today, the last seven days, each day, and the leading apps and sites.
 - Run `badi stats --json` for the same counts.
 - Run `badi stats forget` to delete them. Counting starts again afterwards.
-- The Omarchy popout shows the week's words and Forget usage statistics.
+- The Omarchy popout's History shows the week's words. Forget usage statistics is under All settings, and Omarchy asks to confirm.
 
 ## Driving it with verify-badi
 
