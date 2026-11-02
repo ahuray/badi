@@ -235,10 +235,16 @@ publish need the user's go-ahead first; the rest can start at once.
    A disposable mail-style page in Chromium 154 passed every check live on
    2026-10-20 ([observer runbook](adapters/accessibility/README.md#window-words-context-on)),
    and window words reach Zen and Chromium-based apps since `f180653` (VS
-   Code live). Still unchecked:
-   - the user's own web mail, where only they can open a draft;
-   - the Claude desktop app's composer, after a relaunch picks up
-     `--force-renderer-accessibility=complete`.
+   Code live). Still unchecked: the user's own web mail, where only they
+   can open a draft. The Claude desktop app's composer was checked
+   after its relaunch (2026-11-02): it first exposed an observer bug —
+   its composer sits 26 ancestors below its document, past the origin
+   climb's bound, so every snapshot was denied — fixed in `20366a6`.
+   After that, live: snapshots succeed, the ghost, the numbered list
+   and a digit pick all landed, `window_chars=142` rides its
+   `context.changed`, and window words flow (`window_words=4`); no
+   window word has finished there yet (the stems typed matched none
+   of the four).
    *Done when* both show a window or learned word finished, and
    `window_chars` appears on their `context.changed` in a `badi debug on`
    trace.
