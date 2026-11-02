@@ -215,8 +215,11 @@ publish need the user's go-ahead first; the rest can start at once.
    (2026-11-02), with a live A/B on this machine: a locally built patched
    plugin restored the spelling replacement in Omawrite (the file read
    `address`, two native undos brought back the commit then the deleted
-   typo), while the system 5.1.16 plugin left the typo untouched. Still
-   open: the PR landing in a shipped fcitx5-qt, and the Telegram check.
+   typo), while the system 5.1.16 plugin left the typo untouched. The
+   same A/B passed in Telegram's Saved Messages composer (2026-11-02):
+   with the patched plugin the correction preview showed and Tab landed
+   `address`; with the system plugin no correction was offered. Still
+   open: only the PR landing in a shipped fcitx5-qt.
    *Done when* a shipped fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
