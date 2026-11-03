@@ -8,6 +8,12 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Fixed the broker crash-looping on a fresh package-only install: the
+  unit's read-only home skipped the missing `~/.config/badi`, so the
+  broker could never create its private settings directory. systemd
+  now creates it (`ConfigurationDirectory`), and a settings directory
+  that cannot be created is reported as unsafe (exit 78, no retry)
+  instead of a transient I/O error.
 - Fixed suggestions never appearing in the Claude desktop app: its
   composer sits 26 ancestors below its document, past the observer's
   24-level origin climb, so every snapshot was denied. The context
