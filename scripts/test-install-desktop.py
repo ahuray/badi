@@ -872,6 +872,26 @@ class DesktopInstallTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, code):
                         installer.probe_accessibility(helper, endpoint)
 
+    def test_accessibility_wait_rides_out_a_mismatch_read_mid_exec(self):
+        mismatch = installer.UnexpectedHelper('not running the installed helper with its expected interpreter')
+        with patch.object(installer, 'probe_accessibility', side_effect=[None, mismatch, {'ready': True}]) as probe, \
+             patch.object(receipts.time, 'monotonic', return_value=0), \
+             patch.object(receipts.time, 'sleep'):
+            self.assertIsNone(installer.wait_accessibility(Path('/helper'), Path('/endpoint')))
+            self.assertEqual(probe.call_count, 3)
+        # A mismatch that lasts to the deadline is an override and keeps its own diagnosis.
+        with patch.object(installer, 'probe_accessibility', side_effect=[None, mismatch]), \
+             patch.object(receipts.time, 'monotonic', side_effect=[0, 1, 11]), \
+             patch.object(receipts.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'expected interpreter'):
+                installer.wait_accessibility(Path('/helper'), Path('/endpoint'))
+        # An earlier mismatch does not outlive a later observation.
+        with patch.object(installer, 'probe_accessibility', side_effect=[mismatch, None]), \
+             patch.object(receipts.time, 'monotonic', side_effect=[0, 1, 11]), \
+             patch.object(receipts.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'Fcitx was not restarted'):
+                installer.wait_accessibility(Path('/helper'), Path('/endpoint'))
+
     def test_accessibility_wait_is_bounded(self):
         with patch.object(installer, 'probe_accessibility', side_effect=[None, {'ready': True}]) as probe, \
              patch.object(receipts.time, 'monotonic', return_value=0), \

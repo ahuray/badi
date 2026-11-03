@@ -8,6 +8,12 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Fixed `install-desktop.py` sometimes stopping after replacing files with
+  "not running the installed helper with its expected interpreter" (9 of
+  100 real unit starts): a probe landing mid-exec read systemd's executor
+  command line, then the helper's interpreter. The readiness wait now
+  retries a mismatch and stops only if it lasts to the 10-second deadline,
+  so a unit overridden to run anything else is still refused.
 - The Omarchy panel's pinned host moved to Omarchy 4.5.0rc3 (`v4.5.0-rc3`):
   six of the 25 contract files changed since rc1, none in an API the
   popout uses, and the strict source and lifecycle checks pass against
