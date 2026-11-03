@@ -22,12 +22,23 @@ ShellRoot {
 
     function setScreenShare(mode: string): void { panel.setScreenShare(mode) }
 
-    // Every row (All settings), as key, label and value.
+    // Every row (All settings, or a first-run question), as key, label,
+    // detail, value and checked.
     function rows(): string {
       panel.showAll = true
       return JSON.stringify(panel.rows().map(function(row) {
-        return {key: row.key, label: row.label, value: row.value === undefined ? null : row.value}
+        return {key: row.key, label: row.label, detail: row.detail,
+          value: row.value === undefined ? null : row.value, checked: row.checked === true}
       }))
+    }
+
+    // A row's choice or action, as a click runs it.
+    function chooseRow(key: string, value: string): void {
+      panel.rows().find(function(row) { return row.key === key }).choose(value)
+    }
+
+    function activateRow(key: string): void {
+      panel.rows().find(function(row) { return row.key === key }).activate()
     }
 
     function state(): string {

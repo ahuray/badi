@@ -53,6 +53,7 @@ fn settings(enabled: bool, mut subjects: Vec<SubjectRule>) -> SettingsV2 {
         screen_share: crate::settings::ScreenShareMode::Hold,
         suggestion_length: crate::settings::SuggestionLength::Normal,
         languages_chosen: false,
+        places_chosen: false,
         spelling_languages: vec![crate::spelling::SpellingLanguage::English],
         style_learning: enabled,
         context_words: None,

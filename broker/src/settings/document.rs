@@ -191,6 +191,12 @@ pub struct SettingsV2 {
     /// asks. Omitted when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub languages_chosen: bool,
+    /// The user answered where Badi suggests (websites and the apps found on
+    /// the device) in the panel's first-run question, which follows the
+    /// language question. It grants nothing: the list modes and exact rules
+    /// decide. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub places_chosen: bool,
     /// Opt-in style learning: encrypted samples of the user's own sentences
     /// from subjects that allow learning with bounded retention. Omitted when
     /// off. Turning it off stops collection; forgetting is a separate step.
@@ -268,6 +274,8 @@ struct SettingsDocument {
     #[serde(default)]
     languages_chosen: Option<bool>,
     #[serde(default)]
+    places_chosen: Option<bool>,
+    #[serde(default)]
     style_learning: Option<bool>,
     #[serde(default)]
     context_words: Option<bool>,
@@ -325,6 +333,10 @@ impl SettingsDocument {
             (
                 self.languages_chosen.is_some(),
                 "languages_chosen_requires_settings_v2",
+            ),
+            (
+                self.places_chosen.is_some(),
+                "places_chosen_requires_settings_v2",
             ),
             (
                 self.style_learning.is_some(),
@@ -392,6 +404,7 @@ impl<'de> Deserialize<'de> for SettingsV2 {
             screen_share: decoded.screen_share.unwrap_or_default(),
             suggestion_length: decoded.suggestion_length.unwrap_or_default(),
             languages_chosen: decoded.languages_chosen.unwrap_or(false),
+            places_chosen: decoded.places_chosen.unwrap_or(false),
             style_learning: decoded.style_learning.unwrap_or(false),
             context_words: decoded.context_words,
             context_words_off: decoded.context_words_off.unwrap_or_default(),
@@ -461,6 +474,7 @@ impl SettingsV2 {
             screen_share: ScreenShareMode::Hold,
             suggestion_length: SuggestionLength::Normal,
             languages_chosen: false,
+            places_chosen: false,
             style_learning: false,
             context_words: None,
             context_words_off: Vec::new(),

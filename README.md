@@ -266,9 +266,12 @@ text field is not treated as sensitive from its label, placeholder, or
 autocomplete hint. The **b** mark in the
 Omarchy bar opens the same settings as a keyboard-driven popout (j/k, space,
 h/l, `/` to search), and right-clicking it pauses Badi. The first time, it
-asks which languages you write in. Afterwards it opens compact: the model's
-live state, the words saved on each of the last seven days, your languages,
-the suggestion length and context. **All settings** (or `a`) shows every
+asks which languages you write in, then where to suggest: on every website
+or only the sites you add, and in which of the supported apps it finds on
+this computer (a fresh install allows only Omawrite and Xournal++).
+Afterwards it opens compact: the model's live state, the words saved on each
+of the last seven days, your languages, the suggestion length and context.
+**All settings** (or `a`) shows every
 other setting, the acceptance meter and the apps that saved the most
 ([counter definitions](ui/omarchy-plugin/README.md#statistics)).
 

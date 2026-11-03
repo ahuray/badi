@@ -233,6 +233,41 @@ fn stats_commands_read_counts_a_previous_broker_kept_and_forget_them() {
     broker.fails(&["stats"], "error_code=arguments\n");
 }
 
+#[test]
+fn the_panels_first_run_answers_are_kept_across_a_restart() {
+    // What the panel's Done writes after the language question: every
+    // website, Telegram allowed and both questions answered.
+    let answers = json!({
+        "schema": "badi.settings.v2", "revision": 1, "paused": false,
+        "all_web_origins": true, "languages_chosen": true, "places_chosen": true,
+        "subjects": [{
+            "identity": {"kind": "linux_app", "adapter": "fcitx", "app_id": "telegram"},
+            "permissions": {"suggest": "allow", "display": "allow", "context_read": "allow",
+                            "learn": "block", "retention": {"mode": "none"}}
+        }]
+    });
+    let mut broker = PhraseBroker::start();
+    let replaced = broker.succeeds(&[
+        "settings",
+        "replace",
+        "--if-revision",
+        "0",
+        "--json",
+        &answers.to_string(),
+    ]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&replaced).expect("settings JSON"),
+        answers
+    );
+    // The next broker reads the same answers from its private file.
+    broker.restart();
+    let shown = broker.succeeds(&["settings", "show", "--json"]);
+    assert_eq!(
+        serde_json::from_str::<Value>(&shown).expect("settings JSON"),
+        answers
+    );
+}
+
 fn object_keys(value: &Value) -> Vec<&str> {
     let mut keys: Vec<&str> = value
         .as_object()
@@ -247,7 +282,7 @@ fn object_keys(value: &Value) -> Vec<&str> {
 struct PhraseBroker {
     process: Child,
     socket: PathBuf,
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
 }
 
 impl PhraseBroker {
@@ -259,23 +294,37 @@ impl PhraseBroker {
     /// in `directory`.
     fn start_in(directory: tempfile::TempDir) -> Self {
         let socket = directory.path().join("private/broker.sock");
-        let process = Command::new(env!("CARGO_BIN_EXE_badi-broker"))
+        let process = Self::spawn(directory.path(), &socket);
+        let mut broker = Self {
+            process,
+            socket,
+            directory,
+        };
+        broker.wait_for_socket();
+        broker
+    }
+
+    fn spawn(directory: &std::path::Path, socket: &std::path::Path) -> Child {
+        Command::new(env!("CARGO_BIN_EXE_badi-broker"))
             .args(["--provider", "phrase", "--socket"])
-            .arg(&socket)
-            .env("XDG_CONFIG_HOME", directory.path().join("config"))
-            .env("XDG_DATA_HOME", directory.path().join("data"))
+            .arg(socket)
+            .env("XDG_CONFIG_HOME", directory.join("config"))
+            .env("XDG_DATA_HOME", directory.join("data"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("broker process");
-        let mut broker = Self {
-            process,
-            socket,
-            _directory: directory,
-        };
-        broker.wait_for_socket();
-        broker
+            .expect("broker process")
+    }
+
+    /// Stops this broker and starts the next one on the same files.
+    fn restart(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+        // A killed broker leaves its socket behind; wait for the new one's.
+        let _ = std::fs::remove_file(&self.socket);
+        self.process = Self::spawn(self.directory.path(), &self.socket);
+        self.wait_for_socket();
     }
 
     fn wait_for_socket(&mut self) {

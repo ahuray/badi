@@ -86,6 +86,9 @@ and whether they were dirty (`--version` prints both; packagers may set
   distinguished. An app or site allowed this way gets policy reason
   `matched_default`, so the Fcitx addon opens only observed fields for it. While the memory store
   is unavailable, only strict authority reductions are accepted.
+  `places_chosen` records that the user answered the panel's first-run
+  question about where to suggest; like `languages_chosen`, it grants
+  nothing.
 - **Connections.** Policy and desktop-signal connections stay open while
   idle; control and health clients close after 300 s without a request.
 

@@ -18,23 +18,39 @@ Item {
   // `context` says what context finishes words from there (ADR 0010): the
   // window and learned words (web content), learned words only (native
   // fields), or the typed line only (terminals, which never learn).
+  // `desktop` names the desktop entries that show the app is installed; the
+  // first-run places question offers those apps. Editor plugins (Obsidian,
+  // Neovim, Bash, Writer spelling) come with install-editors.py instead.
   readonly property var supportedApps: [
-    {name: "Omawrite", appId: "omawrite", context: "learned", detail: "Markdown editor"},
-    {name: "Ghostty", appId: "com.mitchellh.ghostty", context: "line", detail: "Terminal · follows the line you type", manual: true},
-    {name: "foot", appId: "foot", context: "line", detail: "Terminal · follows the line you type", manual: true},
-    {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", context: "learned", detail: "Text tool · Tab requests, Tab again accepts a word", manual: true},
+    {name: "Omawrite", appId: "omawrite", context: "learned", detail: "Markdown editor", desktop: ["omawrite"]},
+    {name: "Ghostty", appId: "com.mitchellh.ghostty", context: "line", detail: "Terminal · follows the line you type", manual: true,
+      desktop: ["com.mitchellh.ghostty"]},
+    {name: "foot", appId: "foot", context: "line", detail: "Terminal · follows the line you type", manual: true, desktop: ["foot"]},
+    {name: "Xournal++", appId: "com.github.xournalpp.xournalpp", context: "learned", detail: "Text tool · Tab requests, Tab again accepts a word", manual: true,
+      desktop: ["com.github.xournalpp.xournalpp"]},
     {name: "Obsidian", appId: "obsidian", context: "learned", detail: "Badi plugin · Tab a word, Ctrl+Right all"},
     {name: "Neovim", appId: "nvim", context: "learned", detail: "Badi plugin · prose buffers"},
     {name: "Bash", appId: "bash", context: "line", detail: "Ctrl-X Tab requests and accepts"},
-    {name: "LibreOffice Writer", appId: "libreoffice", context: "learned", detail: "Grey preview in paragraphs"},
+    {name: "LibreOffice Writer", appId: "libreoffice", context: "learned", detail: "Grey preview in paragraphs", desktop: ["libreoffice-writer"]},
     {name: "Writer spelling", appId: "libreoffice-writer", detail: "Corrections after a word · Alt+F7"},
-    {name: "Telegram", appId: "telegram", context: "learned", detail: "Message fields"},
-    {name: "Codex", appId: "chatgpt", context: "window", detail: "Composer"},
-    {name: "VS Code", appId: "code", context: "window", detail: "Needs \"editor.editContext\": false"},
-    {name: "Cursor", appId: "cursor", context: "window", detail: "Editor"},
+    {name: "Telegram", appId: "telegram", context: "learned", detail: "Message fields", desktop: ["org.telegram.desktop"]},
+    {name: "Codex", appId: "chatgpt", context: "window", detail: "Composer", desktop: ["chatgpt"]},
+    {name: "VS Code", appId: "code", context: "window", detail: "Needs \"editor.editContext\": false", desktop: ["code", "com.microsoft.VSCode"]},
+    {name: "Cursor", appId: "cursor", context: "window", detail: "Editor", desktop: ["cursor"]},
     {name: "Grok Bot", appId: "grok-bot", context: "window", detail: "Chat composer"},
-    {name: "Claude", appId: "com.anthropic.claude", context: "window", detail: "Desktop app composer"},
-    {name: "Discord", appId: "discord", context: "window", detail: "Needs renderer accessibility"}]
+    {name: "Claude", appId: "com.anthropic.claude", context: "window", detail: "Desktop app composer", desktop: ["com.anthropic.Claude"]},
+    {name: "Discord", appId: "discord", context: "window", detail: "Needs renderer accessibility", desktop: ["discord"]}]
+
+  // The supported apps installed here, by their desktop entries. Quickshell
+  // scans them in the background, so the list fills in once the scan ends.
+  readonly property var installedApps: {
+    var entries = DesktopEntries.applications.values
+    var ids = {}
+    for (var i = 0; i < entries.length; i++) ids[entries[i].id] = true
+    return supportedApps.filter(function(app) {
+      return Array.isArray(app.desktop) && app.desktop.some(function(id) { return ids[id] === true })
+    })
+  }
 
   // The languages the panel offers, European only: `name` on the chips,
   // `english` in the Suggestions and Spelling rows; `writing` the model
@@ -56,6 +72,10 @@ Item {
   property bool showAll: false
   // The first-run question's pick until Start saves it; null follows settings.
   property var pickedLanguages: null
+  // The places question's pick until Done saves it: `sites` ("all" or
+  // "allowed") and `apps` (app id to on); null, or an app it does not name,
+  // follows settings.
+  property var pickedPlaces: null
   property var serviceState: ({})
   property string serviceError: ""
   property string actionMessage: ""
@@ -392,13 +412,19 @@ Item {
     }, value === "off" ? "Suggestions off" : "Suggestions on")
   }
 
-  function writeRule(identity, decision) {
-    var document = client.cloneSettings()
+  // `document` with the exact rule for `identity` replaced, or removed for a
+  // null decision, in the broker's identity order.
+  function putRule(document, identity, decision) {
     document.subjects = document.subjects.filter(function(item) { return client.compareIdentities(item.identity, identity) !== 0 })
     if (decision !== null)
       document.subjects.push({identity: identity, permissions: {context_read: decision, display: decision,
         suggest: decision, learn: "block", retention: {mode: "none"}}})
     document.subjects.sort(function(a, b) { return client.compareIdentities(a.identity, b.identity) })
+  }
+
+  function writeRule(identity, decision) {
+    var document = client.cloneSettings()
+    putRule(document, identity, decision)
     return document
   }
 
@@ -425,12 +451,58 @@ Item {
     return true
   }
 
+  function appIdentity(appId) {
+    return {kind: "linux_app", adapter: appAdapter(appId), app_id: appId}
+  }
+
   function toggleApp(appId) {
     if (!canChange) return
     actionMessage = ""
     var enabled = !appEnabled(appId)
-    var identity = {kind: "linux_app", adapter: appAdapter(appId), app_id: appId}
-    client.replaceSettings(writeRule(identity, enabled ? "allow" : "block"), enabled ? "App allowed" : "App blocked")
+    client.replaceSettings(writeRule(appIdentity(appId), enabled ? "allow" : "block"), enabled ? "App allowed" : "App blocked")
+  }
+
+  // The places question's answer so far: the pick over the current settings.
+  function placesPick() {
+    var changes = pickedPlaces || {}
+    var apps = {}
+    installedApps.forEach(function(app) {
+      var picked = changes.apps ? changes.apps[app.appId] : undefined
+      apps[app.appId] = typeof picked === "boolean" ? picked : appEnabled(app.appId)
+    })
+    return {sites: changes.sites || (sitesBlocklist ? "all" : "allowed"), apps: apps}
+  }
+
+  // One change to the pick: the websites choice, or one app flipped.
+  function pickPlaces(sites, appId) {
+    var current = placesPick()
+    if (appId) current.apps[appId] = !current.apps[appId]
+    pickedPlaces = {sites: sites || current.sites, apps: current.apps}
+  }
+
+  // Where the pick suggests, in one short row: up to two apps by name,
+  // more by their count.
+  function placesSummary(picked) {
+    var apps = installedApps.filter(function(app) { return picked.apps[app.appId] === true })
+      .map(function(app) { return app.name })
+    if (apps.length === 0) return picked.sites === "all" ? "Every site, no app" : "Only sites you add"
+    return (apps.length > 2 ? apps.length + " apps" : apps.join(", "))
+      + " and " + (picked.sites === "all" ? "every site" : "sites you add")
+  }
+
+  // The places answer in one write: the websites list mode, an exact rule
+  // for each app the pick changed, and the question answered for good. Apps
+  // the pick leaves as they are keep their rule or the list mode.
+  function setPlaces(picked) {
+    change(function(document) {
+      if (picked.sites === "all") document.all_web_origins = true
+      else delete document.all_web_origins
+      Object.keys(picked.apps).forEach(function(appId) {
+        if (picked.apps[appId] !== appEnabled(appId))
+          putRule(document, appIdentity(appId), picked.apps[appId] ? "allow" : "block")
+      })
+      document.places_chosen = true
+    }, "Saved · All settings changes where Badi suggests")
   }
 
   // `timeout` in ms; a model download needs minutes, the rest seconds.
@@ -479,13 +551,15 @@ Item {
   // (activate flips allow/block, x removes) and field (activate focuses the
   // text input). Every row names its section; compact rows have none.
 
-  // What the popout shows: the first-run language question until it is
-  // answered, search results over every setting, every row, or the few
-  // that matter day to day with a way to all of them.
+  // What the popout shows: the first-run questions until each is answered
+  // (languages, then where to suggest), search results over every setting,
+  // every row, or the few that matter day to day with a way to all of them.
   function rows() {
     var searching = query.trim() !== ""
-    if (!searching && client.brokerReachable && client.settingsDocumentValid
-        && client.settings.languages_chosen !== true) return onboardingRows()
+    if (!searching && client.brokerReachable && client.settingsDocumentValid) {
+      if (client.settings.languages_chosen !== true) return onboardingRows()
+      if (client.settings.places_chosen !== true) return placesRows()
+    }
     var all = allRows()
     if (searching) return KeyModel.filter(all, query)
     if (showAll) {
@@ -515,6 +589,29 @@ Item {
         detail: (picked.length > 0 ? languageNames(picked) + " · " : "") + "change them any time under Languages",
         enabled: canChange && picked.length > 0,
         activate: function() { root.setLanguages(picked); root.pickedLanguages = null }}]
+  }
+
+  // The second first-run question: websites by list mode and the supported
+  // apps found here, each starting as settings have it (a fresh install
+  // allows Omawrite and Xournal++ only). Every other app and site, and the
+  // editor plugins, are in All settings.
+  function placesRows() {
+    var picked = placesPick()
+    var list = [{key: "places_sites", section: "", kind: "choice", label: "Where should Badi suggest?",
+      // One short line: the row elides the rest.
+      detail: (picked.sites === "all" ? "Every site until you block it" : "Only sites you add") + " · Chromium, Brave, Zen",
+      value: picked.sites, enabled: canChange,
+      options: [{value: "all", label: "All websites"}, {value: "allowed", label: "Sites I add"}],
+      choose: function(value) { root.pickPlaces(value, "") }}]
+    installedApps.forEach(function(app) {
+      list.push({key: "places_app_" + app.appId, section: "Apps on this computer", kind: "toggle", label: app.name,
+        detail: app.detail, checked: picked.apps[app.appId] === true, enabled: canChange,
+        activate: function() { root.pickPlaces("", app.appId) }})
+    })
+    list.push({key: "places_done", section: "", kind: "action", label: "Done",
+      detail: placesSummary(picked), enabled: canChange,
+      activate: function() { root.setPlaces(picked); root.pickedPlaces = null }})
+    return list
   }
 
   // Day to day: languages, length and context. Everything else, the model
