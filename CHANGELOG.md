@@ -8,6 +8,10 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- The Omarchy panel's pinned host moved to Omarchy 4.5.0rc3 (`v4.5.0-rc3`):
+  six of the 25 contract files changed since rc1, none in an API the
+  popout uses, and the strict source and lifecycle checks pass against
+  the new pin, so the panel installs on current Omarchy again.
 - Fixed the broker crash-looping on a fresh package-only install: the
   unit's read-only home skipped the missing `~/.config/badi`, so the
   broker could never create its private settings directory. systemd

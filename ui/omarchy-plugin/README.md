@@ -188,13 +188,15 @@ acceptances the adapter reported landed (each word Tab took), not requests.
 ## Pinned host
 
 `compatibility.json` records the Omarchy host files the plugin depends on,
-byte-compared with Omarchy `v4.5.0-rc1` (`03ff1eff3812933f7088484533784d2f63eaf19a`),
-which the installed 4.5.0rc1-1 package matches file for file, under
-Quickshell 0.3.2 and Qt declarative 6.12.0. Sixteen of the 21 changed since
-`v4.0.6`; the only API change the popout meets is `PanelKeyCatcher`'s
-`textKey`, which now also passes the held modifiers. It includes every `qs.Ui`
-component the popout uses. The strict check fails when the installed host
-drifts. The manifest declares only the `bar-widget` kind.
+byte-compared with Omarchy `v4.5.0-rc3` (`8d19ad75ace59af8b6ded52f8b2bec1b15adda7c`),
+which the installed 4.5.0rc3-1 package matches file for file, under
+Quickshell 0.3.2 and Qt declarative 6.12.0. Six of the 25 changed since
+`v4.5.0-rc1`, none in a way the popout meets: `PluginBarApi` only gains two
+optional popout-card hooks, `PluginRegistry`'s clone/enable fixes concern
+multi-kind widgets, and `KeyboardPanel`'s positioning rewrite is internal
+(the popout sets only `contentWidth`/`contentHeight`). It includes every
+`qs.Ui` component the popout uses. The strict check fails when the
+installed host drifts. The manifest declares only the `bar-widget` kind.
 
 Qt 6.12 added a QtQuick `Color` singleton that shadows the host palette, so
 under stock Quickshell a bare `Color.accent` reads `undefined`. Omarchy's own
@@ -237,6 +239,7 @@ scaling or multi-monitor behavior, which need a real Omarchy session.
 
 | Omarchy | Quickshell, Qt declarative | Lane | Result |
 | --- | --- | --- | --- |
+| 4.5.0rc3-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | `omarchy:check` and the strict `check-source.sh` against the `v4.5.0-rc3` checkout (qmllint, validator, host hashes, lifecycle) | pass; `check-host.sh` not run, it pins quickshell 0.3.2-1 and qt6-declarative 6.12.0-1 |
 | 4.5.0rc1-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | `omarchy:check` and the strict `check-source.sh` (qmllint, validator, host hashes, lifecycle) | pass; `check-host.sh` not run, it pins quickshell 0.3.2-1 and qt6-declarative 6.12.0-1 |
 | 4.5.0rc1-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | live, Tokyo Night, broker 0.2.0 | places question: eleven apps found by desktop entry, `l` picked Sites I add, Enter flipped Telegram, Done's summary counted the apps; nothing written before Done |
 | 4.0.5-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-1 | live, Tokyo Night | accent mark, `badi settings`, j/k and arrows one row each, `/ghost` search, Escape twice |
