@@ -853,6 +853,11 @@ fn private_storage_locks_for_lifetime_and_uses_path_override() {
 
 #[test]
 fn an_uncreatable_settings_directory_is_unsafe_not_transient() {
+    // Root ignores the read-only mode below (the package containers run
+    // their tests as root), so the directory stays creatable there.
+    if rustix::process::getuid().as_raw() == 0 {
+        return;
+    }
     let temporary = tempdir().expect("temporary directory");
     let config_parent = temporary.path().join("config");
     fs::create_dir(&config_parent).expect("config parent");
