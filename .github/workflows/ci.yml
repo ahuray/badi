@@ -92,7 +92,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: omacom/omarchy
-          ref: 03ff1eff3812933f7088484533784d2f63eaf19a
+          ref: 8d19ad75ace59af8b6ded52f8b2bec1b15adda7c
           path: .ci/omarchy
           persist-credentials: false
       - name: Install the reviewed QML runtime and test tools
