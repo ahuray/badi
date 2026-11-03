@@ -20,8 +20,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import threading
+import time
 
 from contract import Denied
+from desktop import NoDesktopBackend
 from sessionbus import OwnerError, app_id, verified_owner
 
 SHELL_NAME = "org.gnome.Shell"
@@ -33,6 +35,8 @@ FOCUS_REPLY = "(ubtussb)"
 VERSION = 1
 IPC_SECONDS = .15
 STARTUP_SECONDS = 3.0
+# How long a session that calls itself GNOME may take to show gnome-shell.
+SHELL_WAIT_SECONDS = 10.0
 
 
 class ShellUnavailable(RuntimeError):
@@ -82,13 +86,25 @@ class GnomeFocus:
         self.lost = False
         self.lock = threading.Lock()
 
-    def start(self, timeout=STARTUP_SECONDS):
+    def start(self, timeout=STARTUP_SECONDS, wait=SHELL_WAIT_SECONDS, sleep=time.sleep):
         """Verify gnome-shell and follow its focus signal. The extension may
-        be missing or disabled now; each inspection asks again."""
-        try:
-            self.shell = verified_owner(self.bus, SHELL_NAME, SHELL_PROCESS, timeout, self.proc)
-        except OwnerError as error:
-            raise ShellUnavailable(f"shell_{error}") from None
+        be missing or disabled now; each inspection asks again.
+
+        A desktop that lists GNOME but runs no gnome-shell (Budgie names
+        itself Budgie:GNOME) has no backend: after `wait` seconds without an
+        owner of org.gnome.Shell the observer stops for good (exit 78).
+        """
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                self.shell = verified_owner(self.bus, SHELL_NAME, SHELL_PROCESS, timeout, self.proc)
+                break
+            except OwnerError as error:
+                if str(error) != "absent":
+                    raise ShellUnavailable(f"shell_{error}") from None
+                if time.monotonic() >= deadline:
+                    raise NoDesktopBackend("gnome_shell_absent") from None
+                sleep(.25)
         self.bus.watch_owner(SHELL_NAME, self.owner_changed)
         self.bus.subscribe(self.shell, FOCUS_PATH, FOCUS_INTERFACE, "FocusChanged", lambda _arguments: self.on_change())
 

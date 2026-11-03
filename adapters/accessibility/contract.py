@@ -211,7 +211,7 @@ class Observer:
     def status(self, _request):
         status = {"ready": True, "process_id": os.getpid(), "protocol_version": 1}
         if self.desktop is not None:
-            status["desktop"] = self.desktop  # The focused-window source: "hyprland" or "kwin".
+            status["desktop"] = self.desktop  # The focused-window source: "hyprland", "kwin" or "gnome".
         return {"status": status}
 
     def hide_preview(self, _request):

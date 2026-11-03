@@ -819,19 +819,31 @@ class DesktopInstallTests(unittest.TestCase):
             installer.require_fcitx_version()
 
     def test_accessibility_preflight_uses_service_interpreter_and_loads_libraries(self):
-        with patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': 'fixture'}), \
+        with patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': 'fixture', 'XDG_CURRENT_DESKTOP': ''}), \
              patch.object(installer.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as command:
             installer.require_accessibility_runtime()
         argv = command.call_args.args[0]
         self.assertEqual(argv[:3], ['/usr/bin/python3', '-B', '-c'])
         self.assertLess(argv[3].index('ctypes.CDLL'), argv[3].index('from gi.repository'))
         self.assertIn('from gi.repository import Atspi, Gtk, Gtk4LayerShell, GLibUnix', argv[3])
-        with patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': ''}), \
+        with patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': '', 'XDG_CURRENT_DESKTOP': 'sway'}), \
              patch.object(installer.subprocess, 'run') as command:
             with self.assertRaisesRegex(RuntimeError, 'current Hyprland'):
                 installer.require_accessibility_runtime()
             command.assert_not_called()
-        with patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': 'fixture'}), \
+        # KWin and GNOME draw no grey preview, so GTK's layer shell (which
+        # Ubuntu 24.04 does not package) is not required there.
+        for desktop, version in (('KDE', '6'), ('ubuntu:GNOME', '')):
+            with self.subTest(desktop=desktop), patch.dict(os.environ, {
+                    'HYPRLAND_INSTANCE_SIGNATURE': '', 'XDG_CURRENT_DESKTOP': desktop, 'KDE_SESSION_VERSION': version,
+                    'WAYLAND_DISPLAY': 'wayland-0'}), \
+                    patch.object(installer.subprocess, 'run',
+                                 return_value=subprocess.CompletedProcess([], 0, '', '')) as command:
+                installer.require_accessibility_runtime()
+                code = command.call_args.args[0][3]
+                self.assertNotIn('layer', code.lower())
+                self.assertIn('from gi.repository import Atspi, Gtk, GLibUnix', code)
+        with patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': 'fixture', 'XDG_CURRENT_DESKTOP': ''}), \
              patch.object(installer.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, [])):
             with self.assertRaisesRegex(RuntimeError, 'gtk4-layer-shell'):
                 installer.require_accessibility_runtime()

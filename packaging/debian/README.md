@@ -93,9 +93,9 @@ As each desktop user, never as root:
    systemctl --user enable --now badi-broker.service badi-session.service badi-accessibility.service
    ```
 
-   systemd skips the observer outside a Hyprland, KDE or GNOME session, and
-   `badi doctor` says so instead of reporting a problem; it names the
-   observer's source. On GNOME, log out and back in, then enable the
+   Outside a Hyprland, KDE Plasma 6 or GNOME session the observer stops at
+   once, and `badi doctor` says so instead of reporting a problem; it names
+   the observer's source. On GNOME, log out and back in, then enable the
    extension with `gnome-extensions enable badi-focus@ahuray.github.io`.
 4. Make Fcitx 5 the input method: `im-config -n fcitx5` on Debian and
    Ubuntu, or Fcitx 5 as the Virtual Keyboard in KDE Plasma's settings. Log

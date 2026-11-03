@@ -46,8 +46,10 @@ Plasma offers two sources of the active window's process and app id:
    `HYPRLAND_INSTANCE_SIGNATURE` is set, otherwise KWin when
    `XDG_CURRENT_DESKTOP` lists `KDE`, `KDE_SESSION_VERSION` is 6 or later
    and `WAYLAND_DISPLAY` is set. Anywhere else it exits with status 78, which
-   its unit does not restart; the unit's start condition already skips it
-   outside a Hyprland or `XDG_CURRENT_DESKTOP=KDE` session. Hyprland
+   its unit treats as a clean stop and never restarts. The unit requires
+   only a Wayland session and leaves the choice of desktop to the observer,
+   so it never skips a session the observer and installer would accept
+   (`XDG_CURRENT_DESKTOP` can list other names around `KDE`). Hyprland
    behavior does not change.
 2. **The script.** At start the observer writes a script naming its own
    private connection's unique bus name and a random per-run token into its

@@ -102,9 +102,10 @@ The observer follows the compositor its session runs and nothing else
 Hyprland when `HYPRLAND_INSTANCE_SIGNATURE` is set; otherwise, with
 `WAYLAND_DISPLAY` set, KWin when `XDG_CURRENT_DESKTOP` lists `KDE` and
 `KDE_SESSION_VERSION` is 6 or later, and GNOME when it lists `GNOME`.
-Elsewhere it exits with status 78; its unit starts it only in a Hyprland
-session or with `XDG_CURRENT_DESKTOP` exactly `KDE`, `GNOME` or
-`ubuntu:GNOME`, and does not retry 78. The `status` reply names the source (`desktop`), and `badi doctor`
+Elsewhere it exits with status 78, and so does a session that lists GNOME
+but runs no gnome-shell (none appears within 10 seconds); its unit, which
+asks only for a Wayland session, treats 78 as a clean stop and never
+restarts it. The `status` reply names the source (`desktop`), and `badi doctor`
 shows it.
 
 **Hyprland (Omarchy).** The active window and monitors come from Hyprland's

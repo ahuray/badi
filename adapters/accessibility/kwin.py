@@ -180,7 +180,9 @@ class KWinFocus:
         try:
             return verified_owner(self.bus, KWIN_NAME, KWIN_PROCESS, timeout, self.proc)
         except OwnerError as error:
-            raise KWinUnavailable(f"kwin_{error}") from None
+            # KWin is the compositor of a Plasma session: a missing name is
+            # a slow start, and systemd tries again.
+            raise KWinUnavailable("kwin_unavailable" if str(error) == "absent" else f"kwin_{error}") from None
 
     def write_script(self):
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC

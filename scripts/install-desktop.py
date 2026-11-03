@@ -336,25 +336,33 @@ def offers_input_method_v2(platform):
 
 
 def require_accessibility_runtime():
-    if badi_install.observer_desktop() is None:
+    desktop = badi_install.observer_desktop()
+    if desktop is None:
         raise RuntimeError("Run the native installer in the current Hyprland, KDE Plasma 6 or GNOME session. "
                            "--broker-only does not require the accessibility helper.")
     # Use the service's exact interpreter and actually load native libraries;
     # require_version alone only checks that typelib metadata can be located.
-    code = """import ctypes, gi, cairo
-ctypes.CDLL('libgtk4-layer-shell.so.0')
-gi.require_version('Atspi', '2.0')
-gi.require_version('Gtk', '4.0')
-gi.require_version('Gtk4LayerShell', '1.0')
-from gi.repository import Atspi, Gtk, Gtk4LayerShell, GLibUnix
-"""
+    # Only Hyprland draws the grey preview (KWin and GNOME report no caret
+    # geometry), so only there is GTK's layer shell required; Ubuntu 24.04
+    # does not package it.
+    preview = desktop == "hyprland"
+    code = ("import ctypes, gi, cairo\n" + ("ctypes.CDLL('libgtk4-layer-shell.so.0')\n" if preview else "") +
+            "gi.require_version('Atspi', '2.0')\ngi.require_version('Gtk', '4.0')\n" +
+            ("gi.require_version('Gtk4LayerShell', '1.0')\nfrom gi.repository import Atspi, Gtk, Gtk4LayerShell, GLibUnix\n"
+             if preview else "from gi.repository import Atspi, Gtk, GLibUnix\n"))
     try:
         run(["/usr/bin/python3", "-B", "-c", code], capture_output=True, text=True, timeout=4)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        hint = (" (Debian: python3-gi-cairo gir1.2-atspi-2.0 gir1.2-gtk-4.0 gir1.2-gtk4layershell-1.0; Ubuntu 24.04 "
-                "has no gtk4-layer-shell package)" if badi_install.distribution_family() == "debian" else "")
-        raise RuntimeError("The accessibility helper needs system Python with PyGObject, pycairo, AT-SPI, GTK4 and "
-                           f"gtk4-layer-shell. Install the missing runtime{hint} before updating native integration.") from None
+        if preview:
+            hint = (" (Debian: python3-gi-cairo gir1.2-atspi-2.0 gir1.2-gtk-4.0 gir1.2-gtk4layershell-1.0)"
+                    if badi_install.distribution_family() == "debian" else "")
+            needs = "PyGObject, pycairo, AT-SPI, GTK4 and gtk4-layer-shell"
+        else:
+            hint = (" (Debian, Ubuntu: python3-gi-cairo gir1.2-atspi-2.0 gir1.2-gtk-4.0)"
+                    if badi_install.distribution_family() == "debian" else "")
+            needs = "PyGObject, pycairo, AT-SPI and GTK4"
+        raise RuntimeError(f"The accessibility helper needs system Python with {needs}. Install the missing "
+                           f"runtime{hint} before updating native integration.") from None
 
 
 def accessibility_health_module():
@@ -965,10 +973,10 @@ def generic_report(plan):
               "KDE Plasma 6 or GNOME session.")
     elif badi_install.observer_desktop() == "gnome":
         print("Field observer: GNOME, through Badi's Shell extension, which you enable yourself: log out and back "
-              f"in so GNOME Shell finds it, then run gnome-extensions enable {badi_install.GNOME_EXTENSION}. Until "
-              "then observed fields get no suggestions; badi doctor says whether it answers. Observed fields show "
-              f"suggestions in the input method's panel. Start Chromium-based apps with {badi_install.OBSERVED_FLAG}, "
-              "and allow each app or site with badi app or badi site.")
+              f"in so GNOME Shell finds it, then run gnome-extensions enable {badi_install.GNOME_EXTENSION}; badi "
+              "doctor says whether it answers. Observed fields (Chromium-based apps, Zen, VS Code) still get no "
+              "suggestions on GNOME: GNOME hands Fcitx no app name for them, an open decision. Fcitx's manual "
+              "fields, the editors and the Writer spelling extension work.")
     elif badi_install.observer_desktop() == "kwin":
         print("Field observer: KDE Plasma, through a KWin script it loads (no preview position yet, so observed "
               "fields show suggestions in the Fcitx panel). Start Chromium-based apps with "

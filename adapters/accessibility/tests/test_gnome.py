@@ -13,7 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contract import Denied
 import daemon as observer_daemon
-from desktop import App, SourceDesktop
+from desktop import App, NoDesktopBackend, SourceDesktop
 import gnome
 from gnome import GnomeFocus, GnomeLockQuery, ShellUnavailable, parse_focus
 
@@ -126,6 +126,34 @@ class StartTests(GnomeFixture):
         bus.failing.add("GetNameOwner")
         with self.assertRaisesRegex(ShellUnavailable, "shell_unavailable"):
             self.focus(bus)
+
+    def test_a_gnome_named_desktop_without_gnome_shell_has_no_backend(self):
+        # Budgie names itself Budgie:GNOME and runs no gnome-shell.
+        class NoShell(FakeBus):
+            def call(self, destination, path, interface, method, signature, args, reply, timeout):
+                if method == "GetNameOwner":
+                    raise RuntimeError("GDBus.Error:org.freedesktop.DBus.Error.NameHasNoOwner: no such name")
+                return super().call(destination, path, interface, method, signature, args, reply, timeout)
+
+        waited = []
+        focus = GnomeFocus(NoShell(), proc=self.proc)
+        with self.assertRaisesRegex(NoDesktopBackend, "gnome_shell_absent"):
+            focus.start(wait=.05, sleep=waited.append)
+        self.assertTrue(waited, "a slow login gets a moment to show gnome-shell")
+
+        class LateShell(NoShell):
+            asked = 0
+
+            def call(self, destination, path, interface, method, signature, args, reply, timeout):
+                if method == "GetNameOwner":
+                    LateShell.asked += 1
+                    if LateShell.asked > 2:
+                        return (SHELL,)
+                return super().call(destination, path, interface, method, signature, args, reply, timeout)
+
+        focus = GnomeFocus(LateShell(), proc=self.proc)
+        focus.start(wait=5, sleep=lambda _seconds: None)
+        self.assertEqual(focus.shell, SHELL)
 
     def test_a_missing_extension_does_not_stop_the_observer(self):
         bus = FakeBus()

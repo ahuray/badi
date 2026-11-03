@@ -17,13 +17,17 @@ UNIQUE_NAME = re.compile(r":[0-9]+\.[0-9]+\Z")
 
 
 class OwnerError(RuntimeError):
-    """"unavailable" (no owner, or the bus failed) or "unverified"."""
+    """"absent" (nobody owns the name), "unavailable" (the bus failed) or
+    "unverified" (the owner is not this user's expected process)."""
 
 
 def verified_owner(bus, name, process, timeout, proc=Path("/proc")):
     """The unique name that owns `name`, when it is this user's `process`."""
     try:
         owner = dbus(bus, "GetNameOwner", "(s)", (name,), "(s)", timeout)[0]
+    except Exception as error:
+        raise OwnerError("absent" if "NameHasNoOwner" in str(error) else "unavailable") from None
+    try:
         credentials = dbus(bus, "GetConnectionCredentials", "(s)", (owner,), "(a{sv})", timeout)[0]
     except Exception:
         raise OwnerError("unavailable") from None

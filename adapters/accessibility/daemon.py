@@ -552,22 +552,22 @@ class Daemon:
         """KDE Plasma: the observer's KWin script reports each activation
         (ADR 0015). Reports arrive on GDBus's thread; the main loop acts."""
         from kwin import KWinFocus
-        from sessionbus import GioBus
-        self.source_bus = GioBus()
-        self.focus_source = KWinFocus(self.source_bus, self.path.parent / "kwin-field-observer.js",
-                                    on_change=lambda: self.GLib.idle_add(self.source_window_changed),
-                                    on_lost=lambda: self.GLib.idle_add(self.lose_desktop))
-        self.focus_source.start()
-        self.backend.desktop = SourceDesktop(APPS, self.backend.remaining, self.focus_source)
+        self.watch_source(lambda bus, **callbacks: KWinFocus(bus, self.path.parent / "kwin-field-observer.js",
+                                                             **callbacks))
 
     def watch_gnome(self):
         """GNOME: Badi's Shell extension answers each inspection and signals
         focus changes (ADR 0016). The extension may be enabled later."""
         from gnome import GnomeFocus
+        self.watch_source(GnomeFocus)
+
+    def watch_source(self, make):
+        """Start a focus source on the observer's own bus connection; its
+        callbacks only schedule work on the main loop."""
         from sessionbus import GioBus
         self.source_bus = GioBus()
-        self.focus_source = GnomeFocus(self.source_bus, on_change=lambda: self.GLib.idle_add(self.source_window_changed),
-                                     on_lost=lambda: self.GLib.idle_add(self.lose_desktop))
+        self.focus_source = make(self.source_bus, on_change=lambda: self.GLib.idle_add(self.source_window_changed),
+                                 on_lost=lambda: self.GLib.idle_add(self.lose_desktop))
         self.focus_source.start()
         self.backend.desktop = SourceDesktop(APPS, self.backend.remaining, self.focus_source)
 

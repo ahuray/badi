@@ -75,10 +75,12 @@ an extension declares the Shell versions it supports.
    window is reported as XWayland, so no caret is calibrated for it.
 6. **Selection and unit.** The observer picks GNOME when
    `XDG_CURRENT_DESKTOP` lists `GNOME` and `WAYLAND_DISPLAY` is set, after
-   Hyprland and KWin. Its unit adds triggering conditions for the exact
-   values GNOME sessions set (`GNOME`, and Ubuntu's `ubuntu:GNOME`).
+   Hyprland and KWin, whatever else the list holds (`ubuntu:GNOME`,
+   `zorin:GNOME`); the unit leaves that choice to the observer (ADR 0015).
+   A session that lists GNOME but shows no `org.gnome.Shell` owner within 10
+   seconds (Budgie calls itself `Budgie:GNOME`) has no backend: exit 78.
    `badi doctor` names the source (`ready · GNOME Shell`) or says the
-   extension is missing or disabled.
+   extension is missing, disabled or another version.
 7. **No geometry at first.** As on Plasma, GNOME fields show suggestions in
    the input method's panel until a later change maps Mutter's frame and
    monitor scale onto the caret calibration.
