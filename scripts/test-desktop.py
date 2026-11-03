@@ -953,6 +953,75 @@ class DesktopTests(unittest.TestCase):
         self.assertIn(desktop.OBSERVER_SKIPPED_NOTE, report['notes'])
         self.assertIn('Field observer: not for this session', desktop.doctor_text(report))
 
+    def test_an_observer_without_a_backend_is_a_note_and_kwin_is_named(self):
+        stopped = 'LoadState=loaded\nActiveState=inactive\nMainPID=0\nConditionResult=yes\nExecMainStatus=78\n'
+        failed = stopped.replace('ActiveState=inactive', 'ActiveState=failed')
+        crashed = failed.replace('ExecMainStatus=78', 'ExecMainStatus=1')
+        for fields, expected in ((stopped, True), (failed, True), (crashed, False)):
+            with self.subTest(fields=fields), \
+                 patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, fields, '')):
+                self.assertEqual(desktop.observer_service_state().get('no_backend', False), expected)
+        # The unit must neither restart nor fail on the status the doctor reads
+        # as "no backend", and must leave the choice of desktop to the daemon:
+        # an exact XDG_CURRENT_DESKTOP condition would skip zorin:GNOME while
+        # the installer waits for the observer there.
+        unit = (desktop.ROOT / 'packaging/systemd/badi-accessibility.service').read_text().splitlines()
+        self.assertIn(f'RestartPreventExitStatus={desktop.OBSERVER_NO_BACKEND_STATUS}', unit)
+        self.assertIn(f'SuccessExitStatus={desktop.OBSERVER_NO_BACKEND_STATUS}', unit)
+        self.assertEqual([line for line in unit if line.startswith('Condition')],
+                         ['ConditionEnvironment=WAYLAND_DISPLAY', 'ConditionEnvironment=XDG_RUNTIME_DIR'])
+        service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+        cases = (({'loaded': True, 'ready': False, 'active': 'failed', 'no_backend': True},
+                  desktop.OBSERVER_NO_BACKEND_NOTE, 'Field observer: no backend for this desktop'),
+                 ({'loaded': True, 'ready': True, 'active': 'active', 'desktop': 'kwin', 'bus_enabled': True},
+                  desktop.OBSERVER_KWIN_NOTE, 'Field observer: ready · KWin (KDE Plasma 6)'),
+                 ({'loaded': True, 'ready': True, 'active': 'active', 'desktop': 'hyprland', 'bus_enabled': True},
+                  None, 'Field observer: ready · Hyprland'),
+                 ({'loaded': True, 'ready': True, 'active': 'active', 'bus_enabled': True},
+                  None, 'Field observer: ready\n'))
+        for observer, note, line in cases:
+            with self.subTest(observer=observer), patch.object(desktop, 'service_state', return_value=service), \
+                 patch.object(desktop, 'accessibility_state', return_value=observer), \
+                 patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+                 patch.object(desktop, 'install_state', return_value={}), \
+                 patch.object(desktop, 'control', return_value='{"metrics":{"provider_calls":1}}'):
+                report = desktop.health_report()
+                self.assertEqual(report['problems'], [])
+                if note:
+                    self.assertIn(note, report['notes'])
+                self.assertIn(line, desktop.doctor_text(report) + '\n')
+
+    def test_a_gnome_observer_names_its_source_and_a_silent_extension(self):
+        service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+        observer = {'loaded': True, 'ready': True, 'active': 'active', 'desktop': 'gnome', 'bus_enabled': True}
+        for answers, problem in (('ready', None), ('absent', 'gnome_extension_inactive'),
+                                 ('other_version', 'gnome_extension_version'), (None, None)):
+            with self.subTest(answers=answers), patch.object(desktop, 'service_state', return_value=service), \
+                 patch.object(desktop, 'accessibility_state', return_value=observer), \
+                 patch.object(desktop, 'gnome_extension_state', return_value=answers), \
+                 patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+                 patch.object(desktop, 'install_state', return_value={}), \
+                 patch.object(desktop, 'control', return_value='{"metrics":{"provider_calls":1}}'):
+                report = desktop.health_report()
+                self.assertEqual([item['code'] for item in report['problems']], [problem] if problem else [])
+                self.assertIn(desktop.OBSERVER_GNOME_NOTE, report['notes'])
+                self.assertIn('Field observer: ready · GNOME Shell', desktop.doctor_text(report))
+                if problem == 'gnome_extension_inactive':
+                    self.assertIn('gnome-extensions enable badi-focus@ahuray.github.io', report['problems'][0]['action'])
+                if problem == 'gnome_extension_version':
+                    self.assertIn('Log out and back in', report['problems'][0]['action'])
+
+    def test_the_extension_check_reads_only_whether_it_answers(self):
+        cases = ((0, 'ubtussb 1 false 42 1234 "org.badi.Test" "wayland" false\n', '', 'ready'),
+                 (0, 'ubtussb 2 false 42 1234 "x" "wayland" false\n', '', 'other_version'),
+                 (1, '', 'Call failed: Unknown object \'/io/github/ahuray/badi/Focus\'.', 'absent'),
+                 (1, '', 'Failed to connect to bus: No medium found', None))
+        for code, stdout, stderr, expected in cases:
+            with self.subTest(stderr=stderr), patch.object(
+                    desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], code, stdout, stderr)) as run:
+                self.assertEqual(desktop.gnome_extension_state(), expected)
+            self.assertEqual(run.call_args.args[0][:4], ['busctl', '--user', '--timeout=1s', 'call'])
+
     def test_the_settings_panel_is_omarchys(self):
         with patch.object(desktop.badi_install, 'desktop_platform', return_value=desktop.badi_install.GENERIC), \
              patch.object(desktop.subprocess, 'run') as command:

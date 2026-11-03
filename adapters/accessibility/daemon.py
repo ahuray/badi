@@ -16,7 +16,7 @@ import time
 import warnings
 
 from contract import Denied, MAX_FRAME, Observer, SCHEMA
-from desktop import App, WindowEvents, hyprland_directory
+from desktop import App, NoDesktopBackend, SourceDesktop, WindowEvents, desktop_backend, hyprland_directory
 from field import FieldBackend
 
 # An unrecognized executable never inherits another application's permission.
@@ -75,6 +75,9 @@ SCROLL_SIGNALS = frozenset({"BoundsChanged", "VisibleDataChanged"})
 MAX_SCROLL_ANCESTORS = 3
 # How often a showing preview's caret is checked for a move no event reported.
 PREVIEW_CHECK_MS = 250
+# Exit status (EX_CONFIG) for a desktop with no focused-window source; the
+# unit's RestartPreventExitStatus keeps systemd from retrying it.
+NO_DESKTOP_BACKEND = 78
 
 
 def unique_object(pairs):
@@ -139,6 +142,8 @@ class Daemon:
         self.socket_identity = None
         self.lock_fd = None
         self.window_events = None
+        self.source_bus = None
+        self.focus_source = None
         self.failed = False
         self.preview = None
         self.preview_retry_at = 0
@@ -525,14 +530,52 @@ class Daemon:
             self.observer.invalidate("focus_changed")
 
     def watch(self):
-        directory = hyprland_directory()
-        self.backend.desktop.request_socket = directory / ".socket.sock"
+        """Follow focus through AT-SPI and the compositor this session runs."""
+        kind = desktop_backend()
+        if kind == "hyprland":
+            directory = hyprland_directory()
+            self.backend.desktop.request_socket = directory / ".socket.sock"
         self.connect_event_bus()
         self.listener = self.A.EventListener.new(self.focus_event, None)
         self.listener.register("object:state-changed:focused")
-        self.window_events = WindowEvents.connect(directory)
-        self.GLib.io_add_watch(self.window_events.fileno(), self.GLib.IO_IN | self.GLib.IO_HUP | self.GLib.IO_ERR,
-                               self.window_event)
+        if kind == "kwin":
+            self.watch_kwin()
+        elif kind == "gnome":
+            self.watch_gnome()
+        else:
+            self.window_events = WindowEvents.connect(directory)
+            self.GLib.io_add_watch(self.window_events.fileno(), self.GLib.IO_IN | self.GLib.IO_HUP | self.GLib.IO_ERR,
+                                   self.window_event)
+        self.observer.desktop = kind
+
+    def watch_kwin(self):
+        """KDE Plasma: the observer's KWin script reports each activation
+        (ADR 0015). Reports arrive on GDBus's thread; the main loop acts."""
+        from kwin import KWinFocus
+        self.watch_source(lambda bus, **callbacks: KWinFocus(bus, self.path.parent / "kwin-field-observer.js",
+                                                             **callbacks))
+
+    def watch_gnome(self):
+        """GNOME: Badi's Shell extension answers each inspection and signals
+        focus changes (ADR 0016). The extension may be enabled later."""
+        from gnome import GnomeFocus
+        self.watch_source(GnomeFocus)
+
+    def watch_source(self, make):
+        """Start a focus source on the observer's own bus connection; its
+        callbacks only schedule work on the main loop."""
+        from sessionbus import GioBus
+        self.source_bus = GioBus()
+        self.focus_source = make(self.source_bus, on_change=lambda: self.GLib.idle_add(self.source_window_changed),
+                                 on_lost=lambda: self.GLib.idle_add(self.lose_desktop))
+        self.focus_source.start()
+        self.backend.desktop = SourceDesktop(APPS, self.backend.remaining, self.focus_source)
+
+    def source_window_changed(self):
+        if self.observer.tracked:
+            self.observer.invalidate("window_changed")
+        self.withdraw_producer()
+        return False
 
     def window_event(self, _fd, condition):
         if condition & (self.GLib.IO_HUP | self.GLib.IO_ERR):
@@ -573,6 +616,10 @@ class Daemon:
             self.event_bus.close_sync(None)
         if self.window_events is not None:
             self.window_events.close()
+        if self.focus_source is not None:
+            self.focus_source.stop()
+        if self.source_bus is not None:
+            self.source_bus.close()
         if self.server is not None:
             self.server.close()
         self.remove_own_socket()
@@ -629,6 +676,10 @@ def main():
         daemon.run()
         if daemon.failed:
             return 1
+    except NoDesktopBackend as error:
+        # Nothing to follow on this desktop: the unit does not restart (78).
+        print(f"Badi accessibility observer: {error}", file=sys.stderr)
+        return NO_DESKTOP_BACKEND
     except Exception:
         print("Badi accessibility observer: startup_or_runtime_unavailable", file=sys.stderr)
         return 1

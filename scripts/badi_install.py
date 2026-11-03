@@ -126,6 +126,30 @@ FCITX_ENVIRONMENT = Path(".config/environment.d/50-badi-fcitx5.conf")
 FCITX_BUS_NAME = "org.fcitx.Fcitx5"
 
 
+# The field observer's focused-window sources (ADR 0015, ADR 0016), named as
+# its status reply names them. Its unit runs it in these sessions only.
+OBSERVER_DESKTOPS = {"hyprland": "Hyprland", "kwin": "KWin (KDE Plasma 6)", "gnome": "GNOME Shell"}
+# Badi's GNOME Shell extension (ADR 0016): installed, never enabled for the user.
+GNOME_EXTENSION = "badi-focus@ahuray.github.io"
+
+
+def observer_desktop(environ=None):
+    """"hyprland", "kwin" or "gnome" where the field observer can follow focus
+    in this session, else None; adapters/accessibility/desktop.py decides the
+    same."""
+    environ = os.environ if environ is None else environ
+    signature = environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    if signature:
+        return "hyprland" if "/" not in signature else None
+    if not environ.get("WAYLAND_DISPLAY"):
+        return None
+    desktops = environ.get("XDG_CURRENT_DESKTOP", "").split(":")
+    version = environ.get("KDE_SESSION_VERSION", "")
+    if "KDE" in desktops and version.isdigit() and int(version) >= 6:
+        return "kwin"
+    return "gnome" if "GNOME" in desktops else None
+
+
 def desktop_platform():
     """OMARCHY where Omarchy's shell command is installed, otherwise GENERIC."""
     return OMARCHY if shutil.which("omarchy-shell") else GENERIC

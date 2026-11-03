@@ -45,6 +45,28 @@ class App:
     sentence_bounded: bool = False  # Its Fcitx surrounding text is only the caret's sentence.
 
 
+class NoDesktopBackend(RuntimeError):
+    """This desktop has no focused-window source the observer supports."""
+
+
+def desktop_backend(environ=None):
+    """Where the focused window's process and app id come from: "hyprland"
+    (its IPC), "kwin" (KDE Plasma 6, a KWin script; ADR 0015) or "gnome"
+    (Badi's Shell extension; ADR 0016)."""
+    environ = os.environ if environ is None else environ
+    if environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return "hyprland"
+    desktops = environ.get("XDG_CURRENT_DESKTOP", "").split(":")
+    if not environ.get("WAYLAND_DISPLAY"):
+        raise NoDesktopBackend("no_desktop_backend")
+    version = environ.get("KDE_SESSION_VERSION", "")
+    if "KDE" in desktops and version.isdigit() and int(version) >= 6:
+        return "kwin"
+    if "GNOME" in desktops:
+        return "gnome"
+    raise NoDesktopBackend("no_desktop_backend")
+
+
 def hyprland_directory():
     signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
     runtime = os.environ.get("XDG_RUNTIME_DIR", "")
@@ -114,6 +136,25 @@ class Desktop:
                 raise Denied("desktop_unavailable")
             connection.settimeout(self.remaining(IPC_SECONDS))
         return raw
+
+
+class SourceDesktop(Desktop):
+    """A desktop whose focused window and lock come from a focus source: the
+    KWin script on Plasma (ADR 0015), the Shell extension on GNOME (ADR 0016).
+    No monitors, so no preview is calibrated."""
+
+    def __init__(self, apps, remaining, focus):
+        super().__init__(apps, remaining)
+        self.focus = focus
+
+    def active_window(self):
+        return self.focus.active_window(self.remaining)
+
+    def monitors(self):
+        return []
+
+    def lock_query(self):
+        return self.focus.lock_query(self.remaining)
 
 
 # Versions whose IPC wire matches the pinned subset: 0.3.2 (checked at

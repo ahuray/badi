@@ -14,6 +14,9 @@ The package installs:
 - in `/usr/share/badi`: the panel files and the Fcitx theme script in
   `omarchy/`, the Omarchy repair hook `omarchy/badi-repair.hook`, and the
   Hyprland preview rule `hypr/badi.lua`;
+- Badi's GNOME Shell extension in
+  `/usr/share/gnome-shell/extensions/badi-focus@ahuray.github.io`, which each
+  GNOME user enables ([extension](../../adapters/gnome-shell/README.md));
 - the launcher and its icon;
 - in `/usr/share/licenses/badi-git`: `LICENSE` (MIT),
   `THIRD-PARTY-NOTICES.txt` (every component compiled into the binaries, with

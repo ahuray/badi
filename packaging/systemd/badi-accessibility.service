@@ -4,7 +4,6 @@ After=graphical-session.target badi-broker.service
 PartOf=graphical-session.target
 ConditionEnvironment=WAYLAND_DISPLAY
 ConditionEnvironment=XDG_RUNTIME_DIR
-ConditionEnvironment=HYPRLAND_INSTANCE_SIGNATURE
 # Keep retrying a transient AT-SPI or session failure. RestartSteps bounds
 # the delay; the unit does not stop after three failures.
 StartLimitIntervalSec=0
@@ -13,6 +12,12 @@ StartLimitIntervalSec=0
 Type=simple
 ExecStart=/usr/bin/python3 -B %h/.local/lib/badi/accessibility/daemon.py
 Restart=on-failure
+# The daemon itself picks where the focused window comes from: Hyprland's
+# IPC, a KWin script on KDE Plasma 6 (ADR 0015) or Badi's Shell extension on
+# GNOME (ADR 0016), whatever else XDG_CURRENT_DESKTOP lists (zorin:GNOME).
+# Elsewhere it exits 78 at once: a clean stop, not a failure, never retried.
+SuccessExitStatus=78
+RestartPreventExitStatus=78
 RestartSec=3
 RestartSteps=5
 RestartMaxDelaySec=60
