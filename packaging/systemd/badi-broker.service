@@ -35,7 +35,11 @@ ReadOnlyPaths=-%h/.local/share/badi/models
 # read-only, and of the runtime directory only badi/ exists here: no session
 # bus, user manager or other socket. A runtime compromised through prompt
 # text can then neither edit a shell profile or the Fcitx addon nor start an
-# unconfined unit. The installer creates both directories before a start.
+# unconfined unit. systemd creates the settings directory before a start, so
+# a package-only install needs no installer run first; the data directory
+# comes with the model assets (or the installer).
+ConfigurationDirectory=badi
+ConfigurationDirectoryMode=0700
 ProtectHome=read-only
 ReadWritePaths=-%E/badi -%h/.local/share/badi
 TemporaryFileSystem=%t:mode=0700
