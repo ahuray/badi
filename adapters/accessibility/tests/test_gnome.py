@@ -293,7 +293,12 @@ class ExtensionFileTests(unittest.TestCase):
         node = shutil.which("node")
         if node is None:
             self.skipTest("node is not installed")
-        result = subprocess.run([node, "--check", str(EXTENSION / "extension.js")], capture_output=True, text=True)
+        # GNOME loads it as an ES module; Node before 22 (Ubuntu 24.04 ships
+        # 18) treats a .js file as CommonJS, so check a .mjs copy.
+        with tempfile.TemporaryDirectory() as temporary:
+            copy = Path(temporary) / "extension.mjs"
+            shutil.copyfile(EXTENSION / "extension.js", copy)
+            result = subprocess.run([node, "--check", str(copy)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
