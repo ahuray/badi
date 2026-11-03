@@ -488,6 +488,13 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Remaining surfaces
 
+- [ ] Observer identity rules on other distributions. The
+      [app rules](adapters/accessibility/README.md#app-rules) name Arch
+      executables, and Debian's for Chromium, VS Code (Microsoft's package)
+      and Writer; Fedora's `/usr/lib64` builds, Flatpak and Snap apps,
+      Google Chrome and Debian's `telegram-desktop` fail closed. Each new
+      rule needs its exact executable and window class, the addon's
+      app-id mapping and a live check in that app.
 - [ ] Browser rich editors: a caret inside a list or quote, EditContext editors
       (VS Code's default, CodeMirror on recent Chromium), multi-paragraph fields
       in Zen (Gecko sends only the caret's paragraph) and Firefox.
