@@ -361,6 +361,10 @@ def accessibility_health_module():
     return module
 
 
+class UnexpectedHelper(RuntimeError):
+    """The observer unit's main process is not the installed helper."""
+
+
 def probe_accessibility(helper, endpoint):
     """Verify the exact service process and private metadata-only endpoint."""
     def state():
@@ -380,7 +384,7 @@ def probe_accessibility(helper, endpoint):
     except OSError:
         return None
     if not valid:
-        raise RuntimeError("badi-accessibility.service is not running the installed helper with its expected interpreter. Inspect service overrides before using native predictions.")
+        raise UnexpectedHelper("badi-accessibility.service is not running the installed helper with its expected interpreter. Inspect service overrides before using native predictions.")
     health = accessibility_health_module()
     try:
         status = health.probe(endpoint, int(pid))
@@ -393,7 +397,22 @@ def probe_accessibility(helper, endpoint):
 
 
 def wait_accessibility(helper, endpoint):
-    if badi_install.poll(lambda: probe_accessibility(helper, endpoint), 10) is None:
+    # A probe that lands mid-exec can read systemd's executor command line and
+    # then the helper's interpreter, so only a mismatch that lasts to the
+    # deadline means the unit runs something else.
+    mismatch = []
+
+    def check():
+        mismatch.clear()
+        try:
+            return probe_accessibility(helper, endpoint)
+        except UnexpectedHelper as error:
+            mismatch.append(error)
+            return None
+
+    if badi_install.poll(check, 10) is None:
+        if mismatch:
+            raise mismatch[0]
         raise RuntimeError("The accessibility helper did not become ready. Inspect badi doctor and journalctl --user -u badi-accessibility.service; Fcitx was not restarted.")
 
 
