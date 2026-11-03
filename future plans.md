@@ -267,7 +267,11 @@ publish need the user's go-ahead first; the rest can start at once.
 6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    CI builds and namcap-checks the package on every change, and the licence
    review is done: [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) ships
-   with it and every model download shows its terms first. *Done when*
+   with it and every model download shows its terms first. In a fresh Arch
+   container (2026-11-03), install, upgrade from an earlier build and removal
+   left the filesystem identical
+   ([tested with](packaging/aur/README.md#tested-with)); that is container
+   evidence, not a fresh Omarchy. *Done when*
    install, update and removal on a fresh Omarchy leave nothing behind, the
    panel's model-terms row has been tried live, and publication then waits
    only for the naming review.

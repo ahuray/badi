@@ -8,6 +8,11 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Fixed the Arch package leaving `/usr/lib/badi` behind on removal after
+  `badi` ran as root (for example `sudo badi doctor`): its bytecode cache
+  was not the package's. The packaged command now writes no bytecode, as
+  the Debian package's already did. Install, upgrade and removal now leave
+  an Arch container's filesystem as it was.
 - Fixed `install-desktop.py` sometimes stopping after replacing files with
   "not running the installed helper with its expected interpreter" (9 of
   100 real unit starts): a probe landing mid-exec read systemd's executor

@@ -1442,6 +1442,22 @@ class PayloadListTests(unittest.TestCase):
         self.assertEqual([f'{name}.py' for name in self.pkgbuild_loop('adapters/session')],
                          self.modules('adapters/session'))
 
+    def test_the_packaged_command_writes_no_bytecode(self):
+        # Run as root, a bytecode-writing command leaves __pycache__ in
+        # /usr/lib/badi, which neither pacman nor dpkg owns (a removal then
+        # leaves the directory). Apply the packages' own rewrites to the
+        # command's real first line.
+        import re
+        command = (self.ROOT / 'scripts/badi-desktop.py').read_text()
+        for name, path in (('PKGBUILD', 'packaging/aur/PKGBUILD'), ('build-deb.sh', 'packaging/debian/build-deb.sh')):
+            text = (self.ROOT / path).read_text()
+            expression = re.search(r"sed -i '(1s\|[^']+)'", text)
+            with self.subTest(package=name):
+                self.assertIsNotNone(expression, f'{name} rewrites no shebang')
+                rewritten = subprocess.run(['sed', expression.group(1)], input=command, capture_output=True,
+                                           text=True, check=True).stdout
+                self.assertEqual(rewritten.splitlines()[0], '#!/usr/bin/python3 -B')
+
     def test_panel_files(self):
         spec = importlib.util.spec_from_file_location('install_omarchy_ui', self.ROOT / 'scripts/install-omarchy-ui.py')
         panel = importlib.util.module_from_spec(spec)
