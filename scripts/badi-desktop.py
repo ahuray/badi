@@ -193,10 +193,27 @@ ALL_SITES_NOTE = ("Every http(s) site is allowed for predictions unless its exac
 ALL_APPS_NOTE = ("Apps use the blocklist: every app Badi supports is allowed unless its rule blocks it "
                  "(badi apps allowlist to return to allowed apps only). The default opens only fields the "
                  "accessibility observer corroborates; a manual Tab-request app still needs badi app APP on.")
-OBSERVER_SKIPPED_NOTE = ("The field observer is installed, but systemd skipped it: it runs only in a Hyprland session "
-                         "so far. Browser and other observed fields (Chromium-based apps, Zen, VS Code, Writer's "
-                         "grey preview) get no suggestions here; Fcitx's manual fields, Obsidian, Neovim, Bash and "
-                         "the Writer spelling extension work without it.")
+OBSERVER_SKIPPED_NOTE = ("The field observer is installed, but systemd skipped it: it needs a Wayland session. "
+                         "Browser and other observed fields (Chromium-based apps, Zen, VS Code, Writer's grey "
+                         "preview) get no suggestions here; Fcitx's manual fields, Obsidian, Neovim, Bash and the "
+                         "Writer spelling extension work without it.")
+# The observer's exit status when its desktop has no focused-window source.
+OBSERVER_NO_BACKEND_STATUS = "78"
+OBSERVER_NO_BACKEND_NOTE = ("The field observer found no focused-window source it supports on this desktop (Hyprland, "
+                            "KDE Plasma 6's KWin scripting or GNOME Shell), so it stopped and systemd does not retry "
+                            "it. Observed fields get no suggestions; journalctl --user -u badi-accessibility.service "
+                            "names the reason. Fcitx's manual fields, the editors and the Writer spelling extension "
+                            "still work.")
+OBSERVER_KWIN_NOTE = ("Field observer: KDE Plasma, through the KWin script it loads (ADR 0015). Plasma has no preview "
+                      "position yet, so observed fields show suggestions in the Fcitx panel.")
+OBSERVER_GNOME_NOTE = ("Field observer: GNOME, through Badi's Shell extension (ADR 0016). Observed fields still get "
+                       "no suggestions on GNOME: GNOME hands Fcitx no app name for them, an open decision. Fcitx's "
+                       "manual fields, the editors and the Writer spelling extension work.")
+GNOME_EXTENSION_ACTION = (f"Enable it: gnome-extensions enable {badi_install.GNOME_EXTENSION} (after a new install, "
+                          "log out and back in first so GNOME Shell finds it), then run badi doctor again.")
+GNOME_EXTENSION_VERSION_ACTION = ("Log out and back in so GNOME Shell loads the installed extension, and remove any older "
+                                  f"copy in ~/.local/share/gnome-shell/extensions/{badi_install.GNOME_EXTENSION}, "
+                                  "which takes precedence over the package's; then run badi doctor again.")
 SESSION_FCITX_ACTION = (f"Log out and back in: Fcitx reads Badi's addon at login, from ~/{badi_install.FCITX_ENVIRONMENT}"
                         " after scripts/install-desktop.py, or from the system addon directory after the badi "
                         "package. ")
@@ -356,17 +373,37 @@ def startup_problem():
 
 def observer_service_state():
     fields = badi_install.unit_properties(ACCESSIBILITY_SERVICE, "LoadState", "ActiveState", "MainPID",
-                                          "ConditionResult", "ConditionTimestampMonotonic")
+                                          "ConditionResult", "ConditionTimestampMonotonic", "ExecMainStatus")
     pid = fields.get("MainPID", "0")
     state = {"loaded": fields.get("LoadState") == "loaded",
              "active": fields.get("ActiveState", "unknown"),
              "process_id": int(pid) if pid.isdigit() else 0}
-    # systemd checked the unit's start condition (a Hyprland session, so far)
-    # and skipped the start: expected on other desktops, not a failure.
+    # systemd checked the unit's start condition (a Wayland session) and
+    # skipped the start: expected outside one, not a failure.
     if (state["active"] == "inactive" and fields.get("ConditionResult") == "no"
             and fields.get("ConditionTimestampMonotonic", "0") not in ("", "0")):
         state["condition_unmet"] = True
+    # The observer ran and found no focused-window source: a clean stop (78)
+    # its unit neither restarts nor counts as a failure.
+    if state["active"] in ("inactive", "failed") and fields.get("ExecMainStatus") == OBSERVER_NO_BACKEND_STATUS:
+        state["no_backend"] = True
     return state
+
+
+def gnome_extension_state():
+    """"ready" when Badi's Shell extension answers GetFocus in the version this
+    observer speaks, "other_version" when another one answers, "absent" when
+    nothing does, None when the session bus cannot be asked. The reply holds
+    no title or content."""
+    try:
+        result = subprocess.run(["busctl", "--user", "--timeout=1s", "call", "org.gnome.Shell",
+                                 "/io/github/ahuray/badi/Focus", "io.github.ahuray.badi.Focus1", "GetFocus"],
+                                capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode == 0:
+        return "ready" if result.stdout.startswith("ubtussb 1 ") else "other_version"
+    return "absent" if "Unknown" in result.stderr or "No such" in result.stderr else None
 
 
 def observer_probe(endpoint, expected_pid):
@@ -633,6 +670,8 @@ def health_report():
     if observer.get("loaded"):
         if observer.get("condition_unmet"):
             report["notes"].append(OBSERVER_SKIPPED_NOTE)
+        elif observer.get("no_backend"):
+            report["notes"].append(OBSERVER_NO_BACKEND_NOTE)
         elif not observer["ready"]:
             problems.append({"code": "accessibility_unavailable",
                              "message": "The accessibility field observer is unavailable.",
@@ -641,6 +680,21 @@ def health_report():
             problems.append({"code": "accessibility_disabled",
                              "message": "Desktop accessibility is disabled, so applications may expose no fields.",
                              "action": "Complete the accessibility setup and relaunch the target application with its supported accessibility/input-method flags."})
+        if observer.get("ready") and observer.get("desktop") == "kwin":
+            report["notes"].append(OBSERVER_KWIN_NOTE)
+        if observer.get("ready") and observer.get("desktop") == "gnome":
+            report["notes"].append(OBSERVER_GNOME_NOTE)
+            extension = gnome_extension_state()
+            if extension == "absent":
+                problems.append({"code": "gnome_extension_inactive",
+                                 "message": "Badi's GNOME Shell extension does not answer, so the observer cannot "
+                                            "tell which window has focus.",
+                                 "action": GNOME_EXTENSION_ACTION})
+            elif extension == "other_version":
+                problems.append({"code": "gnome_extension_version",
+                                 "message": "GNOME Shell runs another version of Badi's extension than the observer "
+                                            "speaks, so the observer denies every field.",
+                                 "action": GNOME_EXTENSION_VERSION_ACTION})
     else:
         report["notes"].append("The accessibility field observer is not installed or could not be inspected, so IME-parity apps and observed fields get no suggestions. Model readiness alone does not establish those integrations.")
     try:
@@ -773,6 +827,16 @@ def health_report():
     return report
 
 
+def observer_summary(observer):
+    """The field observer's state, and the focused-window source it follows."""
+    if observer.get("ready"):
+        desktop = badi_install.OBSERVER_DESKTOPS.get(observer.get("desktop"))
+        return f"ready · {desktop}" if desktop else "ready"
+    if observer.get("condition_unmet"):
+        return "not for this session"
+    return "no backend for this desktop" if observer.get("no_backend") else "unavailable"
+
+
 def doctor_text(report):
     """Render the same diagnosis as JSON without dumping internal identifiers."""
     service = report.get("service", {})
@@ -786,8 +850,7 @@ def doctor_text(report):
              f"  Service: {service.get('active', 'unknown')} ({service.get('state', 'unknown')})",
              f"  Model: {model}" + (f" · {broker['provider']}" if broker.get("provider") else ""),
              f"  Fcitx addon: {addon}",
-             "  Field observer: " + ("ready" if observer.get("ready") else
-                                     "not for this session" if observer.get("condition_unmet") else "unavailable"),
+             "  Field observer: " + (observer_summary(observer)),
              "  Session helper: " + {True: report.get("session_helper", {}).get("active", "unknown"),
                                       False: "not installed"}.get(report.get("session_helper", {}).get("loaded"), "unknown")]
     installed = report.get("install", {}).get("desktop") or {}

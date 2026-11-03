@@ -1,0 +1,8 @@
+{
+  "uuid": "badi-focus@ahuray.github.io",
+  "name": "Badi focus",
+  "description": "Tells Badi's field observer which window has focus: its process id and app id, never its title or content. Badi needs it to suggest in observed fields on GNOME.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "session-modes": ["user"],
+  "url": "https://github.com/ahuray/badi"
+}

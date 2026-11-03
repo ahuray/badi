@@ -13,6 +13,28 @@ Unreleased in the same commit.
   was not the package's. The packaged command now writes no bytecode, as
   the Debian package's already did. Install, upgrade and removal now leave
   an Arch container's filesystem as it was.
+- The field observer follows focus on GNOME through Badi's own GNOME Shell
+  extension, `badi-focus@ahuray.github.io`, which the packages and the
+  installer ship and the user enables: it answers the focused window's
+  process and app id on gnome-shell's own bus connection, and nothing is
+  read while the screen is locked
+  ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)).
+  The observer's unit now leaves the choice of desktop to the observer,
+  so a GNOME or KDE session that lists other names too (`zorin:GNOME`) is
+  not skipped while the installer waits for it; the installer requires
+  gtk4-layer-shell only on Hyprland, the one desktop that draws the
+  preview, since Ubuntu 24.04 does not package it; `badi doctor` reports an extension
+  that does not answer or runs another version. GNOME's observed fields still get no
+  suggestions: Fcitx names no app there, an open decision.
+- The field observer runs on KDE Plasma 6: a KWin script of its own
+  reports the focused window's process and app id to the observer's
+  private bus connection, accepted only from KWin's verified bus name with
+  a per-run token, and KWin's screen locker must answer unlocked
+  ([ADR 0015](docs/decisions/0015-kwin-script-reports-plasma-focus.md)).
+  Its unit runs in any Wayland session and stops cleanly, never retried,
+  where no backend exists (exit 78); `badi doctor` names the source. Plasma
+  fields show suggestions in Fcitx's panel; proved against a headless KWin
+  6.3.6, not yet in a live Plasma session.
 - Fixed `install-desktop.py` sometimes stopping after replacing files with
   "not running the installed helper with its expected interpreter" (9 of
   100 real unit starts): a probe landing mid-exec read systemd's executor

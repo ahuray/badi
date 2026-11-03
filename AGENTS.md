@@ -91,6 +91,7 @@ should serve current work.
 | `adapters/accessibility/` | Python AT-SPI observer: app identity, lock state, field acquisition, rich-editor serialization, caret calibration, grey preview. [Runbook](adapters/accessibility/README.md). |
 | `adapters/session/` | Python session helper: logind sleep and session state, UPower and power-profile state, GlobalShortcuts portal, and delivery of the keyring's style-learning key; reports to the broker and only withholds authority. [Runbook](adapters/session/README.md). |
 | `adapters/obsidian/`, `adapters/shell/`, `adapters/neovim/`, `adapters/shared/` | Editor-owned clients with exact acquisition, mutation and native undo. [Editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md). |
+| `adapters/gnome-shell/` | GNOME Shell extension that answers the focused window's process and app id to the observer on GNOME, nothing else. [Runbook](adapters/gnome-shell/README.md). |
 | `adapters/libreoffice/` | Python UNO Writer extension: explicit English spelling replacement in one undo context, verified by reading back. [Runbook](adapters/libreoffice/README.md). |
 | `ui/omarchy-plugin/` | Omarchy bar mark and settings panel. [Runbook](ui/omarchy-plugin/README.md). |
 | `scripts/`, `packaging/` | `badi` desktop controller, user-local installers, service units, the [Arch package candidate](packaging/aur/README.md), the [Debian and Ubuntu package](packaging/debian/README.md). |

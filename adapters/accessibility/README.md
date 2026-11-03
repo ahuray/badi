@@ -6,8 +6,8 @@ types text, and it changes no accessibility setting or app policy.
 
 ## App rules
 
-Each supported Fcitx app id maps to one identity rule. The active Hyprland
-window's process must belong to this user, run the listed executable (from
+Each supported Fcitx app id maps to one identity rule. The active window's
+process ([Hyprland or KWin](#desktops)) must belong to this user, run the listed executable (from
 `/proc/PID/exe`, so a deleted or replaced binary fails) and show the listed
 window class. A rule makes a field eligible; it does not prove the app's
 editing works ([coverage](../../README.md#where-it-works)).
@@ -89,13 +89,27 @@ Detection is the toolkit's mark, not the words in the field.
 
 ## Authority boundary
 
-`inspect` verifies the unlocked Omarchy session, the active Hyprland window's
-process, its identity rule and exactly one focused editable object. It queries
+`inspect` verifies the unlocked session, the active window's process, its
+identity rule and exactly one focused editable object. It queries
 only that process and reads no prose. Every binding comes from an `inspect`;
 `snapshot` and `preview` require its unchanged epoch.
 
-Hyprland's active window and monitors come from its IPC socket. Each inspection
-asks the running Omarchy shell for fresh `lock.status`, overlapping the field
+### Desktops
+
+The observer follows the compositor its session runs and nothing else
+([ADR 0015](../../docs/decisions/0015-kwin-script-reports-plasma-focus.md),
+[ADR 0016](../../docs/decisions/0016-gnome-shell-extension-reports-focus.md)):
+Hyprland when `HYPRLAND_INSTANCE_SIGNATURE` is set; otherwise, with
+`WAYLAND_DISPLAY` set, KWin when `XDG_CURRENT_DESKTOP` lists `KDE` and
+`KDE_SESSION_VERSION` is 6 or later, and GNOME when it lists `GNOME`.
+Elsewhere it exits with status 78, and so does a session that lists GNOME
+but runs no gnome-shell (none appears within 10 seconds); its unit, which
+asks only for a Wayland session, treats 78 as a clean stop and never
+restarts it. The `status` reply names the source (`desktop`), and `badi doctor`
+shows it.
+
+**Hyprland (Omarchy).** The active window and monitors come from Hyprland's
+IPC socket. Each inspection asks the running Omarchy shell for fresh `lock.status`, overlapping the field
 inspection and waiting at most 150 ms within its operation budget. Unless all
 five lock flags are explicitly false, the lock denial wins; errors fail closed.
 
@@ -108,6 +122,52 @@ pinned to upstream [command tags](https://github.com/quickshell-mirror/quickshel
 [call replies](https://github.com/quickshell-mirror/quickshell/blob/v0.3.1/src/io/ipccomm.cpp)
 and Qt's length-prefixed UTF-16 `QString`; 0.3.2, checked at Omarchy's
 revision 2b4501a, changed neither file. Unknown replies are denied.
+
+**KDE Plasma 6 (KWin).** KWin keeps `org_kde_plasma_window_management` from
+clients no desktop file grants it, so the observer loads a script of its own
+(`badi-field-observer`) over `org.kde.KWin /Scripting` from a `0600` file it
+deletes once the script answers. On each activation and app id change the
+script calls the observer's private bus connection with the active window's
+process id, app id (KWin's `resourceClass`, the Wayland app id, checked as the
+window class), window id and minimized, hidden, managed and deleted flags; no
+title, content or geometry.
+- A report counts only from the owner of `org.kde.KWin` that the bus daemon
+  says runs as this user in a process named `kwin_wayland`
+  (`/proc/PID/status`: distributions give KWin `CAP_SYS_NICE`, so its exe link
+  is unreadable), with this run's token and a rising serial; others are
+  refused. A malformed report from KWin means no window.
+- Each inspection first asks KWin whether the script is loaded. KWin answers
+  on its main thread after sending earlier activations' reports, so the
+  window read next is current. An unloaded script or a new `org.kde.KWin`
+  owner stops the observer, and systemd restarts it with a fresh script.
+- After the field is read, KWin's own `/ScreenSaver` must answer `GetActive`
+  with an explicit `false`; a window of `kscreenlocker_greet` is
+  `desktop_locked` as well. While locked, KWin may still name the app window
+  active, so the window alone never proves an unlocked session.
+- No monitors are reported and XWayland stays unknown, so no caret is
+  calibrated: observed fields on Plasma show suggestions in the Fcitx panel,
+  never the grey preview.
+
+**GNOME (Badi's Shell extension).** GNOME's own `org.gnome.Shell.Introspect`
+gives no process id and answers only the portal backends, so the user
+enables Badi's [extension](../gnome-shell/README.md), which answers
+`GetFocus` on gnome-shell's own bus connection.
+- At start the observer verifies the `org.gnome.Shell` owner (this user, a
+  process named `gnome-shell`) and follows its `FocusChanged` signal, from
+  that unique name only. The extension may be enabled later.
+- Each inspection calls `GetFocus` on that unique name afresh. A missing,
+  disabled or other-version extension is `desktop_unavailable`, a reported
+  lock `desktop_locked`, no focused window `focus_unavailable`; an X11
+  window counts as XWayland.
+- After the field is read, gnome-shell's own `/org/gnome/ScreenSaver` must
+  answer `GetActive` with an explicit `false`. GNOME disables the extension
+  while locked, so a locked session is denied twice over.
+- A new `org.gnome.Shell` owner stops the observer; systemd restarts it.
+- No geometry: GNOME fields would show suggestions in the input method's
+  panel. They show none yet: GNOME relays every Wayland text-input app to
+  Fcitx through its IBus frontend with no program name, so the addon has no
+  app id to join to this answer (an open decision in
+  [future plans](<../../future plans.md>)).
 
 ### Browser fields
 
@@ -188,8 +248,9 @@ before any text read. The caret, length, selections and text are reread to
 detect changes; the result is a snapshot, never an atomic edit transaction, so
 Fcitx compares its live text again before dispatch.
 
-Focus and window changes and the field's own events invalidate the epoch and
-hide the preview. Hyprland repeats `activewindowv2` for the same window when
+Focus and window changes (a Hyprland window event, or a KWin report naming
+another window) and the field's own events invalidate the epoch and hide the
+preview. Hyprland repeats `activewindowv2` for the same window when
 its title changes (an editor's unsaved mark or autosave, a terminal's running
 command); only a different window address is a focus change. After an approved snapshot, the field's events (text, caret,
 selection, editable, showing, defunct, role) are subscribed on a separate
@@ -269,8 +330,8 @@ same-user peers, one instance under an exclusive lock.
 
 - Frames are newline-terminated JSON lines of at most 16 KiB (64 KiB buffered).
 - Each operation (a request, or a field event that moves the preview) has a
-  350 ms budget; AT-SPI calls time out after 50 ms and Hyprland calls after
-  150 ms.
+  350 ms budget; AT-SPI calls time out after 50 ms and Hyprland or KWin
+  calls after 150 ms.
 - One connection owns acquisition and preview; another gets `observer_busy`.
 - No typed text reaches logs or disk.
 
@@ -287,9 +348,9 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 | `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–66 characters: a suggestion of at most 64, or `→ ` and a correction), `ttl_ms` (1–15000), optional `caret_rect` `{x,y,width,height,scale}`, optional `strong` (how many leading characters Tab takes, less than the whole text; drawn opaque and the rest at 60%) | `total_chars`, `rendered`, optional `quiet` |
 
 `preview` compares the current caret and length with the expected ones before
-drawing. `hide` returns `hidden:true`; `status` returns readiness without
-acquiring anything, and `health.py` probes it for the installer and `badi
-doctor`. Readiness does not prove that any app exposes an eligible field.
+drawing. `hide` returns `hidden:true`; `status` returns readiness and the
+focused-window source (`desktop`: `hyprland` or `kwin`) without acquiring
+anything, and `health.py` probes it for the installer and `badi doctor`. Readiness does not prove that any app exposes an eligible field.
 
 Failures return `{schema,id,ok:false,error,epoch}` with a content-free code;
 every failure except a malformed request or `observer_busy` hides the preview:
@@ -298,7 +359,7 @@ every failure except a malformed request or `observer_busy` hides the preview:
 | --- | --- |
 | `invalid_request`, `invalid_preview` | Malformed envelope (a duplicate key too), binding or preview |
 | `unsupported_app`, `app_mismatch` | No rule for the app id, or the active window is not that app |
-| `desktop_unavailable`, `desktop_locked` | Hyprland or the lock query failed, or a lock flag is set |
+| `desktop_unavailable`, `desktop_locked` | Hyprland, KWin, its script or the lock query failed, or the session is locked |
 | `focus_unavailable` | Not exactly one focused editable page field |
 | `origin_unavailable`, `unsupported_origin` | No readable address, or not HTTP(S) |
 | `sensitive_field`, `ineligible_field` | A password role or type; not focused, editable, showing, visible and enabled |
@@ -461,14 +522,50 @@ undoes.
 ```sh
 npm run accessibility:check         # source tests, no desktop
 npm run accessibility:integration   # private D-Bus and XDG environments
+python3 adapters/accessibility/tests/kwin-headless.py   # a real headless KWin 6
+python3 adapters/accessibility/tests/gnome-headless.py  # a real headless GNOME Shell
 ```
 
 The source tests cover privacy gates, quiet facts, malformed frames, identity rules, epochs,
 stale snapshots, bounded Unicode reads and window-text characters,
 rich-editor flattening, calibration against recorded live extents, the
 preview lifecycle, field events under the real operation deadline and the
-lock query. The integration lane proves that other senders and fields cannot
-deliver events and that invalidation unsubscribes the authorized field.
+lock query, and the KWin backend against a fake bus: backend selection,
+report authentication, ordering and malformed reports, focus changes, an
+unloaded script or replaced KWin, the lock answer and the greeter; and the
+GNOME backend likewise: the Shell's identity, fresh answers, a missing
+extension, a new Shell, the lock answer, and the extension's files against
+what the observer calls. The integration lane proves that other senders and fields cannot deliver events
+and that invalidation unsubscribes the authorized field.
+
+The headless KWin lane starts `kwin_wayland --virtual` on a private session
+bus, loads the real script and opens two GTK 4 windows with known app ids:
+each activation must report that window's process and app id, the identity
+rule must accept only the active one, a locked session and an unloaded
+script must deny. It needs KWin 6, `dbus-run-session` and GTK 4's
+introspection data; in a Debian 13 container started with
+`--cap-add SYS_NICE` (KWin carries that file capability) and run as a
+regular user:
+
+```sh
+apt-get install --no-install-recommends kwin-wayland dbus python3-gi gir1.2-gtk-4.0 gir1.2-atspi-2.0 at-spi2-core qt6-wayland
+```
+
+The headless GNOME lane starts a private system bus with a minimal GDM and
+logind stand-in (GNOME Shell builds its screen shield only when both
+answer), then `gnome-shell --headless` with the extension enabled in a
+throwaway profile, plus a test-only extension that leaves the startup
+overview, which otherwise holds focus. It opens two GTK 4 windows: each
+focused window's process and app id must come back, the identity rule must
+accept only the focused one, a locked session must deny with the extension
+unexported, logind's Unlock must bring answers back, and a disabled extension
+must deny. In a Debian 13 or Ubuntu 24.04 container, as a regular user, after
+creating as root what a booted system has: `/run/systemd/seats` (the Shell's
+test for logind) and `/tmp/.X11-unix` with mode 1777 (for Xwayland):
+
+```sh
+apt-get install --no-install-recommends gnome-shell dbus python3-gi gir1.2-gtk-4.0 gir1.2-atspi-2.0 at-spi2-core libglib2.0-bin xwayland
+```
 
 ### Tested with
 
@@ -481,4 +578,6 @@ acceptance results per app.
 | --- | --- | --- |
 | Window words, Chromium 154 (`26f4366`, 2026-10-20), a disposable mail-style page | The reply field read 385 characters of the thread; "Marin" finished as "Marinella" and "Okonk" as "Okonkwo"; a name only in the To input was never offered; a word learned in two note fields finished in the reply; `badi context site … off` stopped window text and learned words; the panel asked before context was chosen | Not a real mail client or the Claude desktop app |
 | Window words, Zen 1.23.3b, Brave Origin 1.97 (tab and `--app`), VS Code 1.142 (`f180653`, 2026-10-20) | Zen read 197 characters and finished 3 of 3; Brave finished names from the thread; VS Code read 175 characters (explorer and tab labels) and finished names from its screen-reader textarea | Isolated profiles, one page or scratch file each |
+| GNOME backend, headless GNOME Shell 48.7 (Debian 13.7) and 46.0 (Ubuntu 24.04) in containers (2026-11-03) | Both GTK 4 windows' pid and app id; only the focused one passed the identity rule; a locked session denied `desktop_locked` and unexported the extension; logind's Unlock brought answers back; a disabled extension denied `desktop_unavailable`; 3 of 3 runs on each. Under the same Shell with Fcitx 5.1.12, a focused GTK 4 entry's input context had an empty program name | Headless Shell with a GDM and logind stand-in, no Fcitx addon or real app: GNOME's observed fields wait on the app-id decision |
+| KWin backend, headless `kwin_wayland --virtual` 6.3.6 in a Debian 13.7 container with `CAP_SYS_NICE` (2026-11-03) | Two GTK 4 windows reported pid and app id on activation; the identity rule accepted only the active one; `GetActive` true denied `desktop_locked`; an unloaded script denied `desktop_unavailable` | Headless compositor, no AT-SPI field, Fcitx or real app: no Plasma session has run observed fields yet |
 | Preview renderer, GTK layer-shell fixture at scale 2 (2026-10-13) | Inline and field-edge overflow drawn; the overflow stayed wholly below the field, clear of its neighbouring button, and hid after its 15 s lease without renewal | The real renderer, not app editing or fractional scales |

@@ -88,7 +88,8 @@ links to it. A tested app version is not a claim about Linux in general.
 - **Distribution:** an Arch package candidate (step 6) and a
   [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
   builds, lints and installs in containers (2026-10-23); neither is
-  published, and no GNOME or KDE session has run Badi (step 7). Without an
+  published, no GNOME session has run Badi, and Plasma has run only the
+  package's manual path (step 7). Without an
   installed writing model, the desktop installer lists the models that fit
   the device and lets the user pick one.
 - **Code health:** a full review before the 0.2.0 fresh start (2026-10-24)
@@ -135,6 +136,15 @@ Standing user decisions:
   their flags files (2026-10-24).
 
 Open decisions, for the user:
+- **GNOME app identity.** GNOME relays every Wayland text-input app (GTK 4,
+  Chromium, Electron) to Fcitx through its IBus frontend with no program
+  name (checked under headless GNOME Shell 48.7 with Fcitx 5.1.12), so the
+  addon has no app id and denies the field. Badi's GNOME extension knows the
+  focused app, verified by the observer's identity rule. Taking the app id
+  from the observer for exactly such an unnamed IBus context would open
+  GNOME's observed fields, but moves app identity from Fcitx to the observer
+  there ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)).
+  Allow that, or leave GNOME to Fcitx's manual fields and the editors.
 - **Terminal privacy.** A terminal cannot mark a password prompt, so a
   passphrase of two or more words in an allowed terminal can reach the local
   model. Keep it, make terminals explicit-only, or pause after prompts such as
@@ -281,15 +291,23 @@ publish need the user's go-ahead first; the rest can start at once.
    the package now has a first graphical-session run (Plasma, below).
    Still open:
    - field observer backends outside Hyprland, so Chromium-based apps, Zen,
-     VS Code and Writer's grey preview suggest there; the observer unit's
-     Hyprland condition goes with them. The observer needs the focused
-     window's process and app id (checked 2026-10-24):
-     - KWin offers `org_kde_plasma_window_management` (app id, and process
-       id since version 8; Fcitx itself uses it) or a KWin script reading
-       `workspace.activeWindow`, so Plasma comes first;
-     - GNOME's `org.gnome.Shell.Introspect` gives no process id and answers
-       only the portal backends, so GNOME needs a Shell extension of Badi's
-       own that the user installs;
+     VS Code and Writer's grey preview suggest there:
+     - KDE Plasma 6 has one: a KWin script of the observer's own reports
+       the focused window's process and app id
+       ([ADR 0015](docs/decisions/0015-kwin-script-reports-plasma-focus.md)),
+       proved against a headless KWin 6.3.6 only
+       ([observer runbook](adapters/accessibility/README.md#tested-with)).
+       Still open: in the Plasma VM, an observed field in Chromium
+       suggests in Fcitx's panel and Tab lands with zero wrong-field edits,
+       a locked session and another window deny, and Kate's manual path is
+       unchanged; then the grey preview, which needs KWin's client geometry
+       and output scale mapped onto the caret calibration;
+     - GNOME has one: Badi's own Shell extension
+       ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)),
+       proved against headless GNOME Shell 46 and 48. Its observed fields
+       wait on the GNOME app-id decision below; after it, a GNOME VM must
+       show an observed Chromium field suggesting with zero wrong-field
+       edits;
      - AT-SPI's own process id is a debugging aid, and its application name
        is not the app id;
    - in a VM with GNOME 48 (Debian 13) and Plasma: `im-config -n fcitx5`
@@ -474,6 +492,13 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Remaining surfaces
 
+- [ ] Observer identity rules on other distributions. The
+      [app rules](adapters/accessibility/README.md#app-rules) name Arch
+      executables, and Debian's for Chromium, VS Code (Microsoft's package)
+      and Writer; Fedora's `/usr/lib64` builds, Flatpak and Snap apps,
+      Google Chrome and Debian's `telegram-desktop` fail closed. Each new
+      rule needs its exact executable and window class, the addon's
+      app-id mapping and a live check in that app.
 - [ ] Browser rich editors: a caret inside a list or quote, EditContext editors
       (VS Code's default, CodeMirror on recent Chromium), multi-paragraph fields
       in Zen (Gecko sends only the caret's paragraph) and Firefox.

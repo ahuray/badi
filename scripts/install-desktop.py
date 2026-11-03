@@ -28,9 +28,11 @@ from badi_install import (ACCESSIBILITY_SWITCH, COMPLETE_ACCESSIBILITY, HYPR_REQ
 
 ROOT = Path(__file__).resolve().parents[1]
 # Every module the installed observer imports, beside its daemon.
-OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "preview.py", "health.py",
-                    "debugtrace.py")
+OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "gnome.py", "kwin.py",
+                    "preview.py", "health.py", "sessionbus.py", "debugtrace.py")
 SESSION_MODULES = ("daemon.py", "link.py", "style_key.py")
+# Badi's GNOME Shell extension (ADR 0016), installed outside Omarchy.
+GNOME_EXTENSION_FILES = ("metadata.json", "extension.js")
 SESSION_SERVICE = "badi-session.service"
 OMARCHY_REPAIR_HOOKS = ("post-boot.d", "post-update.d")
 # Packaged launchers; a user's copy of the same name shadows one.
@@ -334,24 +336,33 @@ def offers_input_method_v2(platform):
 
 
 def require_accessibility_runtime():
-    if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") or "/" in os.environ["HYPRLAND_INSTANCE_SIGNATURE"]:
-        raise RuntimeError("Run the native installer in the current Hyprland session. --broker-only does not require the accessibility helper.")
+    desktop = badi_install.observer_desktop()
+    if desktop is None:
+        raise RuntimeError("Run the native installer in the current Hyprland, KDE Plasma 6 or GNOME session. "
+                           "--broker-only does not require the accessibility helper.")
     # Use the service's exact interpreter and actually load native libraries;
     # require_version alone only checks that typelib metadata can be located.
-    code = """import ctypes, gi, cairo
-ctypes.CDLL('libgtk4-layer-shell.so.0')
-gi.require_version('Atspi', '2.0')
-gi.require_version('Gtk', '4.0')
-gi.require_version('Gtk4LayerShell', '1.0')
-from gi.repository import Atspi, Gtk, Gtk4LayerShell, GLibUnix
-"""
+    # Only Hyprland draws the grey preview (KWin and GNOME report no caret
+    # geometry), so only there is GTK's layer shell required; Ubuntu 24.04
+    # does not package it.
+    preview = desktop == "hyprland"
+    code = ("import ctypes, gi, cairo\n" + ("ctypes.CDLL('libgtk4-layer-shell.so.0')\n" if preview else "") +
+            "gi.require_version('Atspi', '2.0')\ngi.require_version('Gtk', '4.0')\n" +
+            ("gi.require_version('Gtk4LayerShell', '1.0')\nfrom gi.repository import Atspi, Gtk, Gtk4LayerShell, GLibUnix\n"
+             if preview else "from gi.repository import Atspi, Gtk, GLibUnix\n"))
     try:
         run(["/usr/bin/python3", "-B", "-c", code], capture_output=True, text=True, timeout=4)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        hint = (" (Debian: python3-gi-cairo gir1.2-atspi-2.0 gir1.2-gtk-4.0 gir1.2-gtk4layershell-1.0; Ubuntu 24.04 "
-                "has no gtk4-layer-shell package)" if badi_install.distribution_family() == "debian" else "")
-        raise RuntimeError("The accessibility helper needs system Python with PyGObject, pycairo, AT-SPI, GTK4 and "
-                           f"gtk4-layer-shell. Install the missing runtime{hint} before updating native integration.") from None
+        if preview:
+            hint = (" (Debian: python3-gi-cairo gir1.2-atspi-2.0 gir1.2-gtk-4.0 gir1.2-gtk4layershell-1.0)"
+                    if badi_install.distribution_family() == "debian" else "")
+            needs = "PyGObject, pycairo, AT-SPI, GTK4 and gtk4-layer-shell"
+        else:
+            hint = (" (Debian, Ubuntu: python3-gi-cairo gir1.2-atspi-2.0 gir1.2-gtk-4.0)"
+                    if badi_install.distribution_family() == "debian" else "")
+            needs = "PyGObject, pycairo, AT-SPI and GTK4"
+        raise RuntimeError(f"The accessibility helper needs system Python with {needs}. Install the missing "
+                           f"runtime{hint} before updating native integration.") from None
 
 
 def accessibility_health_module():
@@ -441,7 +452,9 @@ class Plan:
     platform: str = badi_install.OMARCHY
     # Generic only: the system Fcitx's own addon directory.
     system_addons: Path | None = None
-    # Whether this is a Hyprland session, where the field observer runs.
+    # Whether the field observer runs in this session: Hyprland, KDE Plasma 6
+    # through its KWin script (ADR 0015), or GNOME through Badi's Shell
+    # extension (ADR 0016).
     observer_session: bool = True
     # Generic only, after the install: the running Fcitx and whether it maps
     # the installed addon (None when no Fcitx runs or it cannot be inspected).
@@ -493,7 +506,7 @@ def preflight(args):
                            "(WAYLAND_DISPLAY and XDG_RUNTIME_DIR are not set here, and an X11 session is "
                            "not supported). Nothing was changed.")
     platform = badi_install.desktop_platform()
-    observer_session = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+    observer_session = badi_install.observer_desktop() is not None
     system_addons = None
     if not args.broker_only and platform == badi_install.OMARCHY:
         require_unlocked()
@@ -813,6 +826,12 @@ def install_prepared_files(plan, installation):
             install(ROOT / "adapters/accessibility" / name, library / "accessibility" / name)
         install(ROOT / "packaging/systemd/badi-accessibility.service",
                 home / ".config/systemd/user/badi-accessibility.service")
+    if native and not plan.omarchy:
+        # GNOME finds the extension at its next login; enabling it stays the user's step.
+        extension = badi_install.GNOME_EXTENSION
+        for name in GNOME_EXTENSION_FILES:
+            install(ROOT / "adapters/gnome-shell" / extension / name,
+                    home / ".local/share/gnome-shell/extensions" / extension / name)
     if native and plan.omarchy:
         install(ROOT / "packaging/hypr/badi.lua", plan.config_home / "hypr/badi.lua")
         # Omarchy runs these at every login and after omarchy-update; its
@@ -916,7 +935,8 @@ def restart_generic(plan):
     Fcitx (im-config's autostart, or the compositor on KDE Plasma), and a
     replacement started from here would lose what that launcher gave it, so
     Fcitx is never restarted: it loads the addon at the next login. The
-    observer starts only in a Hyprland session, which its unit requires."""
+    observer starts only in a Hyprland, KDE Plasma or GNOME session, which its
+    unit requires."""
     home, runtime = plan.home, plan.runtime
     if not plan.accessibility_enabled:
         run(["systemctl", "--user", "enable", "badi-accessibility.service"])
@@ -945,11 +965,22 @@ def generic_report(plan):
               f"fcitx5; KDE Plasma: Fcitx 5 as the Virtual Keyboard in System Settings), then log out and back "
               f"in; {environment} lets it load the addon. Run badi doctor afterwards.")
     if not plan.observer_session:
-        print("Browser and other observed fields need the field observer, which runs only in a Hyprland session so "
-              "far: Chromium-based apps, Zen, VS Code and Writer's grey preview get no suggestions on this desktop. "
-              "Fcitx's manual fields (Tab requests in apps you allow with badi app ID on), the editors "
-              "(Obsidian, Neovim, Bash: scripts/install-editors.py) and the LibreOffice Writer spelling extension "
-              "work without it. The observer is installed and starts by itself in a Hyprland session.")
+        print("Browser and other observed fields need the field observer, which runs only in a Hyprland, KDE "
+              "Plasma 6 or GNOME session so far: Chromium-based apps, Zen, VS Code and Writer's grey preview get no "
+              "suggestions on this desktop. Fcitx's manual fields (Tab requests in apps you allow with badi app ID "
+              "on), the editors (Obsidian, Neovim, Bash: scripts/install-editors.py) and the LibreOffice Writer "
+              "spelling extension work without it. The observer is installed and starts by itself in a Hyprland, "
+              "KDE Plasma 6 or GNOME session.")
+    elif badi_install.observer_desktop() == "gnome":
+        print("Field observer: GNOME, through Badi's Shell extension, which you enable yourself: log out and back "
+              f"in so GNOME Shell finds it, then run gnome-extensions enable {badi_install.GNOME_EXTENSION}; badi "
+              "doctor says whether it answers. Observed fields (Chromium-based apps, Zen, VS Code) still get no "
+              "suggestions on GNOME: GNOME hands Fcitx no app name for them, an open decision. Fcitx's manual "
+              "fields, the editors and the Writer spelling extension work.")
+    elif badi_install.observer_desktop() == "kwin":
+        print("Field observer: KDE Plasma, through a KWin script it loads (no preview position yet, so observed "
+              "fields show suggestions in the Fcitx panel). Start Chromium-based apps with "
+              f"{badi_install.OBSERVED_FLAG}, and allow each app or site with badi app or badi site.")
     else:
         print("Grey preview: Hyprland animates new layers, so the preview fades in until a layer rule exempts "
               "it. Add one line — hyprland.lua: "
