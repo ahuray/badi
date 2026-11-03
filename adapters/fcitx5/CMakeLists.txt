@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.25)
 project(badi-fcitx5 VERSION 0.1.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
-find_package(Fcitx5Core 5.1 REQUIRED)
+find_package(Fcitx5Core 5.1.7 REQUIRED)
 find_package(nlohmann_json 3.11 REQUIRED)
 
 # Warnings fail development and CI builds; a distribution build turns that off

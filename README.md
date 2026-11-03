@@ -14,7 +14,7 @@ machine. Badi is pre-release software.
 | **Ctrl+→** | Accept all of it. |
 | Keep typing | Typing the suggestion's next letters keeps the rest. |
 | **Escape** | Dismiss. |
-| **Ctrl+Shift+Space** | Ask for a suggestion. On a shown one, show another that starts with a different word; after three, presses cycle through them. On selected text, check its grammar; press it again for a refined wording. **Tab** applies what it shows, **Escape** keeps your text. |
+| **Ctrl+Shift+Space** | Ask for a suggestion. On a shown one in an Fcitx app, Obsidian or Neovim, list up to four other first words; a digit (or a click in Fcitx) shows that word's continuation, and pressing again lists the rest. On selected text, check its grammar; press it again for a refined wording, and again — for a word or short phrase — for a synonym, then another synonym on each further press. **Tab** applies what it shows, **Escape** keeps your text. |
 | **Ctrl+Shift+Tab** | Type a real Tab instead of accepting: the suggestion goes away and the app gets Tab. Where Badi would not take Tab, it stays the app's key (a browser's previous tab). |
 
 Every surface uses that order: Obsidian with Ctrl/Command+→ for all of it,
@@ -161,10 +161,15 @@ python3 scripts/install-editors.py --vault /path/to/vault --bash --neovim   # op
 python3 scripts/install-editors.py --libreoffice   # optional: Writer spelling; close LibreOffice first
 ```
 
-Prerequisites on the machine: Rust, cmake, ninja, a C++20 compiler, Fcitx 5
+Prerequisites on the machine: a Wayland session whose user services run
+under systemd (X11 is not supported; Badi's units start with
+`graphical-session.target`, so a compositor launched from a tty needs
+uwsm or a display manager), PipeWire with `pw-dump` (the screen-share
+hold), Rust, cmake, ninja, a C++20 compiler, Fcitx 5
 headers, PyGObject, GTK 4 and gtk4-layer-shell; Node.js for the editor
 integrations (the Bash and Neovim bridges, the Obsidian plugin's build) and
-the checks, not for the desktop install.
+the checks, not for the desktop install. The pinned llama.cpp runtime
+needs x86_64 with AVX2 and glibc 2.34 or later.
 
 ### Debian and Ubuntu
 
@@ -187,15 +192,18 @@ as well. `python3 scripts/badi_install.py restore DIR` rolls one back, reloads
 user units when a service file was restored, and updates the install receipt
 to those restored bytes. The desktop install needs an unlocked desktop;
 `--broker-only` updates only the model service while locked.
-Without a writing model, the installer offers the one recommended for this
-device: it names the model, its size and any terms that come with it, and
-downloads it (pinned and hash-checked) only after you accept. Unattended,
-`--model ID` picks the model and `--accept-model-license` accepts its terms.
+Without a writing model, the installer lists the models that fit this
+device, the recommended one first, each with its size, its result in Badi's
+blind screen and its licence. You pick one; a model that comes with terms
+(Gemma, Llama) downloads only after you accept them, and every download is
+pinned and hash-checked. Unattended, `--model ID` picks the model and
+`--accept-model-license` accepts its terms; without either, the installer
+names the models that fit.
 After the install, `badi model` switches models ([below](#choose-the-writing-model)). The pinned
 llama.cpp runtime is `~/.local/share/badi/runtimes/llama-b11840`, with its
 archive in `runtimes/downloads/`; on a new machine, fetch both first as
 [Writing assets](packaging/aur/README.md#writing-assets) shows (the model
-there is optional, since the installer offers one). `install-desktop.py`
+there is optional, since the installer lists the models that fit). `install-desktop.py`
 checks those pinned hashes before it builds, and the broker checks them again
 before it starts.
 

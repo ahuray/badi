@@ -305,8 +305,11 @@ class SessionHelperIntegration(unittest.TestCase):
         self.assertNotIn("xdph-streaming", log, "stream names stay out of the journal")
         self.assertNotIn("Traceback", log)
 
-    @unittest.skipUnless(shutil.which("gnome-keyring-daemon"), "gnome-keyring-daemon is not installed")
     def test_the_keyring_style_key_reaches_the_broker_and_is_never_logged(self):
+        if shutil.which("gnome-keyring-daemon") is None:
+            if os.environ.get("BADI_SESSION_REQUIRE_KEYRING") == "1":
+                self.fail("gnome-keyring-daemon is required in this lane (BADI_SESSION_REQUIRE_KEYRING=1)")
+            self.skipTest("gnome-keyring-daemon is not installed")
         self.wait_desktop("initial report", observed=True)
         status = self.style_status()
         self.assertEqual(status["key"], "absent", "no key is stored yet")

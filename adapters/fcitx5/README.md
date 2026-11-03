@@ -26,8 +26,9 @@ observer wire details.
   | --- | --- |
   | Tab | Accepts the next word of a visible suggestion (a spelling correction whole). While that word's remainder is still returning on an observed or typed-line field, one Tab is held for it instead of reaching the app. On the manual path it also requests at the end of a phrase. Otherwise it stays the app's Tab. |
   | Ctrl+Right | Accepts all of Badi's live candidate; otherwise the app's key. |
-  | Escape | Dismisses the suggestion or closes a notice. |
-  | Ctrl+Shift+Space, Ctrl+Shift+Y | Request, or on a shown continuation show another one that starts with a different word (then cycle through those shown); accept. |
+  | Escape | Dismisses the suggestion, an alternative list or a notice. |
+  | 1–9 | While Badi's numbered alternative list is up, shows the continuation of the word it numbers (a candidate click does the same); any other digit types normally. |
+  | Ctrl+Shift+Space, Ctrl+Shift+Y | Request, or on a shown continuation list up to four other first words as numbered candidates (ADR 0014); accept. |
   | Ctrl+Shift+Tab | Wherever Badi would take Tab (a suggestion shows, a Tab is held for its remainder, or Tab would request on the manual path: a granted app at an eligible caret): retires the suggestion and sends the app a real Tab. Otherwise, as in an app without a grant, it stays the app's key. |
 
 - **Literal Tab.** Ctrl+Shift+Tab is Cotypist's Option+Tab; Omarchy 4.0.6
@@ -136,10 +137,14 @@ observer wire details.
 
 ### Revising a selection
 
-Ctrl+Shift+Space on a selection asks for a grammar check of it, and pressing
-it again while the revision shows asks for a refined wording (and back);
-without a selection the chord keeps its meaning
+Ctrl+Shift+Space on a selection asks for a grammar check of it; pressing
+it again while the revision shows asks for a refined wording, then — for a
+word or short phrase of at most three words with no digit, address or
+sentence mark — a synonym that fits the sentence, and another synonym on
+each further press (a longer selection cycles grammar and refine as
+before); without a selection the chord keeps its meaning
 ([ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md),
+[ADR 0013](../../docs/decisions/0013-synonyms-for-one-short-selection.md),
 [wire](WIRE_PROTOCOL.md#revision)). The selection must be one line of 1–600
 characters that Fcitx reports with its surrounding text. In an app the
 observer reads, the observer also binds the field: inspect with `selection`
@@ -153,7 +158,9 @@ invalidation retires the request.
 
 The revision shows as Badi's candidate list: lines of up to 64 characters,
 removed words struck through, added ones bold in the highlight colour, and a
-help line (`Grammar · Tab apply · Esc dismiss · Ctrl+Shift+Space refine`).
+help line (`Grammar · Tab apply · Esc dismiss · Ctrl+Shift+Space refine`;
+a synonym's line ends `Ctrl+Shift+Space another`). While a synonym is
+asked for, the panel says Badi is finding a synonym.
 Tab applies it, Escape dismisses it, and any other key retires it and keeps
 its own meaning, so typing still replaces the selection. Applying checks the
 selection again (the observer too, for an observed field), commits the

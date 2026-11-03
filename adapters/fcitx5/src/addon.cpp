@@ -41,6 +41,9 @@ WireCallbacks BadiAddon::callbacksFor(BadiAddon *addon) {
         .onSuggestion = [addon](Suggestion suggestion) {
             addon->onSuggestion(std::move(suggestion));
         },
+        .onAlternativeList = [addon](AlternativeList list) {
+            addon->onAlternativeList(std::move(list));
+        },
         .onClear = [addon](const ClearNotice &notice) {
             addon->onClear(notice);
         },

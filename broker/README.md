@@ -347,6 +347,8 @@ retained.
 
 An explicit grammar check or refinement of one selection
 ([ADR 0012](../docs/decisions/0012-explicit-revision-of-one-selection.md)),
+or one synonym for a word or short phrase
+([ADR 0013](../docs/decisions/0013-synonyms-for-one-short-selection.md)),
 in `src/revision.rs` (prompts and gate), `src/revision/` (the runtime and its
 fixture) and `src/engine/revision.rs` (authority).
 
@@ -358,7 +360,9 @@ fixture) and `src/engine/revision.rs` (authority).
   `revision.clear`, never an error. The language is the app's override, else
   detected from the selection and the text before it, else the request's,
   else the first writing language; outside en, de, fr, es and pt the answer
-  is `unsupported_language`.
+  is `unsupported_language`. A `synonyms` request whose selection is more
+  than three words, or holds a digit, address or sentence mark, is answered
+  `invalid_output` before any model call.
 - **Model.** `LocalReviser` runs the catalog's Qwen3 1.7B (Apache-2.0) in a
   second pinned llama.cpp process with its own socket
   (`llama-<pid>-revision.sock`) and token, launch contract
@@ -379,7 +383,13 @@ fixture) and `src/engine/revision.rs` (authority).
   removed (`context` otherwise). Greedy decoding, at most two thirds of a
   token per selected character plus 48 (64–512), a 40-second bound for the
   call including a cold start. `--provider phrase` uses `FixtureReviser`,
-  which fixes a few known mistakes, for integration lanes.
+  which fixes a few known mistakes and answers two fixture synonyms per
+  word, for integration lanes. A synonyms prompt names the selected word
+  or phrase at the text's end and shows a worked synonym in the language;
+  synonyms already shown for exactly this selection and its surroundings
+  are named as words not to use (kept in the session, in memory, until the
+  showing expires; at most eight, then offers start over), so a repeated
+  request offers another one, and one that returns anyway is `no_change`.
 - **Gate.** `accept` keeps an answer only when it is one line with no control
   or format character, keeps the selection's surrounding spaces, keeps a
   mid-sentence lowercase start, adds no final period when words or marks
@@ -387,9 +397,12 @@ fixture) and `src/engine/revision.rs` (authority).
   the same language (all Latin letters and a confident detection that agrees),
   keeps every number, address and handle and every capitalized name after the
   first word (not in German, which capitalizes nouns), stays within the mode's
-  length bounds (grammar 0.5–1.6, refine 0.4–1.8, ±12 characters), and, for a
+  length bounds (grammar 0.5–1.6, refine and synonyms 0.4–1.8, ±12
+  characters), and, for a
   grammar check of more than three words, changes at most half of the words
-  ignoring case and punctuation. An unchanged answer is `no_change`; any
+  ignoring case and punctuation. A synonym must replace its word: an answer
+  still holding the selected words, or copying the worked example's synonym
+  for a different word, is refused. An unchanged answer is `no_change`; any
   other failure `invalid_output`.
 - **Show and apply.** `revision.show` lasts 60 s within a context lease of
   the call bound plus that window. `control.request` `accept_all` with the
@@ -683,7 +696,15 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   again is not counted twice. Corrections and mid-line continuations have
   none (`engine/alternatives.rs`). The suggestion an alternative replaces is
   cleared first; the shared editor client expects that clear and keeps its
-  preview until the answer arrives.
+  preview until the answer arrives. A session that negotiated
+  `alternative_list` instead gets those candidates' finished first words
+  (up to four) in one `suggestion.list`, from one provider call; a further
+  `alternatives` control naming one listed `word` generates that word's
+  continuation, shown and bound as usual, and spends the list. The list
+  names the suggestion it replaced and lives for the suggestion lifetime;
+  an unlisted or stale pick is answered `stale`, and a pick the model
+  cannot continue falls back to the last shown continuation
+  ([ADR 0014](../docs/decisions/0014-numbered-alternative-words.md)).
 - **Quiet apps.** Each app or site's last seven days of usage counts set
   its quiet level, read again at most every ten minutes: with at least 50
   suggestions shown and fewer than 8% accepted, an automatic suggestion

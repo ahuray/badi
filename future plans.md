@@ -9,10 +9,10 @@ When an item is done, delete it and record what is now true in the
 keeps the history of what shipped. Evidence lives in the runbooks; this file
 links to it. A tested app version is not a claim about Linux in general.
 
-## Where Badi stands (2026-10-24)
+## Where Badi stands (2026-10-26)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
-  and any website, Zen and Zen Twilight, Omarchy web apps in Chromium or Brave, Telegram,
+  and any website, Zen and Zen Twilight, Omarchy web apps in Chromium or Brave, Telegram, Discord,
   LibreOffice Writer
   (spelling as you type, Alt+F7), Obsidian, Bash, Neovim (live under LazyVim
   in foot and Ghostty) and, by an opt-in rule, the typed line in Ghostty and
@@ -39,7 +39,9 @@ links to it. A tested app version is not a claim about Linux in general.
   typos in Chromium-based apps are corrected after checks
   ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)); the inline
   preview ([ADR 0006](docs/decisions/0006-grey-preview-is-an-overlay.md))
-  reaches VS Code, iframe editors, Qt apps and Writer.
+  reaches VS Code, iframe editors, Qt apps and Writer. Ctrl+Shift+Space on
+  a shown suggestion cycles alternatives that start with another word, in
+  Fcitx apps, Obsidian and Neovim.
 - **Desktop signals:** the installed [session helper](adapters/session/README.md)
   holds grants across sleep and session switches and while the screen is
   shared (a portal screencast in PipeWire), and defers automatic requests on
@@ -86,7 +88,9 @@ links to it. A tested app version is not a claim about Linux in general.
 - **Distribution:** an Arch package candidate (step 6) and a
   [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
   builds, lints and installs in containers (2026-10-23); neither is
-  published, and no GNOME or KDE session has run Badi (step 7).
+  published, and no GNOME or KDE session has run Badi (step 7). Without an
+  installed writing model, the desktop installer lists the models that fit
+  the device and lets the user pick one.
 - **Code health:** a full review before the 0.2.0 fresh start (2026-10-24)
   fixed every correctness finding it confirmed, with regression tests, and
   removed dormant paths and failed experiments; what it could not check live
@@ -154,16 +158,18 @@ publish need the user's go-ahead first; the rest can start at once.
    still Mac-only, defaults to Gemma 4 E2B, and offers these, which Badi does
    not yet:
    - global and per-app instructions, and personalized word choice (Badi's
-     style samples are stored but not yet read, step 5);
-   - a numbered list of alternative words for the next word, and synonyms
-     for a selected word (added mid-2026; Badi's candidate panel and its
-     selection revision could carry both). Badi shows alternatives one at a
-     time on Ctrl+Shift+Space;
+     style samples are stored but not yet read, step 5). Instructions wait
+     for the larger-model work below: paired Lab probes found neither the
+     raw-continuation prompt nor an instructed variant follows them on the
+     current models;
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
 
    Badi already matches or beats it on:
+   - a numbered list of alternative words in Fcitx apps, Obsidian and
+     Neovim, picked by digit (or click in Fcitx), live-verified in
+     Omawrite ([ADR 0014](docs/decisions/0014-numbered-alternative-words.md));
    - words saved per day and per app or site, as counts only
      ([`badi stats`](README.md#usage-statistics));
    - inline grey text in the field's font with the word Tab takes drawn
@@ -204,29 +210,53 @@ publish need the user's go-ahead first; the rest can start at once.
    2026-10-20; on 2026-10-24 it had no reply and `master` no fix, so a fix
    would ship in 5.1.17 at the earliest. Debian forky and sid ship 5.1.16
    too; Debian 13 (5.1.9) and Ubuntu 24.04 to 26.10 (5.1.4–5.1.15) predate
-   the change. Offering the patch upstream is publication and needs the
-   user's go-ahead. *Done when* a fixed fcitx5-qt
+   the change. The patch is offered upstream as
+   [fcitx/fcitx5-qt#92](https://github.com/fcitx/fcitx5-qt/pull/92)
+   (2026-11-02), with a live A/B on this machine: a locally built patched
+   plugin restored the spelling replacement in Omawrite (the file read
+   `address`, two native undos brought back the commit then the deleted
+   typo), while the system 5.1.16 plugin left the typo untouched. The
+   same A/B passed in Telegram's Saved Messages composer (2026-11-02):
+   with the patched plugin the correction preview showed and Tab landed
+   `address`; with the system plugin no correction was offered. Still
+   open: only the PR landing in a shipped fcitx5-qt.
+   *Done when* a shipped fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
-3. **Finish the installed-flow matrix with someone present.** Still open: a
-   real suspend and resume, a VT switch and a Tab right after each, and
+3. **Finish the installed-flow matrix with someone present.** A real
+   s2idle suspend and resume with a Tab right after passed on 2026-11-02,
+   and a VT switch away and back with a Tab right after passed on
+   2026-11-03, zero wrong-field or stale edits both times
+   ([session helper](adapters/session/README.md#tested-with)). Still open:
    several monitors when a second display is at hand. Restarts, undo, pause,
    composition, stale focus, Ghostty's typed line and fractional scaling
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
-   *Done when* those show zero wrong-field or stale edits and the
-   [session helper](adapters/session/README.md) runbook records them.
+   *Done when* the multi-monitor rows show zero wrong-field or stale edits
+   and the [session helper](adapters/session/README.md) runbook records
+   them.
 4. **Check context in a real mail client and the Claude desktop app.** Opt-in
    context shipped ([ADR 0010](docs/decisions/0010-context-finishes-words.md)).
    A disposable mail-style page in Chromium 154 passed every check live on
    2026-10-20 ([observer runbook](adapters/accessibility/README.md#window-words-context-on)),
    and window words reach Zen and Chromium-based apps since `f180653` (VS
-   Code live). Still unchecked:
-   - the user's own web mail, where only they can open a draft;
-   - the Claude desktop app's composer, after a relaunch picks up
-     `--force-renderer-accessibility=complete`.
-   *Done when* both show a window or learned word finished, and
-   `window_chars` appears on their `context.changed` in a `badi debug on`
-   trace.
+   Code live). The user's own web mail (Gmail in Brave Origin) was checked
+   on 2026-11-03 in a disposable draft (deleted after, never sent): the
+   ghost showed, Tab landed `reply`, Ctrl+Shift+Space listed
+   `1.interest 2.question 3.comment 4.answer`, digit 2 picked and Tab
+   landed `question`, and `window_chars` (259–894) rode its
+   `context.changed` with up to 18 window words harvested; no window word
+   has finished there yet (the stems tried matched none). The Claude
+   desktop app's composer was checked
+   after its relaunch (2026-11-02): it first exposed an observer bug —
+   its composer sits 26 ancestors below its document, past the origin
+   climb's bound, so every snapshot was denied — fixed in `20366a6`.
+   After that, live: snapshots succeed, the ghost, the numbered list
+   and a digit pick all landed, `window_chars=142` rides its
+   `context.changed`, and window words flow (`window_words=4`); no
+   window word has finished there yet (the stems typed matched none
+   of the four).
+   *Done when* both show a window or learned word finished
+   (`window_chars` on `context.changed` is now recorded for both).
 5. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and
@@ -243,8 +273,9 @@ publish need the user's go-ahead first; the rest can start at once.
    only for the naming review.
 7. **Run Badi in real GNOME and KDE Plasma sessions.** The
    [Debian and Ubuntu package](packaging/debian/README.md) and the
-   user-local installer pass in Debian 13 and Ubuntu 24.04 containers, but no
-   graphical session has run them. Still open:
+   user-local installer pass in Debian 13 and Ubuntu 24.04 containers, and
+   the package now has a first graphical-session run (Plasma, below).
+   Still open:
    - field observer backends outside Hyprland, so Chromium-based apps, Zen,
      VS Code and Writer's grey preview suggest there; the observer unit's
      Hyprland condition goes with them. The observer needs the focused
@@ -261,10 +292,18 @@ publish need the user's go-ahead first; the rest can start at once.
      or Plasma's Virtual Keyboard starting Fcitx with the environment.d
      addon directory, the user units, a manual Tab request in a GTK and a Qt
      app, the editors and Writer, and package install, update and purge.
-     On GNOME, Fcitx stands in for IBus (Mutter speaks only text-input-v3)
-     and needs the Kimpanel extension for its panel; Plasma launches Fcitx
-     through input-method-v1. A reported GNOME 50.0–50.3 loss of forwarded
-     keys ([fcitx5#1692](https://github.com/fcitx/fcitx5/issues/1692),
+     The Plasma half ran on 2026-11-03 (Debian 13.7 VM, Plasma 6.3.6,
+     package from `170c91a`): Virtual Keyboard Fcitx, user units, manual
+     request, ghost, numbered list and pick in Kate, the Bash adapter in
+     Konsole, lock-screen denial, and package install and reinstall all
+     passed with zero wrong-field edits
+     ([tested with](packaging/debian/README.md#tested-with)). Still open:
+     the whole GNOME session, a GTK app's manual request, Writer in a
+     graphical session, and graphical-session purge. On GNOME, Fcitx
+     stands in for IBus (Mutter speaks only text-input-v3) and needs the
+     Kimpanel extension for its panel; Plasma launches Fcitx through
+     input-method-v1. A reported GNOME 50.0–50.3 loss of forwarded keys
+     ([fcitx5#1692](https://github.com/fcitx/fcitx5/issues/1692),
      unverified) would affect Ubuntu 26.04.
    *Done when* those pass with zero wrong-field edits and the runbook's
    tested-with matrix records them.

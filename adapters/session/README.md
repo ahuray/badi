@@ -35,8 +35,10 @@ whenever one changes; the reply is `desktop.status`
 - Unknown is permissive only where nothing is at stake: without logind the
   session counts as active (adapters keep their own focus, lock and expiry
   checks), and without UPower or power-profiles-daemon the machine counts as
-  on mains power. Without PipeWire the screen counts as not shared, because
-  a portal screencast cannot exist without it.
+  on mains power. The screen counts as not shared only when `pw-dump` ran
+  and could not reach PipeWire, because a portal screencast cannot exist
+  without it; a missing or stalled `pw-dump` proves nothing, so the screen
+  stays counted as shared (suggestions held) while it is retried.
 - `LockedHint` is not used. It is a hint, not proof of unlock; the observer
   keeps its fresh Omarchy lock check.
 
@@ -218,3 +220,5 @@ power-profiles-daemon 0.30, PipeWire 1.6.9, disposable pages.
 | Snooze shortcut by `hl.dispatch`, Chromium 154 (`e1fa107`, 2026-10-20) | Hid the suggestion and snoozed only that origin (the notification, `badi status` and the panel named it; another port still suggested); `badi resume` restored it; `badi snooze 1` ran out after 60 s | A key bound with `hl.bind` not tried; the dispatch reaches the same portal signal |
 | Entire-screen share from `getDisplayMedia`, Chromium 155 with Omarchy's picker (`7b2d5fc`, 2026-10-23) | Held from the picker's preview (already a portal stream) until about a second after the share stopped; `screen-share suggest` and `hold` switched it during the share; status, the panel, Omarchy's `notifications probe` and the text-free trace agreed | Not tried: window or region shares, OBS, meeting apps, other portal backends |
 | Helper restart and SIGKILL mid-share (`29ec777`), and under the unit's sandbox limits (`827492a`) | The hold and the authority epoch stayed until the share ended; `pw-dump` ran as the helper's child under `RestrictRealtime`, `RestrictNamespaces`, `SystemCallArchitectures` and `LimitCORE` | |
+| Real s2idle suspend and resume, then Tab (`611899f`, 2026-11-02) | The broker trace showed `desktop.state` `sleeping` at suspend and `active` again 10 s after resume; Tab then landed the ghost in Omawrite (file read `thank you for your reply`) and in a fresh Ghostty shell's prompt buffer, zero wrong-field or stale edits | |
+| VT switch away and back (Ctrl+Alt+F3, then Ctrl+Alt+F1), then Tab (`611899f`, 2026-11-03) | Under `badi debug on --text`: Omawrite showed `reply.`, Tab committed and the saved file read `thank you for your reply`; a fresh Ghostty window showed the same ghost and Tab put `reply` in its prompt buffer (screenshot OCR) | Several monitors still untried: only `eDP-1` is attached to this workstation |

@@ -854,6 +854,37 @@ class DesktopTests(unittest.TestCase):
             settings.write_text('{}')
             self.assertIn('EditContext on', ORIGINAL_VSCODE_NOTE())
 
+    def test_doctor_names_a_wayland_session_when_systemd_skipped_the_broker(self):
+        skipped = ('LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=enabled\n'
+                   'ConditionResult=no\nConditionTimestampMonotonic=123456\n')
+        with patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, skipped, '')):
+            self.assertTrue(desktop.service_state()['condition_unmet'])
+        service = {'loaded': True, 'active': 'inactive', 'state': 'dead', 'autostart': True, 'condition_unmet': True}
+        with patch.object(desktop, 'service_state', return_value=service), \
+             patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+             patch.object(desktop, 'native_state', return_value={'active': 'inactive', 'addon_loaded': None}), \
+             patch.object(desktop, 'install_state', return_value={}), \
+             patch.object(desktop, 'startup_problem', return_value=None), \
+             patch.object(desktop, 'control', side_effect=RuntimeError('offline')):
+            codes = [problem['code'] for problem in desktop.health_report()['problems']]
+        self.assertIn('wayland_session_required', codes)
+        self.assertNotIn('broker_unreachable', codes)
+
+    def test_doctor_names_fcitx_before_5_1_23_only_on_an_input_method_v2_compositor(self):
+        version = subprocess.CompletedProcess([], 0, '5.1.12\n', '')
+        with patch.object(desktop.subprocess, 'run', return_value=version), \
+             patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': 'fixture', 'SWAYSOCK': ''}):
+            problem = desktop.fcitx_version_problem()
+        self.assertEqual(problem['code'], 'fcitx_too_old_for_input_method_v2')
+        self.assertIn('5.1.23', problem['action'])
+        with patch.object(desktop.subprocess, 'run', return_value=version), \
+             patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': '', 'SWAYSOCK': ''}):
+            self.assertIsNone(desktop.fcitx_version_problem(), 'GNOME and KDE do not offer input-method-v2')
+        current = subprocess.CompletedProcess([], 0, '5.1.23\n', '')
+        with patch.object(desktop.subprocess, 'run', return_value=current), \
+             patch.dict(os.environ, {'HYPRLAND_INSTANCE_SIGNATURE': 'fixture', 'SWAYSOCK': ''}):
+            self.assertIsNone(desktop.fcitx_version_problem())
+
     def test_service_state_handles_offline_broker(self):
         with patch.object(desktop.subprocess, 'run') as command:
             command.return_value.returncode = 0

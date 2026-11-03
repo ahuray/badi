@@ -125,6 +125,11 @@ private:
         // An explicit revision on its way (ADR 0012): the selection and mode
         // waiting for the observer's field, its policy or its session.
         std::optional<std::pair<SelectionWindow, std::string>> revisionWaiting;
+        // The mode the chord asks next for this exact selection after a
+        // mode found nothing to change, so the cycle reaches synonyms
+        // for selections that are already correct (ADR 0013). An edit,
+        // Escape or a different selection starts over.
+        std::optional<std::pair<SelectionWindow, std::string>> revisionCycle;
         // Retries of that request's observer steps while the observer is
         // busy, the step to retry, and the timer that runs it.
         unsigned int revisionRetries = 0;
@@ -196,6 +201,7 @@ private:
     void onPolicy(std::string_view session, bool allowed, const std::string &reason, std::string language,
                   bool contextWords);
     void onSuggestion(Suggestion suggestion);
+    void onAlternativeList(AlternativeList list);
     void presentSuggestion(Binding &binding, Suggestion suggestion);
     void previewIfCorroborated(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply);
     void showObservedPreview(Binding &binding, const Suggestion &suggestion);
@@ -203,6 +209,8 @@ private:
                    bool verified, bool rendered);
     void displaySuggestion(Suggestion suggestion, bool overlay = false);
     void showCandidate(Binding &binding, const Suggestion &suggestion);
+    void showAlternativeCandidates(Binding &binding, const AlternativeList &list);
+    bool requestAlternativePick(Binding &binding, std::string word, const PanelObservation &panel);
     void onClear(const ClearNotice &clear);
     void onCommitPrepare(const CommitPrepare &prepare);
     void corroborateCommit(Binding &binding, const CommitPrepare &prepare, std::uint64_t deadline);

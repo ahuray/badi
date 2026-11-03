@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changelogProblems, isProductPath, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
+import { changelogProblems, diffAddsUnderNewestHeading, isProductPath, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
 
 const lookup = "evaluation/writing/lab-worker/src/context_lookup.rs";
 
@@ -57,6 +57,17 @@ test("changelog silence fails only when the commit edits behavior", () => {
   assert.equal(changelogProblems([{ label: "abc", paths: ["broker/src/policy.rs"], changelog: true }]).length, 0);
   assert.match(changelogProblems([{ label: "abc", paths: ["broker/src/policy.rs"], changelog: false }])[0], /CHANGELOG\.md/);
   assert.match(changelogProblems([{ label: "abc", paths: ["adapters/shell/preview.c"], changelog: false }])[0], /preview\.c/);
+});
+
+test("only a changelog line under the newest heading counts", () => {
+  const text = "# Changelog\n\n## Unreleased\n\n- New thing.\n- Old thing.\n\n## 0.2.0\n\n- Released.\n- Sneaked in.\n";
+  const underUnreleased = "@@ -4,0 +5 @@\n+- New thing.\n";
+  const underRelease = "@@ -9,0 +11 @@\n+- Sneaked in.\n";
+  const blankOnly = "@@ -4,0 +5 @@\n+\n";
+  assert.equal(diffAddsUnderNewestHeading(underUnreleased, text), true);
+  assert.equal(diffAddsUnderNewestHeading(underRelease, text), false, "a line under an old release is not the newest heading");
+  assert.equal(diffAddsUnderNewestHeading(blankOnly, text), false);
+  assert.equal(diffAddsUnderNewestHeading(underUnreleased, "# Changelog\n\n- New thing.\n"), false, "no heading, no credit");
 });
 
 test("a push is checked from its old tip, or alone when it replaced history", () => {

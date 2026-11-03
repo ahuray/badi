@@ -17,6 +17,7 @@ async fn control(
                 action,
                 fingerprint: shown.fingerprint.clone(),
                 suggestion_id: Some(shown.suggestion_id.clone()),
+                word: None,
             },
             None,
         )

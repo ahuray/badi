@@ -198,6 +198,25 @@ class VocabularyTextTests(unittest.TestCase):
         for hidden in ("Secret subject", "hunter2", "Hidden note", "Another frame"):
             self.assertNotIn(hidden, text)
 
+    def test_a_document_farther_up_than_the_origin_climb_still_counts(self):
+        # The Claude desktop app's composer sits 26 ancestors below its
+        # document web; the origin climb's shallow bound must not deny the
+        # whole snapshot for a field that deep (live, 2026-11-02).
+        target = field()
+        level = Node("section", children=[Node("paragraph", "Deep words here"), target])
+        for _ in range(30):
+            level = Node("section", children=[level])
+        Node("document web", children=[level])
+        self.assertEqual(backend().vocabulary_text(metadata(target)), "Deep words here")
+
+    def test_a_document_beyond_the_frame_climb_gives_nothing_not_a_denial(self):
+        target = field()
+        level = Node("section", children=[Node("paragraph", "Too deep"), target])
+        for _ in range(120):
+            level = Node("section", children=[level])
+        Node("document web", children=[level])
+        self.assertIsNone(backend().vocabulary_text(metadata(target)))
+
     def test_only_a_confirmed_web_document(self):
         target = field()
         Node("document web", children=[Node("paragraph", "Some words"), target])

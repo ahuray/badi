@@ -1,0 +1,18 @@
+{
+  "v": 2,
+  "id": "revise-2",
+  "type": "revision.show",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 4,
+  "revision": 10,
+  "mono_ms": 2400,
+  "payload": {
+    "fingerprint": "revision_context_0002",
+    "revision_id": "r:2f0c6b1e-6f3a-4c55-9a51-1a2b3c4d5e6f",
+    "mode": "synonyms",
+    "original": "beautiful",
+    "text": "lovely",
+    "ttl_ms": 60000,
+    "provider": "local_model"
+  }
+}

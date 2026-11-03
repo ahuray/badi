@@ -130,8 +130,8 @@ Version: $version
 Architecture: amd64
 Maintainer: $maintainer
 Installed-Size: $size
-Depends: $shlibs, python3 (>= 3.12), python3-gi, fcitx5 (>= 5.1.7), systemd
-Recommends: dbus-user-session, ca-certificates, curl, gir1.2-secret-1, pipewire-bin, xdg-desktop-portal, python3-gi-cairo, gir1.2-atspi-2.0, gir1.2-gtk-4.0$layer_shell
+Depends: $shlibs, python3 (>= 3.12), python3-gi, fcitx5 (>= 5.1.7), systemd, pipewire-bin
+Recommends: dbus-user-session, ca-certificates, curl, gir1.2-secret-1, gnome-keyring, xdg-desktop-portal, python3-gi-cairo, gir1.2-atspi-2.0, gir1.2-gtk-4.0$layer_shell
 Suggests: hunspell-de-de, hunspell-fr, hunspell-es, hunspell-it, hunspell-nl, hunspell-pl
 Section: utils
 Priority: optional

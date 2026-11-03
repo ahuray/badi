@@ -115,8 +115,18 @@ void noticesNameWhatTheUserCanDo() {
     check(revisionClearNotice("unsupported_language").has_value(), "a language Badi does not revise");
     check(!revisionClearNotice("dismissed") && !revisionClearNotice("superseded") && !revisionClearNotice("expired"),
           "the user's own retirement says nothing");
-    check(revisionHelp("grammar") == "Grammar · Tab apply · Esc dismiss · Ctrl+Shift+Space refine", "grammar help");
-    check(revisionHelp("refine") == "Refined · Tab apply · Esc dismiss · Ctrl+Shift+Space grammar", "refine help");
+    check(revisionHelp("grammar", "i has went to the shop") ==
+              "Grammar · Tab apply · Esc dismiss · Ctrl+Shift+Space refine",
+          "grammar help");
+    check(revisionHelp("refine", "i has went to the shop") ==
+              "Refined · Tab apply · Esc dismiss · Ctrl+Shift+Space grammar",
+          "refine help for a long selection");
+    check(revisionHelp("refine", "beautiful") ==
+              "Refined · Tab apply · Esc dismiss · Ctrl+Shift+Space synonyms",
+          "refine help for a short selection");
+    check(revisionHelp("synonyms", "beautiful") ==
+              "Synonym · Tab apply · Esc dismiss · Ctrl+Shift+Space another",
+          "synonym help");
 }
 
 SessionState focused(std::string_view app = "org.gnome.texteditor") {
@@ -193,7 +203,7 @@ void anyFieldChangeOrExpiryRetiresTheRevision() {
     check(state.clearRevisionIf(fourth->coordinates, std::string("r:unknown-yet")),
           "a broker clear ends a request whose revision is not shown yet");
 
-    check(!state.requestRevision(selection(), "rewrite"), "only grammar and refine");
+    check(!state.requestRevision(selection(), "rewrite"), "only grammar, refine and synonyms");
     auto chromium = focused("chromium");
     check(!chromium.requestRevision(selection(), "grammar"), "an IME-parity app needs the observer's field");
 }
@@ -236,6 +246,28 @@ void aSelectionIsTheSameOnlyAsFarAsItsUseNeeds() {
               differs([](SelectionWindow &window) { window.anchor = 11; }) &&
               differs([](SelectionWindow &window) { window.head = 31; }),
           "its text, the text before it and its offsets always count");
+}
+
+void synonymsTakeAWordOrShortPhraseAndCycle() {
+    check(synonymSelection("beautiful") && synonymSelection("  big  ") && synonymSelection("a lot of"),
+          "a word or short phrase takes a synonym");
+    check(!synonymSelection("one two three four") && !synonymSelection("word.") &&
+              !synonymSelection("2024") && !synonymSelection("") && !synonymSelection("a@b.example"),
+          "a clause, a marked word, a number and an address do not");
+    check(nextRevisionMode("grammar", "beautiful") == "refine", "grammar is refined next");
+    check(nextRevisionMode("refine", "beautiful") == "synonyms", "a short refined selection takes a synonym");
+    check(nextRevisionMode("refine", "i has went to the shop") == "grammar",
+          "a long refined selection is checked again");
+    check(nextRevisionMode("synonyms", "beautiful") == "synonyms", "a synonym is followed by another");
+    auto state = focused();
+    const auto window = captureSelectionWindow("The view from the hill is beautiful today", 35, 26, true, "en");
+    check(window.has_value(), "the synonym selection is captured");
+    const auto update = state.requestRevision(*window, "synonyms");
+    check(update && update->mode == "synonyms", "a synonyms request");
+    const auto body = serializeRevisionEnvelope(*update, 7);
+    check(body && Json::parse(*body)["payload"]["mode"] == "synonyms" &&
+              Json::parse(*body)["payload"]["selected"] == "beautiful",
+          "the synonyms request carries exactly the word");
 }
 
 Json selectedFocus(std::string_view app = "org.gnome.texteditor", int selections = 1) {
@@ -319,6 +351,7 @@ int main() {
         anyFieldChangeOrExpiryRetiresTheRevision();
         theRequestCarriesExactlyTheSelection();
         aSelectionIsTheSameOnlyAsFarAsItsUseNeeds();
+        synonymsTakeAWordOrShortPhraseAndCycle();
         theObserverBindsExactlyTheSelectedField();
     } catch (const std::exception &error) {
         std::cerr << "not ok - " << error.what() << '\n';

@@ -312,9 +312,14 @@ struct SessionState {
     pending: Option<PendingCommit>,
     /// An explicit revision of the selection, running or shown (ADR 0012).
     revision: Option<revision::SessionRevision>,
+    /// Synonyms already shown for one selection, so a repeated request
+    /// offers another (ADR 0013). Memory only; expires with its showing.
+    synonym_history: Option<revision::SynonymHistory>,
     escape_quiet: Option<EscapeQuiet>,
     /// Continuations shown for this context on request (alternatives).
     alternatives: alternatives::Alternatives,
+    /// A numbered list of alternative next words on offer (ADR 0014).
+    alternative_list: Option<alternatives::LiveList>,
     sink: BrokerEventSink,
 }
 
@@ -482,6 +487,10 @@ struct PendingCommit {
 }
 
 impl Broker {
+    /// A settings-free, in-memory broker for tests and deterministic
+    /// fixtures: with no installed settings it enforces no target policy,
+    /// so every target it is asked about is allowed. The production broker
+    /// is [`Broker::with_control_plane`], whose settings deny by default.
     #[must_use]
     pub fn new(provider: Arc<dyn CompletionProvider>, config: BrokerConfig) -> Self {
         Self::build(provider, config, None, None, None)

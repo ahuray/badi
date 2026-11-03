@@ -11,8 +11,9 @@ import { validCorrection } from '../shared/text-safety.mjs';
 
 class SuggestionWidget extends WidgetType {
   // `word` is what Tab takes, drawn a step brighter when more follows it.
-  constructor(text, word = '') { super(); this.text = text; this.word = word; }
-  eq(other) { return other.text === this.text && other.word === this.word; }
+  // A `list` widget shows numbered alternative words instead (ADR 0014).
+  constructor(text, word = '', list = false) { super(); this.text = text; this.word = word; this.list = list; }
+  eq(other) { return other.text === this.text && other.word === this.word && other.list === this.list; }
   toDOM() {
     const element = document.createElement('span');
     element.className = 'badi-inline';
@@ -25,8 +26,13 @@ class SuggestionWidget extends WidgetType {
       element.textContent = this.text;
     }
     element.setAttribute('role', 'status');
-    element.setAttribute('aria-label', `Badi suggestion: ${this.text}. Tab accepts a word; Control Right accepts all; Escape dismisses.`);
-    element.title = 'Badi · Tab next word · Ctrl/⌘ Right all · Escape dismiss';
+    if (this.list) {
+      element.setAttribute('aria-label', `Badi alternatives: ${this.text}. Press a number to pick; Escape dismisses.`);
+      element.title = 'Badi · 1–9 pick a word · Escape dismiss';
+    } else {
+      element.setAttribute('aria-label', `Badi suggestion: ${this.text}. Tab accepts a word; Control Right accepts all; Escape dismisses.`);
+      element.title = 'Badi · Tab next word · Ctrl/⌘ Right all · Escape dismiss';
+    }
     return element;
   }
   ignoreEvent() { return true; }
@@ -37,6 +43,7 @@ class WritingView {
   timer = null;
   pending = false;
   text = null;
+  listWords = null;
   replaceBefore = undefined;
   snapshot = null;
   destroyed = false;
@@ -66,7 +73,7 @@ class WritingView {
   }
 
   scheduleAutomatic() {
-    if (this.eligible() && !this.pending && !this.text) {
+    if (this.eligible() && !this.pending && !this.text && !this.listWords) {
       clearTimeout(this.timer);
       this.timer = setTimeout(() => void this.request(false), 250);
     }
@@ -75,6 +82,7 @@ class WritingView {
   clearPreview() {
     if (this.text) recordActivity('obsidian', 'ghost', 'hidden');
     this.text = null;
+    this.listWords = null;
     this.replaceBefore = undefined;
     this.decorations = Decoration.none;
     this.render();
@@ -165,9 +173,9 @@ class WritingView {
     }
   }
 
-  showPreview(preview, word = '') {
+  showPreview(preview, word = '', list = false) {
     const end = this.snapshot.selection.main.head;
-    this.decorations = Decoration.set([Decoration.widget({ widget: new SuggestionWidget(preview, word), side: 1 }).range(end)]);
+    this.decorations = Decoration.set([Decoration.widget({ widget: new SuggestionWidget(preview, word, list), side: 1 }).range(end)]);
     this.render();
     recordActivity('obsidian', 'ghost', 'shown');
   }
@@ -181,9 +189,42 @@ class WritingView {
     this.pending = true;
     const generation = this.generation;
     try {
-      const text = await this.client.alternative();
+      const result = await this.client.alternative();
+      if (generation !== this.generation || !this.matches(snapshot)) return;
+      if (!result) { this.invalidate(); return; }
+      if (typeof result === 'object') {
+        // A numbered list of other first words; a digit picks one. It
+        // stands where the shown suggestion stood, space included.
+        const lead = this.text?.startsWith(' ') ? ' ' : '';
+        this.text = null;
+        this.listWords = result.words;
+        this.showPreview(lead + result.words.map((word, index) => `${index + 1}.${word}`).join('  '), '', true);
+        return;
+      }
+      this.text = result;
+      this.showPreview(result, this.client.acceptWord);
+    } catch {
+      if (generation === this.generation) {
+        this.invalidate();
+        if (this.view.hasFocus) this.owner.status.setText('Badi · no other suggestion');
+      }
+    } finally {
+      if (generation === this.generation) this.pending = false;
+    }
+  }
+
+  // A digit on a shown numbered list: the picked word's continuation
+  // replaces the list, accepted like any suggestion.
+  async pick(word) {
+    const snapshot = this.snapshot;
+    if (!this.listWords || !snapshot || !this.matches(snapshot) || this.pending) return;
+    this.pending = true;
+    const generation = this.generation;
+    try {
+      const text = await this.client.pickAlternative(word);
       if (generation !== this.generation || !this.matches(snapshot)) return;
       if (!text) { this.invalidate(); return; }
+      this.listWords = null;
       this.text = text;
       this.showPreview(text, this.client.acceptWord);
     } catch {
@@ -218,11 +259,11 @@ class WritingView {
       // show; a grant inserts only what is on screen (all of it, or its start).
       const showsGrant = (acceptance === 'all' || replaceBefore !== undefined)
         ? grant.text === shown : typeof grant.text === 'string' && grant.text !== '' && shown.startsWith(grant.text);
+      const end = snapshot.selection.main.head;
       if (generation !== this.generation || !this.matches(snapshot) || grant.replaceBefore !== replaceBefore || !showsGrant ||
-          (replaceBefore !== undefined && !validCorrection(snapshot.doc.toString(), replaceBefore, grant.text))) {
+          (replaceBefore !== undefined && !validCorrection(snapshot.doc.sliceString(0, end), replaceBefore, grant.text))) {
         this.client.report(grant, 'stale'); return;
       }
-      const end = snapshot.selection.main.head;
       const from = end - (replaceBefore?.length ?? 0);
       this.applying = true;
       try {
@@ -248,7 +289,7 @@ class WritingView {
     if (this.destroyed || event.key !== 'Escape' || !event.isTrusted || event.isComposing || this.view.composing ||
         event.altKey || event.shiftKey || event.ctrlKey || event.metaKey ||
         !this.view.hasFocus || !this.view.dom.ownerDocument.hasFocus()) return;
-    if (this.text) {
+    if (this.text || this.listWords) {
       this.client.dismiss();
       this.generation++;
       clearTimeout(this.timer);
@@ -273,6 +314,12 @@ class WritingView {
       return true;
     }
     if (event.ctrlKey || event.metaKey) return false;
+    if (this.listWords && /^[1-9]$/u.test(event.key)) {
+      const word = this.listWords[Number(event.key) - 1];
+      if (!word) return false;
+      if (!event.repeat && !this.pending) void this.pick(word);
+      return true;
+    }
     if (event.key !== 'Tab') return false;
     if (!this.text) return false;
     const reason = this.blockedReason();

@@ -1796,16 +1796,18 @@ async fn each_suggestion_length_shows_its_words_within_the_same_budget()
     Ok(())
 }
 
-/// Serves an alternative: one non-streaming reply with first-token
-/// candidates, then one streamed continuation per further request. Returns
-/// the payloads the client sent and the provider's outcome.
-async fn alternative_exchange(
-    before: &str,
+/// Serves first-token candidates, then the same streamed continuation per
+/// further request; returns the endpoint and a handle collecting payloads.
+async fn serve_alternatives(
     candidates: &[(&str, f64)],
     pieces: &[&str],
-    excluded: &[&str],
-    new_word: bool,
-) -> Result<(Vec<serde_json::Value>, ProviderOutcome), Box<dyn Error>> {
+) -> Result<
+    (
+        std::net::SocketAddr,
+        tokio::task::JoinHandle<Vec<serde_json::Value>>,
+    ),
+    Box<dyn Error>,
+> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let endpoint = listener.local_addr()?;
     let top: Vec<serde_json::Value> = candidates
@@ -1847,6 +1849,30 @@ async fn alternative_exchange(
         }
         payloads
     });
+    Ok((endpoint, server))
+}
+
+/// Serves an alternative and asks for its continuation, or for the listed
+/// word's when `desired` is set.
+async fn alternative_exchange(
+    before: &str,
+    candidates: &[(&str, f64)],
+    pieces: &[&str],
+    excluded: &[&str],
+    new_word: bool,
+) -> Result<(Vec<serde_json::Value>, ProviderOutcome), Box<dyn Error>> {
+    alternative_exchange_desired(before, candidates, pieces, excluded, new_word, None).await
+}
+
+async fn alternative_exchange_desired(
+    before: &str,
+    candidates: &[(&str, f64)],
+    pieces: &[&str],
+    excluded: &[&str],
+    new_word: bool,
+    desired: Option<&str>,
+) -> Result<(Vec<serde_json::Value>, ProviderOutcome), Box<dyn Error>> {
+    let (endpoint, server) = serve_alternatives(candidates, pieces).await?;
     let client = fixture_client(SemanticClientConfig::new(
         endpoint,
         "space-fixture",
@@ -1860,6 +1886,7 @@ async fn alternative_exchange(
             AlternativeAsk {
                 excluded: excluded.iter().map(|word| (*word).to_owned()).collect(),
                 new_word,
+                desired: desired.map(str::to_owned),
             },
         )
         .await?
@@ -1943,6 +1970,59 @@ async fn an_alternative_continues_the_best_first_token_not_shown_yet() -> Result
             .map(|proposal| proposal.text)
             .as_deref(),
         Some(" file tonight")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn listed_words_finish_each_candidate_and_a_pick_continues_only_its_word()
+-> Result<(), Box<dyn Error>> {
+    let before = "Thanks for sharing the draft. I will ";
+    let candidates = [(" read", -0.3), (" send", -1.2), (" check", -1.5)];
+    let (endpoint, server) = serve_alternatives(&candidates, &[" it", " tonight"]).await?;
+    let client = fixture_client(SemanticClientConfig::new(
+        endpoint,
+        "space-fixture",
+        "public-fixture-token",
+    )?)?;
+    let words = client
+        .alternative_words(
+            request(before, Some("en")),
+            CancellationToken::new(),
+            RequestTrigger::Explicit,
+            AlternativeAsk {
+                excluded: vec!["read".to_owned()],
+                new_word: false,
+                desired: None,
+            },
+        )
+        .await?;
+    assert_eq!(words, ["send", "check"]);
+    assert_eq!(
+        server.await?.len(),
+        3,
+        "the candidates, then one short continuation per listed word"
+    );
+
+    let (payloads, outcome) = alternative_exchange_desired(
+        before,
+        &candidates,
+        &[" it", " tonight"],
+        &["read", "send"],
+        false,
+        Some("check"),
+    )
+    .await?;
+    assert_eq!(
+        payloads[1]["prompt"],
+        "Thanks for sharing the draft. I will check"
+    );
+    assert_eq!(
+        outcome
+            .into_proposal()
+            .map(|proposal| proposal.text)
+            .as_deref(),
+        Some("check it tonight")
     );
     Ok(())
 }

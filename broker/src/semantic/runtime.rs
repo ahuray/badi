@@ -740,6 +740,18 @@ impl CompletionProvider for OwnedRuntime {
             .alternative(request, cancellation, trigger, ask)
             .await
     }
+
+    async fn alternative_words(
+        &self,
+        request: ProviderRequest,
+        cancellation: CancellationToken,
+        trigger: RequestTrigger,
+        ask: AlternativeAsk,
+    ) -> Result<Vec<String>, ProviderError> {
+        self.client
+            .alternative_words(request, cancellation, trigger, ask)
+            .await
+    }
 }
 
 impl StableRuntimeIdentity {

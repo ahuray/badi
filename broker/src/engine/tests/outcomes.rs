@@ -69,6 +69,7 @@ async fn broker_records_only_content_free_shown_and_dismissed_aggregates() {
                 action: ControlAction::Dismiss,
                 fingerprint: private_context.fingerprint,
                 suggestion_id: Some(payload.suggestion_id),
+                word: None,
             },
             None,
         )
@@ -161,6 +162,7 @@ async fn memory_clear_detaches_live_suggestions_from_deleted_aggregates() {
                 action: ControlAction::Dismiss,
                 fingerprint: update.fingerprint,
                 suggestion_id: Some(payload.suggestion_id),
+                word: None,
             },
             None,
         )
@@ -365,6 +367,27 @@ async fn a_pause_whose_outcome_fence_times_out_still_reports_the_pause() {
     let (broker, _commands) = broker_with_stalled_recorder(4);
     // Reporting a failure here would invite a retried toggle to resume.
     assert!(broker.toggle_paused().await);
+    assert!(broker.is_paused().await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_desktop_hold_whose_outcome_fence_times_out_still_reports_the_status() {
+    let (broker, _commands) = broker_with_stalled_recorder(4);
+    // The hold is already in force when the fence runs; reporting its
+    // failure would make the session helper treat a live hold as rejected.
+    let status = broker
+        .report_desktop_state(
+            "stalled-fence-helper",
+            crate::protocol::DesktopStatePayload {
+                session: crate::protocol::DesktopSession::Sleeping,
+                on_battery: false,
+                power_saver: false,
+                screen_shared: false,
+            },
+        )
+        .await
+        .expect("desktop status after the logged fence failure");
+    assert_eq!(status.session, crate::protocol::DesktopSession::Sleeping);
     assert!(broker.is_paused().await);
 }
 

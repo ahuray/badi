@@ -8,6 +8,8 @@ const error = (overrides = {}) => ({ id: 'en-g', language: 'en', mode: 'grammar'
   expected: ["She doesn't know."], ...overrides });
 const correct = (overrides = {}) => ({ id: 'en-c', language: 'en', mode: 'grammar', kind: 'correct', selected: 'She knows.', ...overrides });
 const refine = (overrides = {}) => ({ id: 'en-r', language: 'en', mode: 'refine', selected: 'pls call Tom at 14:30', facts: ['Tom', '14:30'], ...overrides });
+const synonym = (overrides = {}) => ({ id: 'en-s', language: 'en', mode: 'synonyms', before: 'The view is ', selected: 'beautiful',
+  expected: ['lovely', 'pretty'], ...overrides });
 const result = (overrides = {}) => ({ type: 'revision_result', outcome: 'shown', text: "She doesn't know.", output: "She doesn't know.",
   latency_ms: 100, generated_tokens: 6, output_language: null, field_language: null, ...overrides });
 const suite = cases => ({ schema: 'badi.revision-suite.v1', name: 'Revision fixture', cases });
@@ -28,16 +30,20 @@ test('the development suite loads and covers every revision language and mode', 
 test('a case is refused when its answer is missing, misplaced or unreachable', () => {
   assert.equal(validateRevisionCase(error()).kind, 'error');
   assert.deepEqual(validateRevisionCase(refine()).facts, ['Tom', '14:30']);
+  assert.deepEqual(validateRevisionCase(synonym()).expected, ['lovely', 'pretty']);
   assert.equal(validateRevisionCase(correct({ selected: 'Tu viens ?' })).selected, 'Tu viens ?');
   for (const invalid of [
     error({ expected: undefined }), error({ expected: [] }), error({ expected: ['She  dont know. '] }),
     error({ facts: ['She'] }), correct({ expected: ['She knows!'] }), correct({ kind: undefined }),
     refine({ facts: ['Anna'] }), refine({ facts: [] }), refine({ kind: 'error' }), refine({ expected: ['x'] }),
+    synonym({ expected: undefined }), synonym({ expected: ['beautiful'] }), synonym({ kind: 'error' }),
+    synonym({ facts: ['view'] }), synonym({ selected: 'one two three four' }), synonym({ selected: 'word.' }),
+    synonym({ selected: 'room 101' }),
     error({ selected: 'two\nlines' }), error({ selected: 'tab\there' }), error({ selected: 'zero​width' }),
     error({ selected: '   ' }), error({ selected: 'a'.repeat(601) }), error({ before: 'b'.repeat(513) }), error({ after: 'a'.repeat(129) }),
     error({ language: 'fa' }), error({ language: 'en-US' }), error({ mode: 'rewrite' }), error({ note: 'x' }), error({ id: '-bad' }),
   ]) assert.throws(() => validateRevisionCase(invalid));
-  for (const row of [error({ before: 'I said ' }), correct(), refine()]) {
+  for (const row of [error({ before: 'I said ' }), correct(), refine(), synonym()]) {
     assert.deepEqual(validateRevisionCase(validateRevisionCase(row)), validateRevisionCase(row));
   }
   assert.throws(() => validateRevisionSuite(suite([error(), error()])));
@@ -75,6 +81,9 @@ test('a correction matches after whitespace normalization only, and facts are re
   assert.equal(scoreRevision(correct(), result({ outcome: 'unchanged', text: null })).left_unchanged, true);
   assert.equal(scoreRevision(correct(), result({ text: 'She does know.' })).left_unchanged, false);
   assert.equal(scoreRevision(error(), result()).left_unchanged, null);
+  assert.equal(scoreRevision(synonym(), result({ text: 'lovely' })).gold_match, true);
+  assert.equal(scoreRevision(synonym(), result({ text: 'gorgeous' })).gold_match, false);
+  assert.equal(scoreRevision(synonym(), result({ outcome: 'unchanged', text: null })).gold_match, false);
 
   const lost = scoreRevision(refine(), result({ text: 'Please call Tom at half past two.' }));
   assert.deepEqual([lost.facts_kept, lost.missing_facts], [false, ['14:30']]);
@@ -101,6 +110,9 @@ test('the summary counts fixes, wrong fixes, unchanged controls and abstention c
     [refine({ id: 'h' }), result({ text: 'Please call Tom at 14:30.' })],
     [refine({ id: 'i' }), result({ text: 'Please call him at 14:30.' })],
     [refine({ id: 'j' }), result({ outcome: 'facts', text: null, output: 'Call Tom at 14:30 on Monday.' })],
+    [synonym({ id: 'k' }), result({ text: 'lovely', latency_ms: 150 })],
+    [synonym({ id: 'l' }), result({ text: 'gorgeous', latency_ms: 250 })],
+    [synonym({ id: 'm' }), result({ outcome: 'unchanged', text: null, latency_ms: 350 })],
   ].map(([row, outcome]) => ({ case: row, mode: row.mode, result: outcome }));
   const summary = summarizeRevision(records).by_mode;
   const english = summary.grammar.by_language.en;
@@ -115,4 +127,6 @@ test('the summary counts fixes, wrong fixes, unchanged controls and abstention c
   assert.deepEqual({ ...summary.refine.overall, latency_ms: null, generated_tokens: null }, { cases: 3, shown: 2, shown_rate: 2 / 3,
     not_shown: { facts: 1 }, facts_kept: 1, facts_abstentions_keeping_declared_facts: 1, other_language: 0, field_language_differs: 0,
     latency_ms: null, generated_tokens: null });
+  assert.deepEqual({ ...summary.synonyms.overall, latency_ms: null, generated_tokens: null }, { cases: 3, matched: 1, shown_other: 1,
+    not_shown: { unchanged: 1 }, other_language: 0, field_language_differs: 0, latency_ms: null, generated_tokens: null });
 });

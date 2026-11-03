@@ -17,6 +17,10 @@ const READING_WINDOW = new Set(['obsidian', 'neovim']);
 // Editors that run inside a terminal report holding its focus, so the input
 // method's typed-line path stays out of their way (ADR 0009).
 const EDITOR_FOCUS = new Set(['neovim']);
+// Editors that can show a numbered list of alternative words and take a
+// digit pick (ADR 0014). Readline has no such surface, so Bash keeps
+// one-at-a-time alternatives by never negotiating the capability.
+const ALTERNATIVE_LIST = new Set(['obsidian', 'neovim']);
 const CAPABILITIES = ['context', 'suggestion', 'commit.applied', 'control', 'policy'];
 const FRAME_LIMIT = 65536;
 // The broker reads at most this many Unicode scalars before and after the caret.
@@ -54,6 +58,8 @@ export class BrokerClient extends EventEmitter {
   #streamed = null;
   // The suggestion id an alternative() request replaces, until it resolves.
   #superseded = null;
+  // A shown numbered list of alternative words, until a pick spends it.
+  #list = null;
   #expiry;
   #epoch = null;
   #closed = false;
@@ -82,6 +88,8 @@ export class BrokerClient extends EventEmitter {
   get connected() { return this.#hello && this.#epoch !== null && !this.#closed; }
   get automaticAllowed() { return this.allowed && this.#policy.activation === 'always'; }
   get replacementBefore() { return this.#candidate?.replaceBefore; }
+  // The words of the numbered list now shown, or null.
+  get alternativeWords() { return this.#list ? [...this.#list.words] : null; }
   // What Tab takes of the shown candidate, which previews draw brighter.
   get acceptWord() { return this.#candidate?.acceptWord; }
 
@@ -109,7 +117,8 @@ export class BrokerClient extends EventEmitter {
       // Readline's display has its own four-second hold; keep its existing lease.
       const capabilities = [...CAPABILITIES, ...(this.#textReplacement ? ['text_replacement'] : []),
         ...(READING_WINDOW.has(this.#profile.kind) ? ['long_reading_window'] : []),
-        ...(EDITOR_FOCUS.has(this.#profile.kind) ? ['editor_focus'] : [])];
+        ...(EDITOR_FOCUS.has(this.#profile.kind) ? ['editor_focus'] : []),
+        ...(ALTERNATIVE_LIST.has(this.#profile.kind) ? ['alternative_list'] : [])];
       const hello = await this.#rpc('hello', { min_v: 2, max_v: 2,
         adapter: { kind: this.#profile.kind, name: `badi-${this.#profile.kind}`, version: '0.1.0' },
         capabilities }, 'hello.ack');
@@ -217,12 +226,59 @@ export class BrokerClient extends EventEmitter {
     const generation = this.#generation;
     clearTimeout(this.#expiry);
     this.#candidate = null;
+    this.#list = null;
     this.#streamed = null;
     this.#superseded = candidate.suggestion_id;
+    const listed = ALTERNATIVE_LIST.has(this.#profile.kind);
     let response;
     try {
       response = await this.#rpc('control.request', { action: 'alternatives', fingerprint: candidate.fingerprint,
-        suggestion_id: candidate.suggestion_id }, 'suggestion.show', session);
+        suggestion_id: candidate.suggestion_id }, listed ? 'suggestion.list' : 'suggestion.show', session);
+    } finally {
+      this.#superseded = null;
+    }
+    if (generation !== this.#generation || this.#session !== session || !this.allowed) throw new Error('Context changed');
+    if (response.type === 'suggestion.clear') { this.emit('state', response.payload.reason); return null; }
+    if (response.type === 'suggestion.list') {
+      if (!this.#validList(response.payload, session, candidate.suggestion_id)) {
+        this.cancel(); throw new Error('Invalid alternative list');
+      }
+      const words = [...response.payload.words];
+      this.#list = { ...session, suggestion_id: candidate.suggestion_id, fingerprint: candidate.fingerprint,
+        words, expires: performance.now() + response.payload.ttl_ms };
+      this.#expiry = setTimeout(() => this.cancel(), response.payload.ttl_ms);
+      this.emit('state', 'alternative_list');
+      return Object.freeze({ words: Object.freeze(words) });
+    }
+    const streamed = this.#streamed;
+    this.#streamed = null;
+    const value = streamed && continues(response.payload, streamed.payload) ? streamed.payload : response.payload;
+    if (value.replace_before !== undefined || !this.#validShow(value, session, '')) {
+      this.cancel(); throw new Error('Invalid model suggestion');
+    }
+    this.#setCandidate(session, value);
+    this.emit('state', 'suggestion');
+    return value.text;
+  }
+
+  // The numbered list words for the suggestion the chord replaced. A pick
+  // asks the broker for that word's continuation, shown like any other.
+  async pickAlternative(word) {
+    const list = this.#list;
+    const session = this.#session;
+    if (!list || !session || !this.allowed || performance.now() >= list.expires ||
+        typeof word !== 'string' || !list.words.includes(word)) {
+      throw new Error('No listed word to pick');
+    }
+    const generation = this.#generation;
+    clearTimeout(this.#expiry);
+    this.#list = null;
+    this.#streamed = null;
+    this.#superseded = list.suggestion_id;
+    let response;
+    try {
+      response = await this.#rpc('control.request', { action: 'alternatives', fingerprint: list.fingerprint,
+        suggestion_id: list.suggestion_id, word }, 'suggestion.show', session);
     } finally {
       this.#superseded = null;
     }
@@ -237,6 +293,17 @@ export class BrokerClient extends EventEmitter {
     this.#setCandidate(session, value);
     this.emit('state', 'suggestion');
     return value.text;
+  }
+
+  #validList(value, session, suggestionId) {
+    const words = value.words;
+    return Array.isArray(words) && words.length >= 1 && words.length <= 4 &&
+      words.every(word => typeof word === 'string' && [...word].length >= 1 && [...word].length <= 32 &&
+        !/\s/u.test(word) && !hasUnsafeText(word)) &&
+      new Set(words.map(word => word.toLowerCase())).size === words.length &&
+      counter(value.ttl_ms) && value.ttl_ms >= 1 &&
+      value.ttl_ms <= (READING_WINDOW.has(this.#profile.kind) ? 15000 : 5000) &&
+      value.suggestion_id === suggestionId && value.fingerprint === session.fingerprint;
   }
 
   #validShow(value, session, before) {
@@ -320,6 +387,7 @@ export class BrokerClient extends EventEmitter {
     this.#generation++;
     clearTimeout(this.#expiry);
     this.#candidate = null;
+    this.#list = null;
     this.#streamed = null;
     const session = this.#session;
     if (closeSession) this.#session = null;
@@ -393,6 +461,8 @@ export class BrokerClient extends EventEmitter {
           message.type !== 'control.result' && message.type !== 'error') throw new Error('Reply context mismatch');
       if (pending && (message.type === pending.expected || message.type === 'error' ||
           (pending.expected === 'suggestion.show' && message.type === 'suggestion.clear') ||
+          (pending.expected === 'suggestion.list' &&
+            (message.type === 'suggestion.show' || message.type === 'suggestion.clear')) ||
           (message.type === 'control.result' && message.payload.accepted === false))) {
         clearTimeout(pending.timer); this.#pending.delete(message.id);
         if (message.type === 'error' || message.payload.accepted === false) pending.reject(new Error('Broker rejected the request'));

@@ -99,11 +99,41 @@ function lines(args) {
   return git([...args, "-z"]).stdout.split("\0").filter(Boolean);
 }
 
-function changelogAdded(args) {
+/// Whether `diff` (a -U0 unified diff of CHANGELOG.md) adds a non-empty
+/// line under the newest heading of the resulting text: `## Unreleased`
+/// when present, else the first `## ` heading. A line appended under an
+/// older release does not count.
+export function diffAddsUnderNewestHeading(diff, text) {
+  const fileLines = text.split("\n");
+  let heading = fileLines.findIndex((line) => line.trim() === "## Unreleased");
+  if (heading === -1) heading = fileLines.findIndex((line) => line.startsWith("## "));
+  if (heading === -1) return false;
+  let next = fileLines.findIndex((line, index) => index > heading && line.startsWith("## "));
+  if (next === -1) next = fileLines.length;
+  let newLine = 0;
+  for (const line of diff.split("\n")) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/u.exec(line);
+    if (hunk) {
+      newLine = Number(hunk[1]);
+    } else if (line.startsWith("+") && !line.startsWith("+++")) {
+      if (line.slice(1).trim() !== "" && newLine > heading + 1 && newLine <= next) return true;
+      newLine++;
+    } else if (!line.startsWith("-") && !line.startsWith("\\")) {
+      newLine++;
+    }
+  }
+  return false;
+}
+
+function changelogAdded(args, text) {
   const diff = git(["diff", "-U0", ...args, "--", "CHANGELOG.md"], true);
   if (diff.status !== 0) return false;
-  return diff.stdout.split("\n").some((line) =>
-    line.startsWith("+") && !line.startsWith("+++") && line.slice(1).trim() !== "");
+  return diffAddsUnderNewestHeading(diff.stdout, text);
+}
+
+function changelogTextAt(rev) {
+  const shown = git(["show", `${rev}:CHANGELOG.md`], true);
+  return shown.status === 0 ? shown.stdout : "";
 }
 
 function ensureHistory() {
@@ -168,7 +198,7 @@ function commitSet(rev) {
   const parent = git(["rev-parse", "--verify", "--quiet", `${rev}^`], true).status === 0
     ? `${rev}^`
     : git(["hash-object", "-t", "tree", "/dev/null"]).stdout.trim();
-  return { label: rev, paths: commitPaths(rev), changelog: changelogAdded([parent, rev]) };
+  return { label: rev, paths: commitPaths(rev), changelog: changelogAdded([parent, rev], changelogTextAt(rev)) };
 }
 
 function setsForRev(rev) {
@@ -189,14 +219,16 @@ function rangeSets() {
     : git(["rev-list", "--no-merges", `${base}..${head}`]).stdout.split("\n").filter(Boolean).map(commitSet);
   const staged = lines(["diff", "--cached", "--name-only"]);
   if (staged.length > 0) {
-    commits.push({ label: "staged changes", paths: staged, changelog: changelogAdded(["--cached"]) });
+    commits.push({ label: "staged changes", paths: staged, changelog: changelogAdded(["--cached"], changelogTextAt("")) });
   }
   const unstaged = [...new Set([
     ...lines(["diff", "--name-only"]),
     ...lines(["ls-files", "--others", "--exclude-standard"]),
   ])];
   if (unstaged.length > 0) {
-    commits.push({ label: "unstaged changes", paths: unstaged, changelog: changelogAdded([]) });
+    const worktree = existsSync(path.join(repository, "CHANGELOG.md"))
+      ? readFileSync(path.join(repository, "CHANGELOG.md"), "utf8") : "";
+    commits.push({ label: "unstaged changes", paths: unstaged, changelog: changelogAdded([], worktree) });
   }
   return commits;
 }

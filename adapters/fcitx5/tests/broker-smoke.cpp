@@ -226,16 +226,20 @@ void runTypeThrough(const std::string &socket, const std::string &appId) {
     transport.disconnect();
 }
 
-// Ctrl+Shift+Space on a shown continuation: the broker replaces it with the
-// fixture's next continuation, which starts with another word, then cycles.
+// Ctrl+Shift+Space on a shown continuation: the broker lists the fixture's
+// other first words, a pick shows that word's continuation, then again.
 void runAlternatives(const std::string &socket, const std::string &appId) {
     ::fcitx::EventLoop loop;
     SessionState state;
     require(state.focusIn("550e8400-e29b-41d4-a716-446655440003", "alternatives-context",
                           appId, "0123456789abcdef0123456789abcdef"));
     Transport *wire = nullptr;
-    const std::array<std::string, 4> expected{" for your time", " so much", " again", " for your time"};
+    const std::array<std::string, 3> expected{" for your time", " again", " so much"};
+    const std::array<std::vector<std::string>, 2> lists{std::vector<std::string>{"so", "again"},
+                                                        std::vector<std::string>{"so"}};
+    const std::array<std::string, 2> picks{"again", "so"};
     std::size_t shown = 0;
+    std::size_t listed = 0;
     Transport transport(loop, WireCallbacks{
         .onReady = [&] {
             require(wire->openSession(state.coordinates(), targetOf(state)));
@@ -252,7 +256,17 @@ void runAlternatives(const std::string &socket, const std::string &appId) {
             const auto request = state.requestAlternative(wire->nowMs(), kPanel);
             require(request && wire->requestAlternative(*request));
         },
-        .onClear = [](const ClearNotice &) {},
+        .onAlternativeList = [&](AlternativeList list) {
+            require(listed < lists.size() && list.words == lists[listed]);
+            require(state.showAlternativeList(list, wire->nowMs()));
+            const auto pick = state.requestAlternativePick(picks[listed++], wire->nowMs(), kPanel);
+            require(pick && wire->requestAlternativePick(*pick));
+        },
+        // Like the addon: the superseded clear retires the shown
+        // suggestion before its list arrives.
+        .onClear = [&](const ClearNotice &notice) {
+            state.clearSuggestionIf(notice.coordinates, notice.suggestionId);
+        },
         .onCommitPrepare = [](const CommitPrepare &) { require(false); },
         .onDisconnected = [&] { loop.exit(); },
         .onPolicy = {},
@@ -264,7 +278,7 @@ void runAlternatives(const std::string &socket, const std::string &appId) {
     deadline->setOneShot();
     require(transport.connect());
     loop.exec();
-    require(shown == expected.size());
+    require(shown == expected.size() && listed == lists.size());
     transport.disconnect();
 }
 
@@ -280,6 +294,7 @@ void runRevision(const std::string &socket, const std::string &appId) {
     unsigned int shown = 0;
     bool applied = false;
     bool dismissed = false;
+    bool synonymsDone = false;
     bool unchanged = false;
     std::unique_ptr<::fcitx::EventSourceTime> readingTimer;
     const auto ask = [&](std::string_view text, std::size_t from, std::size_t to, std::string mode) {
@@ -322,18 +337,39 @@ void runRevision(const std::string &socket, const std::string &appId) {
                 readingTimer->setOneShot();
                 return;
             }
-            require(shown == 2 && revision.mode == "refine" && revision.text == "They're going home.");
+            if (shown == 2) {
+                require(revision.mode == "refine" && revision.text == "They're going home.");
+                const auto dismissal = state.requestRevisionDismissal(wire->nowMs(), kPanel);
+                require(dismissal && wire->requestDismissal(*dismissal));
+                return;
+            }
+            if (shown == 3) {
+                require(revision.mode == "synonyms" && revision.text == "lovely");
+                // Asking again offers another synonym for the same word.
+                ask("The view from the hill is beautiful today", 26, 35, "synonyms");
+                return;
+            }
+            require(shown == 4 && revision.mode == "synonyms" && revision.text == "pretty");
             const auto dismissal = state.requestRevisionDismissal(wire->nowMs(), kPanel);
             require(dismissal && wire->requestDismissal(*dismissal));
+            synonymsDone = true;
         },
         .onRevisionClear = [&](const RevisionClear &clear) {
             if (shown == 2 && !dismissed) {
                 require(clear.reason == "dismissed");
                 dismissed = true;
+                ask("The view from the hill is beautiful today", 26, 35, "synonyms");
+                return;
+            }
+            // The second synonyms request supersedes the first offer.
+            if (shown == 3 && clear.reason == "superseded") return;
+            if (shown == 4 && clear.reason == "dismissed") {
+                require(synonymsDone);
                 ask("Thanks for the reply.", 0, 21, "grammar");
                 return;
             }
-            require(dismissed && clear.reason == "no_change" && clear.coordinates == state.coordinates());
+            require(dismissed && synonymsDone && clear.reason == "no_change" &&
+                    clear.coordinates == state.coordinates());
             unchanged = true;
             loop.exit();
         },
@@ -345,7 +381,7 @@ void runRevision(const std::string &socket, const std::string &appId) {
     deadline->setOneShot();
     require(transport.connect());
     loop.exec();
-    require(applied && shown == 2 && dismissed && unchanged);
+    require(applied && shown == 4 && dismissed && synonymsDone && unchanged);
     transport.disconnect();
 }
 
@@ -358,11 +394,11 @@ int main(int argc, char **argv) {
             runReconnect(argv[2], argv[3]);
         } else if (argc == 4 && std::string(argv[1]) == "--revision") {
             runRevision(argv[2], argv[3]);
-            std::cout << "Native transport: revision shown, applied, refined, dismissed, unchanged passed\n";
+            std::cout << "Native transport: revision shown, applied, refined, synonyms cycled, dismissed, unchanged passed\n";
             return 0;
         } else if (argc == 4 && std::string(argv[1]) == "--alternatives") {
             runAlternatives(argv[2], argv[3]);
-            std::cout << "Native transport: alternatives replaced and cycled passed\n";
+            std::cout << "Native transport: alternatives listed and picked passed\n";
             return 0;
         } else if (argc == 4 && std::string(argv[1]) == "--type-through") {
             runTypeThrough(argv[2], argv[3]);

@@ -16,6 +16,8 @@ namespace badi::fcitx5 {
 inline constexpr std::size_t kMaxSelectedScalars = 600;
 inline constexpr std::size_t kMaxRevisedScalars = 1'100;
 inline constexpr std::uint64_t kMaxRevisionTtlMs = 60'000;
+// The most words a selection may have for a synonym (broker ADR 0013).
+inline constexpr std::size_t kMaxSynonymWords = 3;
 // The panel shows a revision in lines of at most this many characters.
 inline constexpr std::size_t kRevisionLineScalars = 64;
 inline constexpr std::size_t kRevisionLines = 20;
@@ -89,7 +91,18 @@ bool revisionLanded(std::string_view before, std::string_view after, const Selec
 // nothing (the user retired it, or an edit did).
 std::optional<std::string_view> revisionClearNotice(std::string_view reason);
 
+// Whether `selected` is a word or short phrase a synonym may replace:
+// one to `kMaxSynonymWords` words with a letter each, and no digit,
+// address or sentence mark. The broker's `synonym_selection` decides the
+// same; this only chooses the chord's next mode and its help line.
+bool synonymSelection(std::string_view selected);
+
+// The mode the chord asks for while a revision of `shownMode` for
+// `selected` shows: grammar, then refine, then a synonym for a short
+// selection, and another synonym after that.
+std::string nextRevisionMode(std::string_view shownMode, std::string_view selected);
+
 // The panel's line under a revision: its mode and keys.
-std::string revisionHelp(std::string_view mode);
+std::string revisionHelp(std::string_view mode, std::string_view selected);
 
 } // namespace badi::fcitx5

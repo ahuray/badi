@@ -108,15 +108,19 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   await editor.until(current => current.lines[0] === 'thank you for your time', 'rest accepted');
   await committed(3);
 
-  // The request key on a shown suggestion asks the broker for one that
-  // starts with another word; leaving Insert mode then dismisses it.
+  // The request key on a shown suggestion lists the broker's other first
+  // words; a digit picks one, and leaving Insert mode dismisses it.
   await editor.send('<CR>thank you');
   await editor.until(current => current.preview === ' for your time', 'preview before an alternative');
   await editor.send('<C-S-Space>');
-  state = await editor.until(current => current.preview === ' so much', 'an alternative');
+  await editor.until(current => current.preview === ' 1.so  2.again', 'a numbered list');
+  await editor.send('1');
+  state = await editor.until(current => current.preview === ' so much', 'a picked alternative');
   assert.deepEqual(state.chunks, [[' so', 'BadiSuggestionWord'], [' much', 'BadiSuggestion']]);
   await editor.send('<C-S-Space>');
-  await editor.until(current => current.preview === ' again', 'a second alternative');
+  await editor.until(current => current.preview === ' 1.again', 'the remaining list');
+  await editor.send('1');
+  await editor.until(current => current.preview === ' again', 'a second picked alternative');
   await editor.send('<Esc>ddA');
   await editor.until(current => current.preview === null && current.lines.length === 1, 'line removed');
 

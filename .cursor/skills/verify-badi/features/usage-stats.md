@@ -5,7 +5,7 @@ Usage statistics count suggestions shown, acceptances that landed, and words tho
 ## Sub-features
 
 - `stats-show` reads today's counts, the last seven days, and the leading apps and sites.
-- `stats-after-accept` increases shown, accepted, and words after an acceptance lands.
+- `stats-after-accept` counts a suggestion when it is shown, and counts the acceptance and the words it saved when that acceptance lands.
 - `stats-forget` deletes every count.
 - `stats-paused` adds nothing while Badi is paused or the app may not suggest.
 
@@ -14,7 +14,7 @@ Usage statistics count suggestions shown, acceptances that landed, and words tho
 - Run `badi stats`. It prints today, the last seven days, each day, and the leading apps and sites.
 - Run `badi stats --json` for the same counts.
 - Run `badi stats forget` to delete them. Counting starts again afterwards.
-- The Omarchy popout shows the week's words and Forget usage statistics.
+- The Omarchy popout's History shows the week's words. Forget usage statistics is under All settings, and Omarchy asks to confirm.
 
 ## Driving it with verify-badi
 

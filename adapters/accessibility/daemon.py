@@ -373,11 +373,14 @@ class Daemon:
         self.GLib.io_add_watch(self.server.fileno(), self.GLib.IO_IN, self.accept)
 
     def accept(self, _fd, _condition):
+        client = None
         try:
             client, _ = self.server.accept()
-        except BlockingIOError:
+            _pid, uid, _gid = struct.unpack("3i", client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        except (BlockingIOError, OSError, struct.error):
+            if client is not None:
+                client.close()
             return True
-        _pid, uid, _gid = struct.unpack("3i", client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         if uid != os.getuid() or len(self.clients) >= MAX_CLIENTS:
             client.close()
             return True

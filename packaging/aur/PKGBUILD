@@ -8,13 +8,17 @@ url='https://github.com/ahuray/badi'
 # (foldhash) code, listed in THIRD-PARTY-NOTICES.txt.
 license=('MIT' 'MPL-2.0' 'Zlib' 'LicenseRef-SCOWL')
 depends=('gcc-libs' 'glibc' 'python' 'python-gobject' 'python-cairo' 'at-spi2-core'
-         'gtk4' 'gtk4-layer-shell' 'glib2' 'pango' 'systemd' 'fcitx5>=5.1.23'
-         'hyprland' 'quickshell' 'qt6-declarative' 'hicolor-icon-theme')
+         'gtk4' 'glib2' 'pango' 'systemd' 'pipewire' 'fcitx5>=5.1.23'
+         'hicolor-icon-theme')
 makedepends=('git' 'cargo' 'cmake' 'ninja' 'nlohmann-json')
 optdepends=('curl: download the separately verified writing assets'
             'libsecret: keep the opt-in style-learning key in the desktop keyring'
+            'gnome-keyring: a Secret Service provider for that key (or KWallet with its Secret Service)'
             'xdg-desktop-portal: pause and settings shortcuts through the desktop portal'
-            'pipewire: hold suggestions while the screen is shared (pw-dump)')
+            'hyprland: the field observer session and its grey preview layer'
+            'gtk4-layer-shell: the grey preview overlay in a Hyprland session'
+            'quickshell: the Omarchy bar settings panel'
+            'qt6-declarative: the Omarchy bar settings panel')
 provides=('badi')
 conflicts=('badi')
 # The repository's release profile strips Rust symbols; do not emit an empty

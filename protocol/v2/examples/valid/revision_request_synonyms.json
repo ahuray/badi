@@ -1,0 +1,33 @@
+{
+  "v": 2,
+  "id": "revise-2",
+  "type": "revision.request",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "focus_epoch": 4,
+  "revision": 10,
+  "mono_ms": 20,
+  "payload": {
+    "fingerprint": "revision_context_0002",
+    "mode": "synonyms",
+    "before": "The view from the hill is ",
+    "selected": "beautiful",
+    "after": " today",
+    "selection": {
+      "anchor": 26,
+      "head": 35,
+      "unit": "unicode_scalar_values"
+    },
+    "field": {
+      "purpose": "normal",
+      "editable": true,
+      "multiline": true,
+      "composing": false,
+      "sensitive": false,
+      "identity_known": true,
+      "focused": true,
+      "lock_screen": false
+    },
+    "activation": "always",
+    "language": "en"
+  }
+}

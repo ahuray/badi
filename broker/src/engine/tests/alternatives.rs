@@ -18,6 +18,7 @@ async fn alternative_to(
                 action: ControlAction::Alternatives,
                 fingerprint: shown.fingerprint.clone(),
                 suggestion_id: Some(shown.suggestion_id.clone()),
+                word: None,
             },
             Some("fcitx.alternative.1".to_owned()),
         )
@@ -30,6 +31,123 @@ async fn alternative_to(
             Ok(None) | Err(_) => break None,
         }
     }
+}
+
+async fn open_list_session(
+    broker: &Broker,
+    target_id: &str,
+) -> (SessionId, mpsc::Receiver<BrokerEvent>) {
+    let session_id = SessionId::new();
+    let (sink, receiver) = mpsc::channel(32);
+    broker
+        .open_session(
+            coordinates(session_id, 0),
+            SessionOpenPayload {
+                target: TargetDescriptor {
+                    kind: TargetKind::DesktopApplication,
+                    app_id: "org.telegram.desktop".to_owned(),
+                    target_id: target_id.to_owned(),
+                    origin: None,
+                },
+                activation: Activation::Always,
+            },
+            SessionAuthority {
+                adapter_kind: AdapterKind::Fcitx,
+                capabilities: vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::CommitDispatchedUnverified,
+                    Capability::AlternativeList,
+                ],
+            },
+            event_sink(sink),
+        )
+        .await
+        .expect("open list session");
+    (session_id, receiver)
+}
+
+fn alternatives_payload(
+    shown: &SuggestionShowPayload,
+    word: Option<&str>,
+) -> SessionControlRequestPayload {
+    SessionControlRequestPayload {
+        action: ControlAction::Alternatives,
+        fingerprint: shown.fingerprint.clone(),
+        suggestion_id: Some(shown.suggestion_id.clone()),
+        word: word.map(str::to_owned),
+    }
+}
+
+#[tokio::test]
+async fn a_list_capable_session_gets_words_and_a_pick_shows_its_continuation() {
+    let broker = Broker::new(
+        std::sync::Arc::new(DeterministicPhraseProvider::default()),
+        BrokerConfig::default(),
+    );
+    let (session, mut events) = open_list_session(&broker, "field-epoch-1").await;
+    let first = shown_after(&broker, session, &mut events, "thank you")
+        .await
+        .expect("suggestion");
+    assert_eq!(first.text, " for your time");
+
+    // A pick before any list is live names nothing the broker offered.
+    let error = broker
+        .session_control(
+            coordinates(session, 1),
+            alternatives_payload(&first, Some("again")),
+            None,
+        )
+        .await
+        .expect_err("no list is live");
+    assert!(matches!(error, BrokerError::Stale));
+
+    broker
+        .session_control(
+            coordinates(session, 1),
+            alternatives_payload(&first, None),
+            None,
+        )
+        .await
+        .expect("list request");
+    let list = loop {
+        match timeout(Duration::from_millis(200), events.recv()).await {
+            Ok(Some(BrokerEvent::SuggestionList { payload, .. })) => break payload,
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => panic!("expected an alternative list"),
+        }
+    };
+    assert_eq!(list.suggestion_id, first.suggestion_id);
+    assert_eq!(list.words, ["so", "again"]);
+    list.validate().expect("a valid list payload");
+
+    broker
+        .session_control(
+            coordinates(session, 1),
+            alternatives_payload(&first, Some("again")),
+            None,
+        )
+        .await
+        .expect("pick");
+    let picked = loop {
+        match timeout(Duration::from_millis(200), events.recv()).await {
+            Ok(Some(BrokerEvent::SuggestionShow { payload, .. })) => break payload,
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => panic!("expected the picked continuation"),
+        }
+    };
+    assert_eq!(picked.text, " again");
+
+    // The list is spent once a word is picked.
+    let error = broker
+        .session_control(
+            coordinates(session, 1),
+            alternatives_payload(&picked, Some("so")),
+            None,
+        )
+        .await
+        .expect_err("the list is spent");
+    assert!(matches!(error, BrokerError::Stale));
 }
 
 #[tokio::test]
@@ -109,6 +227,7 @@ async fn a_correction_or_another_suggestion_has_no_alternative() {
                 action: ControlAction::Alternatives,
                 fingerprint: shown.fingerprint.clone(),
                 suggestion_id: Some("another-suggestion".to_owned()),
+                word: None,
             },
             None,
         )
@@ -122,6 +241,7 @@ async fn a_correction_or_another_suggestion_has_no_alternative() {
                 action: ControlAction::Alternatives,
                 fingerprint: shown.fingerprint,
                 suggestion_id: None,
+                word: None,
             },
             None,
         )

@@ -296,6 +296,7 @@ async fn unacknowledged_authority_cannot_open_a_session() {
             action: ControlAction::Request,
             fingerprint: "fingerprint_server_01".to_owned(),
             suggestion_id: None,
+            word: None,
         },
     )
     .expect("session control");

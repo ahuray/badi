@@ -1,7 +1,8 @@
-//! Explicit revision of one selection (ADR 0012): a grammar check or a
-//! refined wording from an instruction-tuned model. This module builds what
-//! the model is asked and decides whether its answer may be shown. It never
-//! reads or edits a field.
+//! Explicit revision of one selection (ADR 0012): a grammar check, a
+//! refined wording, or one synonym for a word or short phrase (ADR 0013),
+//! from an instruction-tuned model. This module builds what the model is
+//! asked and decides whether its answer may be shown. It never reads or
+//! edits a field.
 
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
@@ -23,6 +24,28 @@ pub const REVISION_TTL_MS: u64 = 60_000;
 /// "its ok" becomes "it's okay".
 const SHORT_SELECTION_WORDS: usize = 3;
 
+/// The most words a selection may have for a synonym: a word or a short
+/// phrase, never a whole clause.
+pub const MAX_SYNONYM_WORDS: usize = 3;
+
+/// Whether `selected` (its surrounding spaces aside) is a word or short
+/// phrase a synonym may replace: one to [`MAX_SYNONYM_WORDS`] words with a
+/// letter each, and no digit, address or sentence mark, which a synonym
+/// must never silently drop or invent.
+#[must_use]
+pub fn synonym_selection(selected: &str) -> bool {
+    let core = selected.trim();
+    let words: Vec<&str> = core.split_whitespace().collect();
+    safe_revision_text(core)
+        && (1..=MAX_SYNONYM_WORDS).contains(&words.len())
+        && words
+            .iter()
+            .all(|word| word.chars().any(char::is_alphabetic))
+        && !core.chars().any(|character| {
+            character.is_ascii_digit() || matches!(character, '@' | '.' | '!' | '?' | ';' | ':')
+        })
+}
+
 /// What a revision does to the selection.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,6 +54,9 @@ pub enum RevisionMode {
     Grammar,
     /// Rewrite for clarity and natural flow; keep meaning and facts.
     Refine,
+    /// Replace the selected word or short phrase with one synonym that
+    /// fits its sentence; keep everything else (ADR 0013).
+    Synonyms,
 }
 
 impl RevisionMode {
@@ -39,6 +65,7 @@ impl RevisionMode {
         match self {
             Self::Grammar => "grammar",
             Self::Refine => "refine",
+            Self::Synonyms => "synonyms",
         }
     }
 }
@@ -51,6 +78,10 @@ pub struct RevisionLanguage {
     pub tag: &'static str,
     pub name: &'static str,
     example: (&'static str, &'static str),
+    /// One worked synonym: the same text with only its last word replaced.
+    /// The gate refuses its answer word for any other selection, which a
+    /// small model otherwise copies when unsure.
+    synonym_example: (&'static str, &'static str),
 }
 
 const LANGUAGES: [RevisionLanguage; 5] = [
@@ -61,6 +92,10 @@ const LANGUAGES: [RevisionLanguage; 5] = [
             "She dont like going their on monday.",
             "She doesn't like going there on Monday.",
         ),
+        synonym_example: (
+            "The view from the hill is beautiful",
+            "The view from the hill is lovely",
+        ),
     },
     RevisionLanguage {
         tag: "de",
@@ -68,6 +103,10 @@ const LANGUAGES: [RevisionLanguage; 5] = [
         example: (
             "Er hat nach Hause gegangen und hat das Buch gelest.",
             "Er ist nach Hause gegangen und hat das Buch gelesen.",
+        ),
+        synonym_example: (
+            "Der Ausblick vom Hügel ist schön",
+            "Der Ausblick vom Hügel ist herrlich",
         ),
     },
     RevisionLanguage {
@@ -77,6 +116,10 @@ const LANGUAGES: [RevisionLanguage; 5] = [
             "Nous avons aller au cinéma et nous avons manger des pop-corn.",
             "Nous sommes allés au cinéma et nous avons mangé du pop-corn.",
         ),
+        synonym_example: (
+            "La vue depuis la colline est belle",
+            "La vue depuis la colline est magnifique",
+        ),
     },
     RevisionLanguage {
         tag: "es",
@@ -84,6 +127,10 @@ const LANGUAGES: [RevisionLanguage; 5] = [
         example: (
             "Ella no sabe donde esta el parada de autobús.",
             "Ella no sabe dónde está la parada de autobús.",
+        ),
+        synonym_example: (
+            "La vista desde la colina es bonita",
+            "La vista desde la colina es hermosa",
         ),
     },
     RevisionLanguage {
@@ -93,6 +140,7 @@ const LANGUAGES: [RevisionLanguage; 5] = [
             "Eles vai chegar amanhã e nós vamos buscar eles no aeroporto.",
             "Eles vão chegar amanhã e nós vamos buscá-los no aeroporto.",
         ),
+        synonym_example: ("A vista da colina é bonita", "A vista da colina é linda"),
     },
 ];
 
@@ -150,6 +198,19 @@ pub fn messages(
     before: &str,
     selected: &str,
 ) -> [(&'static str, String); 4] {
+    messages_excluding(mode, language, before, selected, &[])
+}
+
+/// [`messages`], with synonyms already shown for this selection named as
+/// words not to use again, so a repeated request offers another one.
+#[must_use]
+pub fn messages_excluding(
+    mode: RevisionMode,
+    language: &RevisionLanguage,
+    before: &str,
+    selected: &str,
+    excluded: &[String],
+) -> [(&'static str, String); 4] {
     let name = language.name;
     let system = match mode {
         RevisionMode::Grammar => format!(
@@ -164,8 +225,27 @@ pub fn messages(
              {name}. Keep it in {name}, keep its meaning, names and numbers, add no facts, and keep \
              about the same length. Reply with the rewritten text only."
         ),
+        RevisionMode::Synonyms => {
+            let core = selected.trim();
+            let avoid = if excluded.is_empty() {
+                String::new()
+            } else {
+                format!(" Do not use: {}.", excluded.join(", "))
+            };
+            format!(
+                "You are a careful {name} editor. The user's {name} text ends with the selected \
+                 word or short phrase \"{core}\". Reply with the same text, its start unchanged, \
+                 with only that selected word or phrase at its end replaced by one synonym that \
+                 fits the sentence. Keep it in {name}, keep its meaning, names and numbers, and \
+                 add no facts.{avoid} Reply with the text only."
+            )
+        }
     };
-    let (example, answer) = language.example;
+    let (example, answer) = if mode == RevisionMode::Synonyms {
+        language.synonym_example
+    } else {
+        language.example
+    };
     [
         ("system", system),
         ("user", example.to_owned()),
@@ -240,6 +320,9 @@ pub fn accept(
     after: &str,
     output: &str,
 ) -> Result<String, RevisionAbstain> {
+    if mode == RevisionMode::Synonyms && !synonym_selection(selected) {
+        return Err(RevisionAbstain::Shape);
+    }
     let core = selected.trim();
     let lead = &selected[..selected.len() - selected.trim_start().len()];
     let trail = &selected[selected.trim_end().len()..];
@@ -256,8 +339,24 @@ pub fn accept(
     }
     keep_first_letter_case(before, core, &mut revised);
     drop_added_final_mark(core, after, &mut revised);
+    // A synonym never adds the sentence's final mark, at the line's end either.
+    if mode == RevisionMode::Synonyms
+        && !core.ends_with(['.', '!', '?', '…'])
+        && revised.ends_with('.')
+        && !revised.ends_with("...")
+    {
+        revised.pop();
+    }
     if revised == core {
         return Err(RevisionAbstain::Unchanged);
+    }
+    // A synonym replaces its word; an answer that still holds it (the
+    // model answered "schnell alternativ" for "schnell") is no synonym.
+    if mode == RevisionMode::Synonyms && still_holds(core, &revised) {
+        return Err(RevisionAbstain::Shape);
+    }
+    if mode == RevisionMode::Synonyms && copies_example(language, core, &revised) {
+        return Err(RevisionAbstain::Shape);
     }
     if !same_language(language, core, &revised) {
         return Err(RevisionAbstain::Language);
@@ -275,6 +374,35 @@ pub fn accept(
         return Err(RevisionAbstain::Edits);
     }
     Ok(format!("{lead}{revised}{trail}"))
+}
+
+/// Whether the revised words still contain the selected words, in order,
+/// case aside: a shared word of a phrase ("a great deal" for "a lot") is
+/// fine, the phrase itself is not.
+fn still_holds(core: &str, revised: &str) -> bool {
+    let wanted: Vec<String> = core.split_whitespace().map(str::to_lowercase).collect();
+    let words: Vec<String> = revised.split_whitespace().map(str::to_lowercase).collect();
+    !wanted.is_empty()
+        && words
+            .windows(wanted.len())
+            .any(|window| window == wanted.as_slice())
+}
+
+/// Whether the answer copies the worked example's synonym for a different
+/// selection: unsure, the model answered "lovely" for "fast". The example's
+/// own word may of course take it.
+fn copies_example(language: &RevisionLanguage, core: &str, revised: &str) -> bool {
+    let (example, answer) = language.synonym_example;
+    let (Some(example_word), Some(answer_word)) = (
+        example.split_whitespace().last(),
+        answer.split_whitespace().last(),
+    ) else {
+        return false;
+    };
+    !core.eq_ignore_ascii_case(example_word)
+        && revised
+            .split_whitespace()
+            .any(|word| word.eq_ignore_ascii_case(answer_word))
 }
 
 /// The answer without the sentence start the model was given, which must
@@ -470,7 +598,7 @@ fn length_fits(mode: RevisionMode, core: &str, revised: &str) -> bool {
     }
     let (low, high) = match mode {
         RevisionMode::Grammar => (0.5, 1.6),
-        RevisionMode::Refine => (0.4, 1.8),
+        RevisionMode::Refine | RevisionMode::Synonyms => (0.4, 1.8),
     };
     // Short selections get a little absolute room: "its" becomes "it's".
     let slack = 12.0;

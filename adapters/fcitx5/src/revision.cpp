@@ -194,9 +194,51 @@ std::optional<std::string_view> revisionClearNotice(std::string_view reason) {
     return std::nullopt;
 }
 
-std::string revisionHelp(std::string_view mode) {
-    return std::string(mode == "refine" ? "Refined" : "Grammar") +
-           " · Tab apply · Esc dismiss · Ctrl+Shift+Space " + (mode == "refine" ? "grammar" : "refine");
+bool synonymSelection(std::string_view selected) {
+    const auto scalars = decodeUtf8(selected);
+    if (!scalars) return false;
+    const auto space = [](std::uint32_t scalar) {
+        return scalar == 0x20 || scalar == 0xA0 || scalar == 0x202F;
+    };
+    std::size_t count = 0;
+    bool inWord = false;
+    bool letter = false;
+    for (const auto scalar : *scalars) {
+        if (space(scalar)) {
+            if (inWord && !letter) return false;
+            inWord = false;
+            letter = false;
+            continue;
+        }
+        if ((scalar >= '0' && scalar <= '9') || scalar == '@' || scalar == '.' || scalar == '!' ||
+            scalar == '?' || scalar == ';' || scalar == ':') {
+            return false;
+        }
+        if (!inWord) {
+            ++count;
+            inWord = true;
+        }
+        // Latin letters, as the revision languages use: ASCII, then À–ɏ
+        // (the multiplication and division signs among them are no letters).
+        if ((scalar >= 'A' && scalar <= 'Z') || (scalar >= 'a' && scalar <= 'z') ||
+            (scalar >= 0xC0 && scalar <= 0x24F && scalar != 0xD7 && scalar != 0xF7)) {
+            letter = true;
+        }
+    }
+    return count >= 1 && count <= kMaxSynonymWords && (!inWord || letter);
+}
+
+std::string nextRevisionMode(std::string_view shownMode, std::string_view selected) {
+    if (shownMode == "grammar") return "refine";
+    if (shownMode == "synonyms") return "synonyms";
+    return synonymSelection(selected) ? "synonyms" : "grammar";
+}
+
+std::string revisionHelp(std::string_view mode, std::string_view selected) {
+    const auto label = mode == "refine" ? "Refined" : mode == "synonyms" ? "Synonym" : "Grammar";
+    const auto next = nextRevisionMode(mode, selected);
+    const auto nextLabel = mode == "synonyms" ? "another" : next;
+    return std::string(label) + " · Tab apply · Esc dismiss · Ctrl+Shift+Space " + nextLabel;
 }
 
 } // namespace badi::fcitx5

@@ -11,7 +11,8 @@ use badi_broker::protocol::{
     RevisionShowPayload, SessionClosePayload, SessionControlRequestPayload, SessionOpenPayload,
     SettingsReplacePayload, SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload,
     StyleStatusPayload, SuggestCancelPayload, SuggestRequestPayload, SuggestionClearPayload,
-    SuggestionShowPayload, WireEnvelope, valid_opaque_id, validate_fingerprint,
+    SuggestionListPayload, SuggestionShowPayload, WireEnvelope, valid_opaque_id,
+    validate_fingerprint,
 };
 use badi_broker::segment::{accept_word, sanitize_suggestion};
 use badi_broker::{Metrics, NoSuggestionReason};
@@ -184,6 +185,9 @@ fn validate_rust_payload(envelope: &WireEnvelope) {
             let payload: SuggestionClearPayload = decode(envelope);
             validate_fingerprint(&payload.fingerprint).expect("valid fingerprint");
         }
+        MessageType::SuggestionList => decode::<SuggestionListPayload>(envelope)
+            .validate()
+            .expect("valid alternative list"),
         MessageType::ControlRequest => {
             let action: ControlAction = serde_json::from_value(
                 envelope

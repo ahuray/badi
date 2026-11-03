@@ -885,6 +885,35 @@ fn private_storage_locks_for_lifetime_and_uses_path_override() {
 }
 
 #[test]
+fn an_uncreatable_settings_directory_is_unsafe_not_transient() {
+    // Root ignores the read-only mode below (the package containers run
+    // their tests as root), so the directory stays creatable there.
+    if rustix::process::getuid().as_raw() == 0 {
+        return;
+    }
+    let temporary = tempdir().expect("temporary directory");
+    let config_parent = temporary.path().join("config");
+    fs::create_dir(&config_parent).expect("config parent");
+    fs::set_permissions(&config_parent, fs::Permissions::from_mode(0o500))
+        .expect("read-only config parent");
+    let storage_paths = StoragePaths::new(
+        config_parent.join("badi"),
+        temporary.path().join("data/badi"),
+    )
+    .expect("paths");
+
+    let result = PrivateStorage::open(storage_paths);
+
+    fs::set_permissions(&config_parent, fs::Permissions::from_mode(0o700))
+        .expect("restore config parent");
+    match result {
+        Err(PrivateStorageError::UnsafeDirectory) => {}
+        Err(error) => panic!("an uncreatable settings directory must be unsafe, got {error}"),
+        Ok(_) => panic!("storage opened under a read-only parent"),
+    }
+}
+
+#[test]
 fn startup_removes_only_safe_owned_complete_document_temporaries() {
     let temporary = tempdir().expect("temporary directory");
     let storage_paths = StoragePaths::new(

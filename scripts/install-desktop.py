@@ -428,6 +428,16 @@ class Plan:
     # the installed addon (None when no Fcitx runs or it cannot be inspected).
     fcitx_process: int | None = None
     addon_loaded: bool | None = None
+    # Whether graphical-session.target, which every Badi unit is WantedBy,
+    # is active in this session (a tty-launched compositor without uwsm
+    # never activates it, so enabled units would not start at login).
+    graphical_session: bool = True
+    # Broker enablement at preflight, and whether a completed install
+    # already happened (its receipt exists). Disabled with a receipt is the
+    # user's `badi autostart off`; disabled without one is an interrupted
+    # first install that must still be enabled.
+    broker_enabled: bool = False
+    broker_installed_before: bool = False
 
     @property
     def native(self):
@@ -460,7 +470,9 @@ def preflight(args):
     """Check the session and decide every change before building or touching a file."""
     home = Path.home().resolve()
     if not os.environ.get("WAYLAND_DISPLAY") or not os.environ.get("XDG_RUNTIME_DIR"):
-        raise RuntimeError("Run the installer from your graphical session")
+        raise RuntimeError("Run the installer from your graphical session: Badi needs a Wayland session "
+                           "(WAYLAND_DISPLAY and XDG_RUNTIME_DIR are not set here, and an X11 session is "
+                           "not supported). Nothing was changed.")
     platform = badi_install.desktop_platform()
     observer_session = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
     system_addons = None
@@ -511,10 +523,15 @@ def preflight(args):
             if updated is not None:
                 hypr_update = (hyprland, original, updated)
     session_disabled = badi_install.unit_value(SESSION_SERVICE, "UnitFileState", timeout=4) == "disabled"
+    graphical_session = badi_install.unit_value(
+        "graphical-session.target", "ActiveState", timeout=4) == "active"
     return Plan(args, home, config_home, runtime, flag_updates, flags_present,
                 broker_updating, accessibility_enabled, hypr_update=hypr_update,
                 session_disabled=session_disabled, platform=platform, system_addons=system_addons,
-                observer_session=observer_session or platform == badi_install.OMARCHY)
+                observer_session=observer_session or platform == badi_install.OMARCHY,
+                graphical_session=graphical_session,
+                broker_enabled=unit_enabled("badi-broker.service"),
+                broker_installed_before=badi_install.receipt_path(home, "desktop").exists())
 
 
 def unit_enabled(unit):
@@ -558,14 +575,57 @@ def require_writing_assets(home):
         )
 
 
+def writing_model_choices(advice):
+    """The writing models that fit this device: the recommended one first,
+    then the most useful in Badi's blind development screen, unscreened ones
+    last."""
+    recommended = (advice.get("recommended") or {}).get("id")
+    fitting = [model for model in advice["catalog"] if model.get("fits", True)]
+    return sorted(fitting, key=lambda model: (model["id"] != recommended, model.get("screen_useful") is None,
+                                              -(model.get("screen_useful") or 0)))
+
+
+def licence_name(model):
+    """How a model's licence reads to a person: its terms' name, or the SPDX id."""
+    terms = badi_install.MODEL_TERMS.get(model.get("license"))
+    return terms[0].removeprefix("the ") if terms else model.get("license") or "unknown licence"
+
+
+def ask_writing_model(choices, recommended):
+    """The model the person picks on a terminal, or None when they stop. A
+    model's terms are asked for only once it is picked; declining them
+    returns to the list."""
+    print("Badi needs a writing model. It is downloaded once from Hugging Face, pinned and hash-checked.")
+    print("These fit this device (useful suggestions of 135 in Badi's blind development screen):", flush=True)
+    for number, model in enumerate(choices, 1):
+        score = (f"{model['screen_useful']} of 135 useful" if model.get("screen_useful") is not None
+                 else "not screened")
+        mark = "  recommended" if model["id"] == recommended else ""
+        print(f"  {number}  {model['name']:13} {model['download_bytes'] / 1e9:4.2f} GB  {score:18} "
+              f"{licence_name(model)}{mark}")
+    for _ in range(5):
+        answer = input(f"Download which one? [1-{len(choices)}, Enter for 1, q to stop] ").strip().lower()
+        if answer in ("q", "n", "no"):
+            return None
+        index = 1 if answer == "" else int(answer) if answer.isdigit() else 0
+        if not 1 <= index <= len(choices):
+            continue
+        model = choices[index - 1]
+        terms = badi_install.model_terms(model)
+        if terms is None or input(f"{model['name']} is provided under {terms}. Do you accept them? [y/N] "
+                                  ).strip().lower() in ("y", "yes"):
+            return model
+    return None
+
+
 def require_writing_model(home, badictl, model_id=None, accept_license=False):
     """At least one model of the freshly built broker's writing catalog is
     installed with its pinned size and hash; the broker picks among them.
 
-    Without one, the recommended model (or `model_id`) is downloaded, pinned
-    and hash-checked, after its size and any terms that come with it were
-    shown and accepted: asked on a terminal, otherwise only with
-    --model and --accept-model-license."""
+    Without one, a model is downloaded, pinned and hash-checked: on a
+    terminal the person picks one of the models that fit, and accepts its
+    terms if it has any; otherwise only `model_id`, with --accept-model-license
+    for a model with terms."""
     advice = json.loads(subprocess.run([str(badictl), "models", "writing", "--json"], capture_output=True,
                                        text=True, check=True, timeout=15).stdout)
     models = Path(home) / ".local/share/badi/models"
@@ -574,27 +634,37 @@ def require_writing_model(home, badictl, model_id=None, accept_license=False):
         if (path.is_file() and path.stat().st_size == model["download_bytes"]
                 and badi_install.file_sha256(path) == model["sha256"]):
             return model
-    wanted = model_id or (advice.get("recommended") or {}).get("id")
-    model = next((entry for entry in advice["catalog"] if entry["id"] == wanted), None)
-    if model is None or not model.get("fits", True):
-        choices = " ".join(entry["id"] for entry in advice["catalog"] if entry.get("fits", True))
-        raise RuntimeError(f"No writing model is installed in {models}, and {wanted or 'no model'} cannot be "
-                           f"downloaded for this device. Rerun with --model ID, one of: {choices}")
-    terms = badi_install.model_terms(model)
-    offer = f"{model['name']} ({model['download_bytes'] / 1e9:.2f} GB)" + (f", provided under {terms}" if terms else "")
-    # Only an explicit --model, with --accept-model-license for a model with
-    # terms, downloads without asking.
-    consented = model_id is not None and (accept_license or not terms)
-    if not consented:
+    choices = writing_model_choices(advice)
+    recommended = (advice.get("recommended") or {}).get("id")
+    if model_id is None:
+        if not choices:
+            raise RuntimeError(f"No writing model is installed in {models}, and none fits this device.")
         if not sys.stdin.isatty():
-            raise RuntimeError(f"No writing model is installed in {models}. Badi recommends {offer}. "
-                               f"Rerun with --model {model['id']}" + (" --accept-model-license" if terms else "")
-                               + " to download it.")
-        question = "Do you accept its terms and download it?" if terms else "Download it?"
-        if input(f"Badi needs a writing model. Recommended for this device: {offer}. {question} [y/N] "
-                 ).strip().lower() not in ("y", "yes"):
+            best = choices[0]
+            terms = badi_install.model_terms(best)
+            others = ", ".join(f"{model['id']} ({licence_name(model)})" for model in choices[1:])
+            raise RuntimeError(f"No writing model is installed in {models}. Badi recommends {best['name']} "
+                               f"({best['download_bytes'] / 1e9:.2f} GB)" + (f", provided under {terms}" if terms else "")
+                               + f". Rerun with --model {best['id']}" + (" --accept-model-license" if terms else "")
+                               + " to download it" + (f", or with another that fits: {others}" if others else "") + ".")
+        model = ask_writing_model(choices, recommended)
+        if model is None:
             raise RuntimeError("No writing model was downloaded; nothing was installed.")
-    if terms:
+    else:
+        model = next((entry for entry in choices if entry["id"] == model_id), None)
+        if model is None:
+            fitting = " ".join(entry["id"] for entry in choices)
+            raise RuntimeError(f"No writing model is installed in {models}, and {model_id} cannot be "
+                               f"downloaded for this device. Rerun with --model ID, one of: {fitting}")
+        terms = badi_install.model_terms(model)
+        if terms and not accept_license:
+            if not sys.stdin.isatty():
+                raise RuntimeError(f"{model['name']} is provided under {terms}. Rerun with --model {model['id']} "
+                                   "--accept-model-license to accept them and download it.")
+            if input(f"{model['name']} is provided under {terms}. Do you accept them? [y/N] "
+                     ).strip().lower() not in ("y", "yes"):
+                raise RuntimeError("No writing model was downloaded; nothing was installed.")
+    if badi_install.model_terms(model):
         badi_install.record_model_terms(home, model)
     badi_install.download_model(model, models)
     return model
@@ -770,6 +840,13 @@ def install_prepared_files(plan, installation):
     return installation
 
 
+def broker_needs_enable(plan):
+    """Enable the broker on a first install and after an interrupted one;
+    disabled after a completed install (receipt exists) is the user's
+    `badi autostart off` and stays off."""
+    return not plan.broker_enabled and not plan.broker_installed_before
+
+
 def restart(plan, installation):
     """Apply the installed files to the running services; returns the model's health."""
     home, runtime = plan.home, plan.runtime
@@ -779,8 +856,9 @@ def restart(plan, installation):
     if plan.native:
         run(["systemd-analyze", "--user", "verify", str(units / "badi-accessibility.service")])
     run(["systemctl", "--user", "daemon-reload"])
-    if not plan.broker_updating:
+    if broker_needs_enable(plan):
         run(["systemctl", "--user", "enable", "badi-broker.service"])
+        plan.broker_enabled = True
     run(["systemctl", "--user", "reset-failed", "badi-broker.service"])
     run(["systemctl", "--user", "restart", "badi-broker.service"])
     probe = wait_model(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")
@@ -853,9 +931,21 @@ def generic_report(plan):
               "Fcitx's manual fields (Tab requests in apps you allow with badi app ID on), the editors "
               "(Obsidian, Neovim, Bash: scripts/install-editors.py) and the LibreOffice Writer spelling extension "
               "work without it. The observer is installed and starts by itself in a Hyprland session.")
+    else:
+        print("Grey preview: Hyprland animates new layers, so the preview fades in until a layer rule exempts "
+              "it. Add one line — hyprland.lua: "
+              "hl.layer_rule({ name = \"badi-preview-noanim\", match = { namespace = \"^badi-writing-preview$\" }, "
+              "no_anim = true }); hyprland.conf: layerrule = noanim, badi-writing-preview. "
+              "Suggestions work either way.")
 
 
 def report(plan, probe):
+    if not plan.graphical_session:
+        print("Warning: graphical-session.target is not active in this session, and every Badi service starts "
+              "with it. Badi runs now, but after the next login it starts only once the session activates that "
+              "target: log in through a display manager, start the compositor with uwsm "
+              "(uwsm start hyprland.desktop), or run `systemctl --user start graphical-session.target` "
+              "from your compositor's startup.", flush=True)
     if plan.session_disabled:
         print("The session helper is disabled (systemctl --user enable --now badi-session.service turns it on); "
               "suspend, session switches, battery modes and screen sharing are not reported to the broker.")

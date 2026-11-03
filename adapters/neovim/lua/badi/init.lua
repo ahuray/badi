@@ -162,7 +162,7 @@ end
 --- the same extmark with it.
 local function extend(text, word)
   local visible = state.visible
-  if not visible or state.accepting or type(text) ~= 'string' or not matches(visible.snapshot)
+  if not visible or not visible.text or state.accepting or type(text) ~= 'string' or not matches(visible.snapshot)
       or not context.insertable(text) or text:sub(1, #visible.text) ~= visible.text then return end
   local s = visible.snapshot
   local ok = pcall(api.nvim_buf_set_extmark, s.buf, namespace, s.row, s.col, {
@@ -229,6 +229,7 @@ local function hold_terminal(holds)
 end
 
 local accept
+local pick
 
 local function on_key(kind, lhs)
   local visible = state.visible
@@ -242,6 +243,19 @@ local function on_key(kind, lhs)
   invalidate('cancel')
   local remaining = vim.fn.maparg(lhs, 'i', false, true)
   -- Never feed the key back to this mapping.
+  if remaining.buffer == 1 and remaining.desc == 'Badi' then return end
+  api.nvim_feedkeys(api.nvim_replace_termcodes(lhs, true, false, true), 'mt', false)
+end
+
+local function on_pick_key(index, lhs)
+  local visible = state.visible
+  if visible and state.accepting then return end
+  if visible and visible.list and matches(visible.snapshot) then
+    pick(index)
+    return
+  end
+  invalidate('cancel')
+  local remaining = vim.fn.maparg(lhs, 'i', false, true)
   if remaining.buffer == 1 and remaining.desc == 'Badi' then return end
   api.nvim_feedkeys(api.nvim_replace_termcodes(lhs, true, false, true), 'mt', false)
 end
@@ -272,17 +286,84 @@ local function show(s, text, word)
   return true
 end
 
+--- Draws the numbered alternative words at the caret (ADR 0014). Only the
+--- digits the list numbers are Badi's, and only while it is drawn. It
+--- stands where the shown suggestion stood, its leading space included.
+local function show_list(s, words, lead)
+  if type(words) ~= 'table' or #words < 1 or #words > 4 then return false end
+  local parts = {}
+  for index, word in ipairs(words) do
+    if type(word) ~= 'string' or not context.insertable(word) then return false end
+    parts[#parts + 1] = index .. '.' .. word
+  end
+  local text = lead .. table.concat(parts, '  ')
+  local ok, mark = pcall(api.nvim_buf_set_extmark, s.buf, namespace, s.row, s.col, {
+    virt_text = { { text, 'BadiSuggestion' } },
+    virt_text_pos = 'inline',
+    hl_mode = 'combine',
+  })
+  if not ok then return false end
+  if api.nvim__ns_set then pcall(api.nvim__ns_set, namespace, { wins = { s.win } }) end
+  local visible = { snapshot = s, list = words, list_text = text, mark = mark, saved = {} }
+  state.visible = visible
+  state.shown = nil
+  for index = 1, #words do
+    local lhs = tostring(index)
+    local previous = vim.fn.maparg(lhs, 'i', false, true)
+    visible.saved[lhs] = (previous.buffer == 1 and previous.desc ~= 'Badi') and previous or false
+    vim.keymap.set('i', lhs, function() on_pick_key(index, lhs) end,
+      { buffer = s.buf, nowait = true, silent = true, desc = 'Badi' })
+  end
+  set_status('alternative_list')
+  return true
+end
+
+--- A digit on a shown numbered list: the picked word's continuation
+--- replaces the list, accepted like any suggestion.
+pick = function(index)
+  local visible = state.visible
+  if not visible or not visible.list then return end
+  local word = visible.list[index]
+  if not word then return end
+  local s = visible.snapshot
+  local generation = state.generation
+  state.pending = { generation = generation, snapshot = s }
+  set_status('thinking')
+  state.bridge:request({ op = 'pick', word = word }, function(reply)
+    if state.generation ~= generation then return end
+    state.pending = nil
+    if not reply.ok or not context.insertable(reply.text) or not matches(s) then
+      set_status(reply.ok and (reply.text == nil and 'no_suggestion' or 'stale') or reply.reason)
+      invalidate('cancel')
+      return
+    end
+    clear_preview()
+    if not show(s, reply.text, reply.word) then
+      set_status('stale')
+      state.bridge:notify({ op = 'cancel' })
+    end
+  end)
+end
+
 --- Replaces the shown suggestion with one that starts with another word. It
 --- stays drawn until the answer arrives; no answer withdraws it.
 local function alternative()
   local visible = state.visible
   local s = visible.snapshot
+  local lead = visible.text and visible.text:sub(1, 1) == ' ' and ' ' or ''
   local generation = state.generation
   state.pending = { generation = generation, snapshot = s }
   set_status('thinking')
   state.bridge:request({ op = 'alternative' }, function(reply)
     if state.generation ~= generation then return end
     state.pending = nil
+    if reply.ok and reply.words and matches(s) then
+      clear_preview()
+      if show_list(s, reply.words, lead) then return end
+      set_status('stale')
+      state.bridge:notify({ op = 'cancel' })
+      return
+    end
     if not reply.ok or not context.insertable(reply.text) or not matches(s) then
       set_status(reply.ok and (reply.text == nil and 'no_suggestion' or 'stale') or reply.reason)
       invalidate('cancel')
@@ -302,7 +383,7 @@ function M.request(explicit)
   explicit = explicit == true
   if not state.config then return end
   local visible = state.visible
-  if explicit and visible and not state.accepting and not state.pending and state.bridge
+  if explicit and visible and visible.text and not state.accepting and not state.pending and state.bridge
       and matches(visible.snapshot) then
     return alternative()
   end
@@ -384,7 +465,7 @@ end
 
 accept = function(acceptance)
   local visible = state.visible
-  if not visible or state.accepting or not state.bridge then return end
+  if not visible or not visible.text or state.accepting or not state.bridge then return end
   local s = visible.snapshot
   local generation = state.generation
   state.accepting = true
@@ -535,7 +616,7 @@ end
 
 --- For tests only: the preview text currently shown, if any.
 function M._preview()
-  return state.visible and state.visible.text or nil
+  return state.visible and (state.visible.text or state.visible.list_text) or nil
 end
 
 --- The shown preview's virtual text chunks, for tests.

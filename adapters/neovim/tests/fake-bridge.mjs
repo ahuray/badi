@@ -47,7 +47,12 @@ for await (const line of createInterface({ input: process.stdin })) {
     send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
   } else if (command.op === 'alternative') {
     if (candidate === null) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); continue; }
+    if (candidate === ' for your time') { candidate = null; send({ id: command.id, ok: true, words: ['so', 'again'] }); continue; }
+    if (candidate === ' so much') { candidate = null; send({ id: command.id, ok: true, words: ['again'] }); continue; }
     candidate = ALTERNATIVES.get(candidate) ?? null;
+    send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
+  } else if (command.op === 'pick') {
+    candidate = { so: ' so much', again: ' again', for: ' for your time' }[command.word] ?? null;
     send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
   } else if (command.op === 'accept') {
     const text = candidate === null ? null

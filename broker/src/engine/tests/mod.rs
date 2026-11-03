@@ -439,6 +439,7 @@ async fn prepare_commit_result_case(
                 action,
                 fingerprint: update.fingerprint.clone(),
                 suggestion_id: Some(payload.suggestion_id),
+                word: None,
             },
             Some("applied-case".to_owned()),
         )

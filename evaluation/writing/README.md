@@ -211,6 +211,8 @@ qualification. Short and uncertain input retains its adapter hint.
 
 The revision lane measures the grammar check and refinement of
 [ADR 0012](../../docs/decisions/0012-explicit-revision-of-one-selection.md)
+and the synonyms of
+[ADR 0013](../../docs/decisions/0013-synonyms-for-one-short-selection.md)
 from the terminal; the page has no revision tab. Each selection goes through
 the broker's own revision request (`revision::runtime::complete`) to the
 installed revision model in the broker's revision launch, and the engine's
@@ -224,7 +226,8 @@ node evaluation/writing/lab/run.mjs \
   --output output/writing/my-revision-run
 ```
 
-- **Modes.** `revision_grammar` and `revision_refine` run apart from the
+- **Modes.** `revision_grammar`, `revision_refine` and `revision_synonyms`
+  run apart from the
   prediction modes and take no budget, token, cache or launch option. One
   runtime serves the run, as the broker keeps one; modes, then languages,
   then cases run in seeded order, so a language's prompt prefix stays cached
@@ -235,14 +238,18 @@ node evaluation/writing/lab/run.mjs \
   and optional `before` (512) and `after` (128). A `grammar` case is
   `kind: "error"` with its `expected` corrections, or `kind: "correct"`,
   which should come back unchanged. A `refine` case lists `facts` found in
-  its selection. Expected text and facts never reach the worker.
+  its selection. A `synonyms` case selects a word or short phrase (the
+  broker's bound applies) with its `expected` synonyms. Expected text and
+  facts never reach the worker.
 - **Records** keep the outcome (`shown`, the gate's class such as
   `unchanged` or `edits`, `truncated`, `timeout`, `failed`), the model's
   answer, the shown text, changed-word share, latency, generated tokens, the
   answer's confidently detected language and the broker's field-language
   choice. **Fixed** means shown and equal to an expected correction after
   whitespace normalization; **facts kept** means every declared fact appears
-  in the shown text.
+  in the shown text; **matched** (synonyms) means shown and equal to an
+  expected synonym the same way. The development set below has no synonym
+  cases yet, so no synonym score is claimed.
 
 The [development set](lab/examples/revision-development.json) has 27 cases
 per language: 15 grammar errors (three mid-sentence), 4 correct inputs (one

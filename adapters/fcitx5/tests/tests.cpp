@@ -762,6 +762,59 @@ void foreignImeAndManualKeysYieldCooperatively() {
           "an acceptance in flight is not replaced");
 }
 
+void alternativeListBindsAndPicks() {
+    const PanelObservation ownedCandidates{.candidates = true, .candidatesOwnedByBadi = true};
+    auto listing = focusedState();
+    const auto listUpdate = explicitContext(listing);
+    const auto shown = suggestionFor(listUpdate);
+    check(listing.showSuggestion(shown, 100), "alternative list setup should display");
+    const AlternativeList list{shown.coordinates, "request-1", "suggestion-1", {"so", "again"}, 500};
+    check(listing.showAlternativeList(list, 100) && listing.alternativeList() &&
+              !listing.suggestionVisible(),
+          "a list replaces the shown suggestion");
+    check(alternativeListPick(list.words, '2') == std::optional<std::string>{"again"},
+          "a digit names its listed word");
+    check(!alternativeListPick(list.words, '3'), "a digit past the list types normally");
+    check(!listing.requestAlternativePick("never", 100, ownedCandidates),
+          "an unlisted word is never picked");
+    const auto pick = listing.requestAlternativePick("again", 100, ownedCandidates);
+    check(pick && pick->word == "again" && pick->suggestionId == "suggestion-1" &&
+              !listing.alternativeList(),
+          "a pick names its word and spends the list");
+    check(!listing.requestAlternativePick("again", 100, ownedCandidates),
+          "a spent list cannot pick twice");
+
+    // The broker clears the shown suggestion (superseded) before its list
+    // arrives; the list naming that retired suggestion still shows.
+    auto cleared = focusedState();
+    const auto clearedUpdate = explicitContext(cleared);
+    const auto clearedShown = suggestionFor(clearedUpdate);
+    check(cleared.showSuggestion(clearedShown, 100), "cleared-list setup should display");
+    check(cleared.clearSuggestionIf(clearedShown.coordinates,
+                                    std::optional<std::string>{"suggestion-1"}),
+          "the superseded clear retires the shown suggestion");
+    check(cleared.showAlternativeList(
+              AlternativeList{clearedShown.coordinates, "request-2", "suggestion-1", {"so"}, 500},
+              100),
+          "a list naming the just-cleared suggestion shows");
+
+    // A newer suggestion ends the retired id's claim to a list.
+    auto replaced = focusedState();
+    const auto replacedUpdate = explicitContext(replaced);
+    const auto replacedShown = suggestionFor(replacedUpdate);
+    check(replaced.showSuggestion(replacedShown, 100), "replaced-list setup should display");
+    check(replaced.clearSuggestionIf(replacedShown.coordinates,
+                                     std::optional<std::string>{"suggestion-1"}),
+          "the clear retires the first suggestion");
+    auto newer = replacedShown;
+    newer.suggestionId = "suggestion-2";
+    check(replaced.showSuggestion(newer, 100), "the newer suggestion shows");
+    check(!replaced.showAlternativeList(
+              AlternativeList{replacedShown.coordinates, "request-3", "suggestion-1", {"so"}, 500},
+              100),
+          "no list for a suggestion a newer one replaced");
+}
+
 void preInputKeysConsumeOnlyBadiUi() {
     const PanelObservation owned{.candidates = true, .candidatesOwnedByBadi = true};
     const PanelObservation foreign{.preedit = true};
@@ -2137,6 +2190,7 @@ int main(int argc, char **argv) {
         {"stale and duplicate commit", staleAndDuplicateCommitsCannotDispatch},
         {"missing candidate ownership", missingCandidateCannotAuthorizeAcceptance},
         {"foreign IME and manual keys", foreignImeAndManualKeysYieldCooperatively},
+        {"alternative list binds and picks", alternativeListBindsAndPicks},
         {"shifted letter chord normalization",
          shiftedLetterChordUsesFcitxNormalization},
     };

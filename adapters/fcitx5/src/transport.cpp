@@ -35,9 +35,9 @@ constexpr std::size_t kMaxTargetBytes = 4096;
 constexpr std::uint64_t kPolicyReplyMs = 2'000;
 constexpr std::uint64_t kMaxSafeCounter = (std::uint64_t{1} << 53U) - 1U;
 // The hello's capabilities, each of which hello.ack must enable exactly once.
-constexpr std::array<std::string_view, 8> kCapabilities{
+constexpr std::array<std::string_view, 9> kCapabilities{
     "context", "suggestion", "commit.dispatched_unverified", "text_replacement", "control", "policy",
-    "long_reading_window", "selection_revision"};
+    "long_reading_window", "selection_revision", "alternative_list"};
 
 bool exactKeys(const Json &value,
                std::initializer_list<std::string_view> keys) {
@@ -336,7 +336,8 @@ std::optional<Json> revisionEnvelope(const RevisionUpdate &update, std::uint64_t
     if (!validLinuxAppId(update.appId) || !validOpaqueId(update.targetId) ||
         !validSessionId(coordinates.sessionId) || coordinates.fingerprint.size() < 16 ||
         !validOpaqueId(coordinates.fingerprint) || !validOpaqueId(update.requestId) ||
-        (update.mode != "grammar" && update.mode != "refine") || !validLanguageTag(selection.language) ||
+        (update.mode != "grammar" && update.mode != "refine" && update.mode != "synonyms") ||
+        !validLanguageTag(selection.language) ||
         !validContextText(selection.before) || !validContextText(selection.after) || !before ||
         before->size() > kMaxBeforeScalars || !after || after->size() > kMaxAfterScalars || !selected ||
         !safeRevisionText(selection.selected, kMaxSelectedScalars) || span != selected->size()) {
@@ -733,6 +734,17 @@ public:
             &request.coordinates));
     }
 
+    bool requestAlternativePick(const AlternativePickRequest &request) {
+        if (!ready()) return false;
+        return queue(envelope(
+            "control.request", request.controlId, nowMs(),
+            Json{{"action", "alternatives"},
+                 {"fingerprint", request.coordinates.fingerprint},
+                 {"suggestion_id", request.suggestionId},
+                 {"word", request.word}},
+            &request.coordinates));
+    }
+
     bool requestDismissal(const DismissRequest &request) {
         if (!ready()) return false;
         return queue(envelope(
@@ -955,6 +967,7 @@ private:
             if (!ready_) return false;
             if (type == "policy.status") return handlePolicy(value, payload);
             if (type == "suggestion.show") return handleSuggestion(value, payload);
+            if (type == "suggestion.list") return handleAlternativeList(value, payload);
             if (type == "suggestion.clear") return handleClear(value);
             if (type == "control.result") {
                 return sessionControlResult(value, payload);
@@ -1101,6 +1114,45 @@ private:
         return true;
     }
 
+    bool handleAlternativeList(const Json &value, const Json &payload) {
+        if (!exactKeys(value, {"v", "id", "type", "session_id",
+                               "focus_epoch", "revision", "mono_ms", "payload"}) ||
+            !value["id"].is_string() ||
+            !validOpaqueId(value["id"].get_ref<const std::string &>()) ||
+            !exactKeys(payload, {"fingerprint", "suggestion_id", "words", "ttl_ms", "provider"}) ||
+            !payload["suggestion_id"].is_string() ||
+            !validOpaqueId(payload["suggestion_id"].get_ref<const std::string &>()) ||
+            !payload["words"].is_array() || payload["words"].empty() ||
+            payload["words"].size() > 4 ||
+            !payload["ttl_ms"].is_number_unsigned() ||
+            payload["ttl_ms"].get<std::uint64_t>() < 1 ||
+            payload["ttl_ms"].get<std::uint64_t>() > 120000 ||
+            (payload["provider"] != "phrase_v1" && payload["provider"] != "local_model")) {
+            return false;
+        }
+        std::vector<std::string> words;
+        for (const auto &word : payload["words"]) {
+            if (!word.is_string()) return false;
+            const auto clean = sanitizeSuggestion(word.get_ref<const std::string &>());
+            if (!clean || clean->starts_with(' ') || clean->find(' ') != std::string::npos) {
+                return false;
+            }
+            words.push_back(*clean);
+        }
+        const auto coordinates = parseCoordinates(value, payload);
+        if (!coordinates) return false;
+        if (callbacks_.onAlternativeList) {
+            callbacks_.onAlternativeList(AlternativeList{
+                .coordinates = *coordinates,
+                .requestId = value["id"].get<std::string>(),
+                .suggestionId = payload["suggestion_id"].get<std::string>(),
+                .words = std::move(words),
+                .expiresAtMs = nowMs() + payload["ttl_ms"].get<std::uint64_t>(),
+            });
+        }
+        return true;
+    }
+
     bool handleClear(const Json &value) {
         return dispatchSuggestionClear(value, callbacks_.onClear);
     }
@@ -1111,7 +1163,8 @@ private:
             !exactKeys(payload, {"fingerprint", "revision_id", "mode", "original", "text", "ttl_ms", "provider"}) ||
             !payload["revision_id"].is_string() ||
             !validOpaqueId(payload["revision_id"].get_ref<const std::string &>()) ||
-            (payload["mode"] != "grammar" && payload["mode"] != "refine") || !payload["original"].is_string() ||
+            (payload["mode"] != "grammar" && payload["mode"] != "refine" &&
+             payload["mode"] != "synonyms") || !payload["original"].is_string() ||
             !payload["text"].is_string() ||
             !safeRevisionText(payload["original"].get_ref<const std::string &>(), kMaxSelectedScalars) ||
             !safeRevisionText(payload["text"].get_ref<const std::string &>(), kMaxRevisedScalars) ||
@@ -1296,6 +1349,10 @@ bool Transport::cancelRequest(const Coordinates &coordinates) {
 bool Transport::requestAcceptance(const AcceptRequest &request) {
     return impl_->requestAcceptance(request);
 }
+bool Transport::requestAlternativePick(const AlternativePickRequest &request) {
+    return impl_->requestAlternativePick(request);
+}
+
 bool Transport::requestAlternative(const DismissRequest &request) {
     return impl_->requestAlternative(request);
 }

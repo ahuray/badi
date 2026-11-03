@@ -8,7 +8,7 @@ import { randomFrom, shuffle } from './cases.mjs';
 export const REVISION_SUITE_SCHEMA = 'badi.revision-suite.v1';
 export const REVISION_REQUEST_SCHEMA = 'badi.prediction-lab.revision-request.v1';
 /** Lab modes and the broker revision mode each one runs. */
-export const REVISION_MODES = Object.freeze({ revision_grammar: 'grammar', revision_refine: 'refine' });
+export const REVISION_MODES = Object.freeze({ revision_grammar: 'grammar', revision_refine: 'refine', revision_synonyms: 'synonyms' });
 /** The broker's revision languages and the ISO 639-3 code its detector reports for each. */
 export const REVISION_LANGUAGES = Object.freeze({ en: 'eng', de: 'deu', fr: 'fra', es: 'spa', pt: 'por' });
 // The protocol's bounds (MAX_SELECTED_SCALARS, MAX_BEFORE_CHARS, MAX_AFTER_CHARS);
@@ -49,7 +49,7 @@ export function validateRevisionCase(raw) {
   if (Object.keys(raw).some(key => !caseKeys.has(key))) throw new Error('Unknown revision case field');
   if (typeof raw.id !== 'string' || !identifier.test(raw.id)) throw new Error('Invalid revision case id');
   if (!Object.hasOwn(REVISION_LANGUAGES, raw.language)) throw new Error(`Revision languages are ${Object.keys(REVISION_LANGUAGES).join(', ')}`);
-  if (!['grammar', 'refine'].includes(raw.mode)) throw new Error('A revision case mode is grammar or refine');
+  if (!['grammar', 'refine', 'synonyms'].includes(raw.mode)) throw new Error('A revision case mode is grammar, refine or synonyms');
   const selected = text(raw.selected, 'selected', LIMITS.selected, { line: true, allowEmpty: false });
   const before = text(raw.before ?? '', 'before', LIMITS.before);
   const after = text(raw.after ?? '', 'after', LIMITS.after);
@@ -67,6 +67,17 @@ export function validateRevisionCase(raw) {
         return value;
       });
     }
+  } else if (raw.mode === 'synonyms') {
+    if (!absent(raw.kind) || !absent(raw.facts)) throw new Error('Synonym cases score expected synonyms only');
+    // The broker's synonym_selection bound: a word or short phrase only.
+    const words = selected.trim().split(/\s+/u).filter(Boolean);
+    if (!words.length || words.length > 3 || words.some(word => !/\p{L}/u.test(word)) || /[0-9@.!?;:]/u.test(selected)) {
+      throw new Error('A synonym selection is one to three words with a letter each and no digit, address or sentence mark');
+    }
+    expected = strings(raw.expected, 'expected synonym', value => {
+      if (normalized(value) === normalized(selected)) throw new Error('An expected synonym must differ from the selection');
+      return value;
+    });
   } else {
     if (!absent(raw.kind) || !absent(raw.expected)) throw new Error('Refine cases score kept facts only');
     facts = strings(raw.facts, 'fact', value => {
@@ -104,7 +115,7 @@ export function revisionRequest(raw) {
 export function planRevision(rawCases, modes, seed) {
   const { cases } = validateRevisionSuite({ schema: REVISION_SUITE_SCHEMA, name: 'Plan', cases: rawCases });
   if (!Array.isArray(modes) || !modes.length || new Set(modes).size !== modes.length
-    || modes.some(mode => !['grammar', 'refine'].includes(mode))) throw new Error('Plan distinct revision modes');
+    || modes.some(mode => !['grammar', 'refine', 'synonyms'].includes(mode))) throw new Error('Plan distinct revision modes');
   const random = randomFrom(seed);
   const plan = [];
   for (const mode of shuffle(modes, random)) {
@@ -142,7 +153,7 @@ export function scoreRevision(rawCase, rawResult) {
   const answer = shown ? result.text : result.output ?? null;
   const missing = answer === null ? [...row.facts] : row.facts.filter(fact => !normalized(answer).includes(normalized(fact)));
   return { shown, outcome: result.outcome,
-    gold_match: row.kind === 'error' ? shown && row.expected.some(value => normalized(value) === normalized(result.text)) : null,
+    gold_match: row.kind === 'error' || row.mode === 'synonyms' ? shown && row.expected.some(value => normalized(value) === normalized(result.text)) : null,
     left_unchanged: row.kind === 'correct' ? result.outcome === 'unchanged' : null,
     facts_kept: row.mode === 'refine' && answer !== null ? missing.length === 0 : null,
     missing_facts: row.mode === 'refine' ? missing : [],
@@ -190,6 +201,13 @@ function refine(rows) {
     ...shared(rows) };
 }
 
+function synonyms(rows) {
+  return { cases: rows.length, matched: count(rows, row => row.score.gold_match),
+    shown_other: count(rows, row => row.score.shown && !row.score.gold_match),
+    not_shown: tally(rows.filter(row => !row.score.shown)),
+    ...shared(rows) };
+}
+
 export function summarizeRevision(records) {
   if (!Array.isArray(records)) throw new Error('Revision results must be an array');
   const rows = records.map(record => {
@@ -198,7 +216,7 @@ export function summarizeRevision(records) {
       score: scoreRevision(record.case, record.result) };
   });
   const byMode = {};
-  for (const [mode, summarize] of [['grammar', grammar], ['refine', refine]]) {
+  for (const [mode, summarize] of [['grammar', grammar], ['refine', refine], ['synonyms', synonyms]]) {
     const selected = rows.filter(row => row.case.mode === mode);
     if (!selected.length) continue;
     const languages = [...new Set(selected.map(row => row.case.language))].sort();
@@ -206,5 +224,5 @@ export function summarizeRevision(records) {
       by_language: Object.fromEntries(languages.map(language => [language, summarize(selected.filter(row => row.case.language === language))])) };
   }
   return { by_mode: byMode,
-    meaning: 'Development cases. Grammar: fixed means shown and equal to an expected correction after whitespace normalization; a correct input should come back unchanged. Refine: facts kept means every declared fact appears in the shown text. Latency is the model call on a warm runtime, startup excluded; nearest-rank percentiles.' };
+    meaning: 'Development cases. Grammar: fixed means shown and equal to an expected correction after whitespace normalization; a correct input should come back unchanged. Refine: facts kept means every declared fact appears in the shown text. Synonyms: matched means shown and equal to an expected synonym after whitespace normalization. Latency is the model call on a warm runtime, startup excluded; nearest-rank percentiles.' };
 }

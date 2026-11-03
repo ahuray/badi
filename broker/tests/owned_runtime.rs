@@ -56,6 +56,7 @@ fn main() -> ExitCode {
         runtime_rejects_wrong_artifacts_bad_health_early_exit_and_orphans,
         failed_warm_up_leaves_the_owned_runtime_serving,
         owned_runtime_serves_alternatives,
+        owned_runtime_serves_alternative_words,
         owned_runtime_death_stops_broker_and_retires_sessions,
     ])
 }
@@ -180,6 +181,7 @@ async fn owned_runtime_serves_alternatives() -> TestResult {
         AlternativeAsk {
             excluded: vec!["for".to_owned()],
             new_word: false,
+            desired: None,
         },
     )
     .await?;
@@ -187,6 +189,34 @@ async fn owned_runtime_serves_alternatives() -> TestResult {
     assert!(
         text.as_deref().is_some_and(|text| text.starts_with("so ")),
         "the runtime's client continues the first token not shown yet: {text:?}"
+    );
+    Ok(())
+}
+
+async fn owned_runtime_serves_alternative_words() -> TestResult {
+    let fixture = OwnedFixture::new()?;
+    let runtime = fixture.launch(FixtureBehavior::Ready)?.spawn().await?;
+    let words = CompletionProvider::alternative_words(
+        &runtime,
+        ProviderRequest {
+            before: "Thank you ".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+            vocabulary: None,
+        },
+        CancellationToken::new(),
+        RequestTrigger::Explicit,
+        AlternativeAsk {
+            excluded: vec!["for".to_owned()],
+            new_word: false,
+            desired: None,
+        },
+    )
+    .await?;
+    assert!(
+        words.iter().any(|word| word.eq_ignore_ascii_case("so"))
+            && !words.iter().any(|word| word.eq_ignore_ascii_case("for")),
+        "the owned runtime forwards the list words its client finishes: {words:?}"
     );
     Ok(())
 }

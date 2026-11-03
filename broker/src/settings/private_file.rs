@@ -24,7 +24,7 @@ pub(crate) fn ensure_private_directory(path: &Path) -> Result<(), PrivateStorage
     }
 
     let parent = path.parent().ok_or(PrivateStorageError::PathNotAbsolute)?;
-    fs::create_dir_all(parent)?;
+    fs::create_dir_all(parent).map_err(directory_creation_error)?;
     let mut builder = fs::DirBuilder::new();
     builder.mode(PRIVATE_DIRECTORY_MODE);
     match builder.create(path) {
@@ -32,10 +32,22 @@ pub(crate) fn ensure_private_directory(path: &Path) -> Result<(), PrivateStorage
             fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE))?;
         }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(directory_creation_error(error)),
     }
     let metadata = fs::symlink_metadata(path)?;
     validate_private_directory_metadata(&metadata)
+}
+
+/// A home the process may not write (a read-only mount namespace, or a
+/// parent without write permission) can never gain a safe private
+/// directory by restarting, so it is unsafe rather than transient.
+fn directory_creation_error(error: io::Error) -> PrivateStorageError {
+    // EPERM, EACCES, EROFS.
+    if matches!(error.raw_os_error(), Some(1 | 13 | 30)) {
+        PrivateStorageError::UnsafeDirectory
+    } else {
+        error.into()
+    }
 }
 
 fn validate_private_directory_metadata(metadata: &fs::Metadata) -> Result<(), PrivateStorageError> {

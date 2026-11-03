@@ -8,6 +8,67 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Fixed the broker crash-looping on a fresh package-only install: the
+  unit's read-only home skipped the missing `~/.config/badi`, so the
+  broker could never create its private settings directory. systemd
+  now creates it (`ConfigurationDirectory`), and a settings directory
+  that cannot be created is reported as unsafe (exit 78, no retry)
+  instead of a transient I/O error.
+- Fixed suggestions never appearing in the Claude desktop app: its
+  composer sits 26 ancestors below its document, past the observer's
+  24-level origin climb, so every snapshot was denied. The context
+  climbs now take the frame bound and degrade quietly; origin
+  determination keeps its shallow fail-closed bound.
+- The numbered alternative list now works in Obsidian and Neovim too:
+  Ctrl+Shift+Space shows the words where the suggestion stood, a digit
+  picks one, and its continuation is accepted like any suggestion. The
+  broker admits `alternative_list` from those editor kinds, not just
+  the Fcitx addon (ADR 0014, extended).
+- Fixed the numbered alternative list never appearing with the local
+  model: the owned runtime did not forward the list-words call to its
+  client, so every ask answered with the shown continuation again; and
+  the addon dropped the list because the broker's superseded clear had
+  already retired the suggestion it named.
+- Ctrl+Shift+Space now cycles past a revision mode that found nothing
+  to change, so synonyms are reachable for selections that are already
+  correct instead of the cycle restarting at grammar.
+- Ctrl+Shift+Space on a shown suggestion in an Fcitx app now lists up to
+  four other first words as numbered candidates; a digit or a click shows
+  that word's continuation, bound and accepted like any suggestion. The
+  editor clients keep cycling one at a time (ADR 0014).
+- A selected word or short phrase can take a synonym: Ctrl+Shift+Space
+  cycles grammar, a refined wording, then a synonym that fits the
+  sentence — and another on each further press — shown with its change
+  marked and applied by Tab like any revision (ADR 0013).
+- A quality and portability pass from a full audit, each fix with a
+  regression test. The screen-share hold no longer lifts when `pw-dump` is
+  missing (only a `pw-dump` that ran and could not reach PipeWire settles
+  the screen as unshared), a stalled `pw-dump` is restarted, compact
+  one-line dumps are read, and the Debian package now depends on
+  `pipewire-bin`. Obsidian accepts a spelling correction mid-note, with
+  text after the caret. A missing preview extent or a client that vanishes
+  before its credentials are read can no longer crash the field observer.
+- The broker sends a commit grant only to an adapter that can report a
+  landed commit, an invalid landed status consumes its one-shot grant and
+  retires the pre-commit context, and a desktop hold is reported to the
+  session helper even when the outcome fence fails. Failed connections
+  and writers leave a content-free journal line.
+- Other desktops, named sooner: the installers say Badi needs a Wayland
+  session (not X11) and warn when `graphical-session.target` is inactive,
+  an interrupted first install no longer leaves the broker disabled at
+  login, a generic Hyprland session is told the grey preview's layer rule
+  in both config syntaxes, `badi doctor` names a systemd-skipped broker
+  and a pre-5.1.23 Fcitx on Hyprland or Sway, the Fcitx build floor is the
+  tested 5.1.7, and the AUR candidate no longer forces Hyprland and
+  Quickshell on every Arch user (they are optdepends now).
+- The Omarchy panel updater enables the plugin whenever Omarchy reports
+  it disabled — a run that once stopped after writing files finishes the
+  job — and writes its receipt only after the restarted panel answers.
+- CI now runs the LibreOffice Writer integration lane and the keyring
+  style-key delivery test (which fails instead of skipping without a
+  keyring), builds the Fcitx addon with warnings as errors on Arch,
+  Debian and Ubuntu, and checks out full history for the agent-rules gate,
+  which now counts only a changelog line under the newest heading.
 - Rich editors on websites (mail composers, ProseMirror, Lexical, Quill)
   suggest after a space again: the observer reads a contenteditable's
   no-break spaces as Chromium sends them, and a block-scoped snapshot agrees
@@ -52,6 +113,15 @@ Unreleased in the same commit.
 - Alternatives right after a finished word (`attached the`) start the next
   word; before, they could only end that word another way, so presses
   showed the same suggestion again.
+- The desktop installer lists every writing model that fits the device,
+  the recommended one first, with its size, screen result and licence, so
+  someone who declines a model's terms can pick another (Qwen3 is
+  Apache-2.0). Before, declining the recommended model's terms ended the
+  install with nothing to choose. A model download now prints a line even
+  without a terminal, and one when its hash matches.
+- The panel's Writing model row names the licence with the model in use
+  (`Qwen3 0.6B, Apache-2.0 · Recommended: Gemma 3 1B`) instead of after the
+  recommended model's name.
 - After the language question, the panel's first run asks where Badi
   should suggest: on every website or only the sites you add, and a switch
   for each supported app it finds installed, as settings have them. Done

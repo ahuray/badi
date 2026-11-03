@@ -601,17 +601,23 @@ class FieldBackend:
         visits = [0]
         child, done = node, False
         # Text found on the way counts only once a `document web` ancestor
-        # confirms it is inside the field's own document.
-        for ancestor in self.ancestors(node.get_parent()):
-            index = child.get_index_in_parent()
-            for sibling_index in range(min(index, MAX_CHILDREN) - 1, -1, -1):
-                if done:
-                    break
-                sibling = ancestor.get_child_at_index(sibling_index)
-                done = sibling is not None and self.window_walk(sibling, found, visits, 0)
-            if ancestor.get_role_name() == "document web":
-                return self.window_result(found)
-            child = ancestor
+        # confirms it is inside the field's own document. The climb is
+        # structural, so it takes the frame bound and gives up quietly.
+        try:
+            for ancestor in self.ancestors(node.get_parent(), MAX_FRAME_DEPTH):
+                index = child.get_index_in_parent()
+                for sibling_index in range(min(index, MAX_CHILDREN) - 1, -1, -1):
+                    if done:
+                        break
+                    sibling = ancestor.get_child_at_index(sibling_index)
+                    done = sibling is not None and self.window_walk(sibling, found, visits, 0)
+                if ancestor.get_role_name() == "document web":
+                    return self.window_result(found)
+                child = ancestor
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
         return None
 
     def window_walk(self, node, found, visits, depth):
@@ -667,23 +673,28 @@ class FieldBackend:
         until = min(time.monotonic() + VOCABULARY_SECONDS, self.deadline - VOCABULARY_HEADROOM_SECONDS)
         found = {"chunks": [], "chars": 0, "visits": 0, "until": until}
         child = node
-        for ancestor in self.ancestors(node.get_parent()):
-            # Once the walk is full only the climb to the document remains,
-            # two calls per level, which the headroom is for.
-            if not self.vocabulary_full(found):
-                index = child.get_index_in_parent()
-                count = min(ancestor.get_child_count(), MAX_CHILDREN)
-                nearest = [*range(min(index, count) - 1, -1, -1), *range(index + 1, count)]
-                for sibling_index in nearest:
-                    if self.vocabulary_full(found):
-                        break
-                    sibling = ancestor.get_child_at_index(sibling_index)
-                    if sibling is not None:
-                        self.vocabulary_walk(sibling, found, 0)
-            if ancestor.get_role_name() == "document web":
-                text = " ".join(found["chunks"])
-                return window_text(text, VOCABULARY_CHARS, tail=False) if text else None
-            child = ancestor
+        try:
+            for ancestor in self.ancestors(node.get_parent(), MAX_FRAME_DEPTH):
+                # Once the walk is full only the climb to the document remains,
+                # two calls per level, which the headroom is for.
+                if not self.vocabulary_full(found):
+                    index = child.get_index_in_parent()
+                    count = min(ancestor.get_child_count(), MAX_CHILDREN)
+                    nearest = [*range(min(index, count) - 1, -1, -1), *range(index + 1, count)]
+                    for sibling_index in nearest:
+                        if self.vocabulary_full(found):
+                            break
+                        sibling = ancestor.get_child_at_index(sibling_index)
+                        if sibling is not None:
+                            self.vocabulary_walk(sibling, found, 0)
+                if ancestor.get_role_name() == "document web":
+                    text = " ".join(found["chunks"])
+                    return window_text(text, VOCABULARY_CHARS, tail=False) if text else None
+                child = ancestor
+        except Denied as error:
+            if error.timed_out:
+                raise
+            return None
         return None
 
     def vocabulary_full(self, found):
@@ -720,9 +731,16 @@ class FieldBackend:
         parts = {name: value for name, value in found.items() if value}
         return parts or None
 
-    def ancestors(self, node):
-        """`node` and its ancestors, nearest first; origin_unavailable past MAX_DOCUMENT_DEPTH."""
-        for _ in range(MAX_DOCUMENT_DEPTH):
+    def ancestors(self, node, limit=MAX_DOCUMENT_DEPTH):
+        """`node` and its ancestors, nearest first; origin_unavailable past `limit`.
+
+        The default bound keeps origin determination fail-closed: a web
+        origin farther up than that is never guessed. Structural climbs
+        that only gather context pass MAX_FRAME_DEPTH and degrade to
+        nothing instead (a deep Electron tree — Claude's composer sits
+        26 below its document — must not deny the whole snapshot).
+        """
+        for _ in range(limit):
             self.budget()
             if node is None:
                 return
@@ -756,6 +774,8 @@ class FieldBackend:
             return None
         rects = {name: {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
                  for name, rect in extents.items() if rect is not None}
+        if not {"frame", "document", "field", "glyph"} <= rects.keys():
+            return None
         offset = caret if reported is None else reported
         if gecko:
             return gecko_calibrated_geometry(rects["frame"], rects["document"], rects["field"], rects["glyph"],

@@ -119,6 +119,36 @@ test('Obsidian automatically requests, accepts one word or all, and isolates eac
   assert.equal(controller.key({ isTrusted: true, key: 'Tab', shiftKey: true }), false);
 });
 
+test('Obsidian Ctrl+Shift+Space lists other first words and a digit picks one', async context => {
+  const { controller, view, client, tick } = await harness(context);
+  await tick(250);
+  assert.equal(controller.text, ' for your time');
+  client.alternative = async () => ({ words: ['so', 'again'] });
+  const picks = [];
+  client.pickAlternative = async word => {
+    picks.push(word);
+    client.acceptWord = ' again';
+    return ' again soon';
+  };
+  const chord = { isTrusted: true, key: ' ', ctrlKey: true, shiftKey: true };
+  assert.equal(controller.key(chord), true);
+  await settle();
+  assert.equal(controller.text, null);
+  assert.deepEqual(controller.listWords, ['so', 'again']);
+  assert.equal(controller.decorations[0].widget.text, ' 1.so  2.again');
+  assert.equal(controller.decorations[0].widget.list, true);
+  assert.equal(controller.key({ isTrusted: true, key: '3' }), false, 'a digit past the list types normally');
+  assert.equal(controller.key({ isTrusted: true, key: '2' }), true);
+  await settle();
+  assert.deepEqual(picks, ['again']);
+  assert.equal(controller.text, ' again soon');
+  assert.equal(controller.listWords, null);
+  client.authorize = mode => Promise.resolve({ text: mode === 'word' ? ' again' : ' again soon' });
+  assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), true);
+  await settle();
+  assert.equal(view.state.doc.toString(), 'thank you again');
+});
+
 test('Obsidian Ctrl+Shift+Space on a shown suggestion replaces it with one that starts with another word', async context => {
   const { controller, view, client, tick } = await harness(context);
   await tick(250);
@@ -165,6 +195,20 @@ test('Obsidian replaces exactly the misspelled suffix including a typed space in
   assert.equal(view.transactions.length, 1);
   assert.equal(view.transactions[0].changes.to - view.transactions[0].changes.from, 'adress '.length);
   assert.equal(view.transactions[0].annotations[1].isolateHistory, 'full');
+  assert.deepEqual(client.reports, [{ text: 'address ', status: 'applied' }]);
+});
+
+test('Obsidian accepts a correction mid-note with text after the caret', async context => {
+  const { controller, view, client, state } = await harness(context);
+  controller.invalidate();
+  const text = 'Please check the adress please';
+  view.state = state(text, 'Please check the adress '.length);
+  client.suggest = async () => { client.replacementBefore = 'adress '; return 'address '; };
+  client.authorize = async () => ({ text: 'address ', replaceBefore: 'adress ' });
+  await controller.request();
+  assert.equal(controller.text, 'address ');
+  await controller.accept('word');
+  assert.equal(view.state.doc.toString(), 'Please check the address please');
   assert.deepEqual(client.reports, [{ text: 'address ', status: 'applied' }]);
 });
 

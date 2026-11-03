@@ -234,11 +234,39 @@ def control(arguments, endpoint=None, *, input_text=None):
 
 
 def service_state():
-    fields = badi_install.unit_properties(SERVICE, "LoadState", "ActiveState", "SubState", "UnitFileState", timeout=4)
-    return {"loaded": fields.get("LoadState") == "loaded",
-            "active": fields.get("ActiveState", "unknown"),
-            "state": fields.get("SubState", "unknown"),
-            "autostart": fields.get("UnitFileState") == "enabled"}
+    fields = badi_install.unit_properties(SERVICE, "LoadState", "ActiveState", "SubState", "UnitFileState",
+                                          "ConditionResult", "ConditionTimestampMonotonic", timeout=4)
+    state = {"loaded": fields.get("LoadState") == "loaded",
+             "active": fields.get("ActiveState", "unknown"),
+             "state": fields.get("SubState", "unknown"),
+             "autostart": fields.get("UnitFileState") == "enabled"}
+    # The unit starts only with WAYLAND_DISPLAY; systemd skipping it in an
+    # X11 (or non-graphical) session is that condition, named in the report.
+    if (state["active"] == "inactive" and fields.get("ConditionResult") == "no"
+            and fields.get("ConditionTimestampMonotonic", "0") not in ("", "0")):
+        state["condition_unmet"] = True
+    return state
+
+
+def fcitx_version_problem():
+    """Fcitx before 5.1.23 on a compositor offering input-method-v2
+    (Hyprland, Sway): there its wayland_v2 frontend stops Chromium-based
+    apps sending the text around the caret, so suggestions silently thin
+    out (the installer refuses the same combination; a package cannot)."""
+    if not (os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") or os.environ.get("SWAYSOCK")):
+        return None
+    result = subprocess.run(["fcitx5", "--version"], capture_output=True, text=True, timeout=5)
+    match = re.fullmatch(r"\s*(\d+)\.(\d+)\.(\d+)\S*\s*", result.stdout or "")
+    if not match:
+        return None
+    version = tuple(int(part) for part in match.groups())
+    if version >= (5, 1, 23):
+        return None
+    return {"code": "fcitx_too_old_for_input_method_v2",
+            "message": f"Fcitx {'.'.join(map(str, version))} predates 5.1.23, whose wayland_v2 frontend "
+                       "keeps Chromium-based apps' text around the caret current on this compositor.",
+            "action": "Update Fcitx to 5.1.23 or later; until then, observed and IME-parity fields in "
+                      "Chromium-based apps may get few or stale suggestions."}
 
 
 FCITX_UNIT = "omarchy-fcitx5.service"
@@ -627,8 +655,16 @@ def health_report():
         startup = startup_problem() if report["service"]["active"] == "failed" else None
         if startup:
             problems.append(startup)
-        problems.append({"code": "broker_unreachable", "message": report["error"],
-                         "action": "Run badi service start, then badi doctor. Model startup takes a few seconds."})
+        if report["service"].get("condition_unmet"):
+            problems.append({"code": "wayland_session_required",
+                             "message": "The Badi service was skipped by systemd: it starts only in a Wayland "
+                                        "session (WAYLAND_DISPLAY), and this session has none.",
+                             "action": "Log into a Wayland session (X11 is not supported). A compositor "
+                                       "launched from a tty needs uwsm or a display manager so the "
+                                       "graphical session exports WAYLAND_DISPLAY to user services."})
+        else:
+            problems.append({"code": "broker_unreachable", "message": report["error"],
+                             "action": "Run badi service start, then badi doctor. Model startup takes a few seconds."})
     if report["service"]["active"] == "failed":
         problems.append({"code": "service_failed", "message": "The Badi service stopped on a startup error that retrying cannot fix.",
                          "action": "Resolve the startup problem, then run badi service restart."})
@@ -650,6 +686,13 @@ def health_report():
     elif report["native"]["addon_loaded"] is False:
         problems.append({"code": "native_addon_unavailable", "message": "The running Fcitx service has not loaded Badi.",
                          "action": "Check the native installation in the Badi runbook. Native manual, observed and IME-parity fields all need the loaded addon."})
+    if report["native"].get("addon_loaded") and report["native"].get("launcher") == "session":
+        try:
+            version_problem = fcitx_version_problem()
+        except (RuntimeError, OSError, subprocess.SubprocessError):
+            version_problem = None
+        if version_problem:
+            problems.append(version_problem)
     install = report["install"] = install_state()
     running = install.get("running_broker") or {}
     if install.get("desktop") is None:

@@ -507,7 +507,12 @@ class DownloadModelTests(unittest.TestCase):
     def test_a_checked_download_becomes_visible_whole(self):
         with tempfile.TemporaryDirectory() as temporary:
             data = b'weights-0123456789'
-            target = self.download(temporary, data, self.Response(data))
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                target = self.download(temporary, data, self.Response(data))
+            self.assertEqual(output.getvalue(), 'Downloading Test (0.00 GB) from huggingface.co/example/test\n'
+                             'test.gguf matches its pinned size and SHA-256.\n',
+                             'without a terminal a log still shows the download')
             self.assertEqual(target.read_bytes(), data)
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
             self.assertEqual(os.listdir(temporary), ['test.gguf'])

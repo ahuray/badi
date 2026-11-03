@@ -357,6 +357,7 @@ async fn pause_and_dismiss_cancel_eligibility() {
                 action: ControlAction::Dismiss,
                 fingerprint: second.fingerprint,
                 suggestion_id: Some(payload.suggestion_id),
+                word: None,
             },
             None,
         )

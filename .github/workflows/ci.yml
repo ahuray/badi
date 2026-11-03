@@ -222,8 +222,8 @@ jobs:
             > /etc/pacman.d/mirrorlist
           pacman -Syyu --noconfirm
           pacman -S --needed --noconfirm \
-            at-spi2-core ca-certificates cmake dbus fcitx5 gcc git ninja nlohmann-json python python-gobject
-          pacman -Q at-spi2-core cmake dbus fcitx5 gcc ninja nlohmann-json python python-gobject
+            at-spi2-core ca-certificates cmake dbus fcitx5 gcc git gnome-keyring libsecret ninja nlohmann-json python python-gobject
+          pacman -Q at-spi2-core cmake dbus fcitx5 gcc gnome-keyring libsecret ninja nlohmann-json python python-gobject
       - name: Check out source
         uses: actions/checkout@v7
         with:
@@ -231,7 +231,7 @@ jobs:
       - name: Build and test the cooperative addon
         run: |
           cmake -S adapters/fcitx5 -B adapters/fcitx5/build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DBADI_WERROR=ON
           cmake --build adapters/fcitx5/build
           ctest --test-dir adapters/fcitx5/build --output-on-failure
       - name: Install Rust for the native transport integration
@@ -241,7 +241,13 @@ jobs:
           cargo build -p badi-broker --bins --locked
           python adapters/fcitx5/tests/broker-smoke.py
       - name: Exercise the session helper on a private bus against the real broker
-        run: PYTHONDONTWRITEBYTECODE=1 python adapters/session/tests/integration.py
+        env:
+          BADI_SESSION_REQUIRE_KEYRING: "1"
+        run: |
+          # gnome-keyring-daemon refuses to run as root, and the container is root.
+          useradd --create-home builder
+          runuser -u builder -- env PYTHONDONTWRITEBYTECODE=1 BADI_SESSION_REQUIRE_KEYRING=1 \
+            python adapters/session/tests/integration.py
       - name: Exercise isolated accessibility buses and actual addon event flow
         run: |
           PYTHONDONTWRITEBYTECODE=1 python adapters/accessibility/tests/run-isolated.py
@@ -282,14 +288,53 @@ jobs:
           cargo build -p badi-broker --bins --locked
           node --test adapters/neovim/plugin.test.mjs adapters/neovim/broker.test.mjs
 
+  libreoffice:
+    name: LibreOffice extension / pinned Arch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure the dated Arch package snapshot
+        run: |
+          # Pacman expands these repository placeholders.
+          # shellcheck disable=SC2016
+          printf '%s\n' \
+            'Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch' \
+            > /etc/pacman.d/mirrorlist
+          pacman -Syyu --noconfirm
+          pacman -S --needed --noconfirm ca-certificates gcc git hunspell-en_us libreoffice-fresh python
+          pacman -Q libreoffice-fresh python
+          soffice --version
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Rust for the real broker lane
+        uses: dtolnay/rust-toolchain@1.99.0
+      - name: Exercise the Writer extension against headless LibreOffice and the real broker
+        run: |
+          command -v soffice unopkg
+          cargo build -p badi-broker --bins --locked
+          # unopkg refuses to run as root, and the container is root.
+          useradd --create-home builder
+          runuser -u builder -- env PYTHONDONTWRITEBYTECODE=1 \
+            python adapters/libreoffice/tests/integration.py
+
   checks:
     name: Repository checks / Node 24
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Full history: the agent-rules gate inspects every commit's diff
+      # locally instead of fetching more history at run time.
       - name: Check out source
         uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Install Node.js
         uses: actions/setup-node@v7
