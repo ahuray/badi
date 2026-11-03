@@ -223,20 +223,30 @@ publish need the user's go-ahead first; the rest can start at once.
    *Done when* a shipped fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
-3. **Finish the installed-flow matrix with someone present.** Still open: a
-   real suspend and resume, a VT switch and a Tab right after each, and
+3. **Finish the installed-flow matrix with someone present.** A real
+   s2idle suspend and resume with a Tab right after passed on 2026-11-02,
+   and a VT switch away and back with a Tab right after passed on
+   2026-11-03, zero wrong-field or stale edits both times
+   ([session helper](adapters/session/README.md#tested-with)). Still open:
    several monitors when a second display is at hand. Restarts, undo, pause,
    composition, stale focus, Ghostty's typed line and fractional scaling
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
-   *Done when* those show zero wrong-field or stale edits and the
-   [session helper](adapters/session/README.md) runbook records them.
+   *Done when* the multi-monitor rows show zero wrong-field or stale edits
+   and the [session helper](adapters/session/README.md) runbook records
+   them.
 4. **Check context in a real mail client and the Claude desktop app.** Opt-in
    context shipped ([ADR 0010](docs/decisions/0010-context-finishes-words.md)).
    A disposable mail-style page in Chromium 154 passed every check live on
    2026-10-20 ([observer runbook](adapters/accessibility/README.md#window-words-context-on)),
    and window words reach Zen and Chromium-based apps since `f180653` (VS
-   Code live). Still unchecked: the user's own web mail, where only they
-   can open a draft. The Claude desktop app's composer was checked
+   Code live). The user's own web mail (Gmail in Brave Origin) was checked
+   on 2026-11-03 in a disposable draft (deleted after, never sent): the
+   ghost showed, Tab landed `reply`, Ctrl+Shift+Space listed
+   `1.interest 2.question 3.comment 4.answer`, digit 2 picked and Tab
+   landed `question`, and `window_chars` (259–894) rode its
+   `context.changed` with up to 18 window words harvested; no window word
+   has finished there yet (the stems tried matched none). The Claude
+   desktop app's composer was checked
    after its relaunch (2026-11-02): it first exposed an observer bug —
    its composer sits 26 ancestors below its document, past the origin
    climb's bound, so every snapshot was denied — fixed in `20366a6`.
@@ -245,9 +255,8 @@ publish need the user's go-ahead first; the rest can start at once.
    `context.changed`, and window words flow (`window_words=4`); no
    window word has finished there yet (the stems typed matched none
    of the four).
-   *Done when* both show a window or learned word finished, and
-   `window_chars` appears on their `context.changed` in a `badi debug on`
-   trace.
+   *Done when* both show a window or learned word finished
+   (`window_chars` on `context.changed` is now recorded for both).
 5. **Compare style learning in the Lab.** Feed an explicit `badi style
    export` into a Lab suite's `style` field and compare against no style on
    the user's own held-out drafts, with the `style_fact_conflict` fence and
