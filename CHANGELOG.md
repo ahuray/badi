@@ -8,6 +8,11 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Fixed the Arch package leaving `/usr/lib/badi` behind on removal after
+  `badi` ran as root (for example `sudo badi doctor`): its bytecode cache
+  was not the package's. The packaged command now writes no bytecode, as
+  the Debian package's already did. Install, upgrade and removal now leave
+  an Arch container's filesystem as it was.
 - The field observer follows focus on GNOME through Badi's own GNOME Shell
   extension, `badi-focus@ahuray.github.io`, which the packages and the
   installer ship and the user enables: it answers the focused window's

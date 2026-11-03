@@ -140,11 +140,20 @@ fails on any namcap error and checks that the notices are packaged. Verify the
 real install/update/removal flow on a fresh Omarchy system. Local build evidence does not establish that fresh-system
 flow. Naming, maintainer identity and publication require a final review.
 
-Tested with: an isolated Arch container on the 2026-10-12 snapshot (Rust
-1.99, Fcitx 5.1.23): build, checks, CLI and phrase-broker control, settings
-compare-and-swap, typelib and library resolution, file integrity, reinstall
-and removal (private settings kept, no package files left). Not tested: a
-graphical session or a running user service manager.
+`badi-desktop.py` is installed with `#!/usr/bin/python3 -B`, as in the
+Debian package: run as root (`sudo badi doctor`), a bytecode-writing command
+left `/usr/lib/badi/__pycache__`, which pacman does not own, so removal kept
+`/usr/lib/badi`.
+
+### Tested with
+
+Container evidence only; none of it is a fresh Omarchy, a graphical session
+or a running user service manager.
+
+| Where (date) | What passed | Boundary |
+| --- | --- | --- |
+| Fresh `archlinux:latest` container, current repositories (2026-11-03): Rust 1.99.1, Fcitx 5.1.23, Python 3.14.9, GTK 4.24.1, systemd 262.1, pacman 7.1, namcap 3.6.0 | `makepkg` of `9c1a8fc` and of `8164c1e` with this PKGBUILD (`check()` included); namcap: no errors, the warnings below. Installed `0.2.0.r65.9c1a8fc`, then upgraded to `0.2.0.r69.8164c1e`: `pacman -Qkk` 65 files, 0 altered, both times; `badictl` named each commit; `badi --help` and root `badi doctor`; observer modules import; Fcitx loaded the addon. `pacman -R` then left the filesystem identical to before the install: 44,128 paths (type, mode, owner) and 38,306 file hashes under `/etc`, `/usr`, `/opt` and `/var/lib`, the package database included. The first run found the root-run bytecode leftover fixed above | The image's own `NoExtract` (no `/usr/share/doc`) was removed first, as a stock Arch has none; no Omarchy, panel, model download or user units |
+| Isolated Arch container on the 2026-10-12 snapshot (Rust 1.99, Fcitx 5.1.23) | Build, checks, CLI and phrase-broker control, settings compare-and-swap, typelib and library resolution, file integrity, reinstall and removal (private settings kept, no package files left) | No graphical session or running user service manager |
 
 Namcap reported no errors after dependency review. Remaining warnings cover
 the unassigned maintainer, bundled Python imports, Omarchy-owned QML modules,
