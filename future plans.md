@@ -273,8 +273,9 @@ publish need the user's go-ahead first; the rest can start at once.
    only for the naming review.
 7. **Run Badi in real GNOME and KDE Plasma sessions.** The
    [Debian and Ubuntu package](packaging/debian/README.md) and the
-   user-local installer pass in Debian 13 and Ubuntu 24.04 containers, but no
-   graphical session has run them. Still open:
+   user-local installer pass in Debian 13 and Ubuntu 24.04 containers, and
+   the package now has a first graphical-session run (Plasma, below).
+   Still open:
    - field observer backends outside Hyprland, so Chromium-based apps, Zen,
      VS Code and Writer's grey preview suggest there; the observer unit's
      Hyprland condition goes with them. The observer needs the focused
@@ -291,10 +292,18 @@ publish need the user's go-ahead first; the rest can start at once.
      or Plasma's Virtual Keyboard starting Fcitx with the environment.d
      addon directory, the user units, a manual Tab request in a GTK and a Qt
      app, the editors and Writer, and package install, update and purge.
-     On GNOME, Fcitx stands in for IBus (Mutter speaks only text-input-v3)
-     and needs the Kimpanel extension for its panel; Plasma launches Fcitx
-     through input-method-v1. A reported GNOME 50.0–50.3 loss of forwarded
-     keys ([fcitx5#1692](https://github.com/fcitx/fcitx5/issues/1692),
+     The Plasma half ran on 2026-11-03 (Debian 13.7 VM, Plasma 6.3.6,
+     package from `170c91a`): Virtual Keyboard Fcitx, user units, manual
+     request, ghost, numbered list and pick in Kate, the Bash adapter in
+     Konsole, lock-screen denial, and package install and reinstall all
+     passed with zero wrong-field edits
+     ([tested with](packaging/debian/README.md#tested-with)). Still open:
+     the whole GNOME session, a GTK app's manual request, Writer in a
+     graphical session, and graphical-session purge. On GNOME, Fcitx
+     stands in for IBus (Mutter speaks only text-input-v3) and needs the
+     Kimpanel extension for its panel; Plasma launches Fcitx through
+     input-method-v1. A reported GNOME 50.0–50.3 loss of forwarded keys
+     ([fcitx5#1692](https://github.com/fcitx/fcitx5/issues/1692),
      unverified) would affect Ubuntu 26.04.
    *Done when* those pass with zero wrong-field edits and the runbook's
    tested-with matrix records them.

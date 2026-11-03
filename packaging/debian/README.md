@@ -148,8 +148,25 @@ apt package of a missing dictionary.
 
 ## Tested with
 
-All in containers from the pinned images that CI uses, on 2026-10-23,
-without a graphical session or user service manager.
+A graphical session first: Debian 13.7 in a QEMU/KVM VM (standard VGA),
+KDE Plasma 6.3.6 on Wayland (`kwin_wayland` 6.3.6), Fcitx 5.1.12 launched
+by KWin as the Virtual Keyboard (`fcitx5-wayland-launcher`), the package
+built from `170c91a`, on 2026-11-03. `badi doctor` reported no problems
+(observer correctly skipped outside Hyprland); the user units ran; a
+manual Fcitx request in Kate 25.04.3 showed the ghost, Tab landed it,
+and the numbered list's digit pick landed too; the Bash adapter in
+Konsole 25.04.2 previewed on Ctrl-X Tab and accepted into the Readline
+buffer without submitting; at the lock screen `kscreenlocker_greet` was
+`app_disabled` and the `--text` trace held none of the typed text. Zero
+wrong-field edits. Not yet tried in a graphical session: a GTK app's
+manual request, the Writer extension, and purge (the container smoke
+covers purge). The VM first exposed the fresh-home broker crash loop
+fixed in `170c91a` (systemd now creates `~/.config/badi`); with 4 GiB
+the broker waited for available memory, as designed, and started at
+8 GiB.
+
+The container checks below use the pinned images that CI uses, on
+2026-10-23, without a graphical session or user service manager.
 
 | Check | Debian 13 | Ubuntu 24.04 |
 | --- | --- | --- |

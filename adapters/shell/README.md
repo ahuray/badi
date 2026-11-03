@@ -37,8 +37,10 @@ closes the session.
 ## Build and install
 
 Needs Python 3, a C compiler and the Bash and Readline development headers (on
-Arch: `gcc`, `bash`, `readline`, `python`). Runtime needs Bash, Node and a
-VT-compatible terminal. Rebuild after an incompatible Bash or Readline upgrade.
+Arch: `gcc`, `bash`, `readline`, `python`; on Debian and Ubuntu:
+`gcc`, `bash-builtins`, `libreadline-dev`, `python3`). Runtime needs Bash,
+Node and a VT-compatible terminal. Rebuild after an incompatible Bash or
+Readline upgrade.
 
 ```sh
 python3 adapters/shell/build-preview.py
