@@ -285,7 +285,11 @@ publish need the user's go-ahead first; the rest can start at once.
        `workspace.activeWindow`, so Plasma comes first;
      - GNOME's `org.gnome.Shell.Introspect` gives no process id and answers
        only the portal backends, so GNOME needs a Shell extension of Badi's
-       own that the user installs;
+       own that the user installs and enables; its contract is proposed in
+       [ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)
+       and waits for the user's approval. Before implementing it, a GNOME 48
+       VM run of `badi debug watch` while typing in Chromium must show
+       whether Fcitx names each app there or only the Shell;
      - AT-SPI's own process id is a debugging aid, and its application name
        is not the app id;
    - in a VM with GNOME 48 (Debian 13) and Plasma: `im-config -n fcitx5`
