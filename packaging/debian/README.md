@@ -8,8 +8,10 @@ published.
 
 One part of the desktop contract differs from Omarchy's: the
 [field observer](../../adapters/accessibility/README.md) runs only in a
-Hyprland session so far. Under GNOME or KDE Plasma, Chromium-based apps,
-Zen, VS Code and Writer's grey preview therefore get no suggestions. Fcitx's
+Hyprland or KDE Plasma 6 session (there through a KWin script, showing
+suggestions in Fcitx's panel without the grey preview, and not yet tried
+live). Under GNOME, Chromium-based apps, Zen, VS Code and Writer's grey
+preview therefore get no suggestions. Fcitx's
 manual fields (a Tab request in an app allowed with `badi app ID on`),
 Obsidian, Neovim, Bash and the
 [Writer spelling extension](../../adapters/libreoffice/README.md) do not
@@ -89,8 +91,9 @@ As each desktop user, never as root:
    systemctl --user enable --now badi-broker.service badi-session.service badi-accessibility.service
    ```
 
-   systemd skips the observer outside a Hyprland session, and `badi doctor`
-   says so instead of reporting a problem.
+   systemd skips the observer outside a Hyprland or KDE session, and `badi
+   doctor` says so instead of reporting a problem; on Plasma it names KWin
+   as the observer's source.
 4. Make Fcitx 5 the input method: `im-config -n fcitx5` on Debian and
    Ubuntu, or Fcitx 5 as the Virtual Keyboard in KDE Plasma's settings. Log
    out and back in. The packaged addon sits in Fcitx's own directory, so it
@@ -122,8 +125,8 @@ with the build dependencies above and no Node.js. It finds no
   registry offers `zwp_input_method_manager_v2`, where Fcitx's `wayland_v2`
   frontend serves apps (Hyprland, Sway); GNOME and KDE Plasma do not;
 - installs and enables the observer, starting and verifying it only in a
-  Hyprland session, and refuses `--observed-app`, which needs Omarchy's lock
-  status;
+  Hyprland or KDE Plasma 6 session, and refuses `--observed-app`, which needs
+  Omarchy's lock status;
 - in a Hyprland session, prints the grey preview's no-animation layer rule
   for both `hyprland.lua` and `hyprland.conf`, leaving compositor
   configuration for the user to edit;

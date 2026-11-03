@@ -1246,6 +1246,7 @@ class GenericInstallTests(unittest.TestCase):
              patch.object(installer, 'wait_native_addon') as omarchy_addon, \
              patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(runtime),
                                      'XDG_CONFIG_HOME': str(home / '.config'), 'HYPRLAND_INSTANCE_SIGNATURE': '',
+                                     'XDG_CURRENT_DESKTOP': 'GNOME', 'KDE_SESSION_VERSION': '',
                                      **(environment or {})}), \
              patch('sys.argv', ['install-desktop.py', *argv]), \
              contextlib.redirect_stdout(io.StringIO()) as output:
@@ -1278,13 +1279,13 @@ class GenericInstallTests(unittest.TestCase):
                          '.local/share/applications/io.github.ahuray.badi.desktop'):
                 self.assertFalse((home / path).exists(), path)
             self.assertEqual((home / '.config/fcitx5/profile').read_text(), 'preserve keyboard profile')
-            # The observer is enabled for a later Hyprland session but not started here.
+            # The observer is enabled for a later Hyprland or Plasma session but not started here.
             self.assertIn(['systemctl', '--user', 'enable', 'badi-accessibility.service'], calls)
             self.assertNotIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
             self.assertFalse(self.observer_waited or self.runtime_checked)
             self.assertIn('next login', self.output)
             self.assertIn('Fcitx was not restarted', self.output)
-            self.assertIn('runs only in a Hyprland session', self.output)
+            self.assertIn('runs only in a Hyprland or KDE Plasma 6 session', self.output)
             _backup, _document, changed = only_backup(home)
             self.assertIn('.config/environment.d/50-badi-fcitx5.conf', changed, 'the file has a scoped rollback')
 
@@ -1305,9 +1306,29 @@ class GenericInstallTests(unittest.TestCase):
             _home, calls = self.generic_install(Path(temporary), environment={'HYPRLAND_INSTANCE_SIGNATURE': 'fixture'})
             self.assertIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
             self.assertTrue(self.observer_waited and self.runtime_checked)
-            self.assertNotIn('runs only in a Hyprland session', self.output)
+            self.assertNotIn('runs only in a Hyprland', self.output)
             self.assertIn('hl.layer_rule({ name = "badi-preview-noanim"', self.output)
             self.assertIn('layerrule = noanim, badi-writing-preview', self.output)
+
+    def test_a_plasma_6_session_starts_and_verifies_the_observer_through_kwin(self):
+        plasma = {'XDG_CURRENT_DESKTOP': 'KDE', 'KDE_SESSION_VERSION': '6'}
+        with tempfile.TemporaryDirectory() as temporary:
+            _home, calls = self.generic_install(Path(temporary), environment=plasma, fcitx_process=4242)
+            self.assertIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
+            self.assertTrue(self.observer_waited and self.runtime_checked)
+            self.assertIn('through a KWin script', self.output)
+            self.assertIn('Fcitx panel', self.output)
+            self.assertNotIn('runs only in a Hyprland', self.output)
+            self.assertNotIn('badi-preview-noanim', self.output)
+            self.assertFalse([call for call in calls if call[:2] == ['systemctl', '--user'] and 'fcitx' in ' '.join(call)])
+
+    def test_a_plasma_5_session_leaves_the_observer_for_later(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            _home, calls = self.generic_install(Path(temporary),
+                                                environment={'XDG_CURRENT_DESKTOP': 'KDE', 'KDE_SESSION_VERSION': '5'})
+            self.assertNotIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
+            self.assertFalse(self.observer_waited or self.runtime_checked)
+            self.assertIn('runs only in a Hyprland or KDE Plasma 6 session', self.output)
 
     def test_broker_enable_recovers_an_interrupted_install_but_preserves_autostart_off(self):
         cases = (

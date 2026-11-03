@@ -53,6 +53,18 @@ class HealthTests(unittest.TestCase):
             self.assertEqual(probe(endpoint, os.getpid()), {"ready": True, "process_id": os.getpid(), "protocol_version": 1})
         self.assertEqual([json.loads(raw) for raw in received], [{"schema": SCHEMA, "id": "health", "op": "status"}])
 
+    def test_the_focused_window_source_is_reported_when_known(self):
+        base = {"ready": True, "process_id": os.getpid(), "protocol_version": 1}
+        for desktop in ("hyprland", "kwin"):
+            response = {"schema": SCHEMA, "id": "health", "ok": True, "status": {**base, "desktop": desktop}}
+            with self.subTest(desktop=desktop), self.server(response) as (endpoint, _received):
+                self.assertEqual(probe(endpoint, os.getpid()), {**base, "desktop": desktop})
+        for desktop in ("gnome", "", None, 1):
+            response = {"schema": SCHEMA, "id": "health", "ok": True, "status": {**base, "desktop": desktop}}
+            with self.subTest(desktop=desktop), self.server(response) as (endpoint, _received):
+                with self.assertRaisesRegex(ProbeError, "invalid_response"):
+                    probe(endpoint, os.getpid())
+
     def test_wrong_peer_rejected_before_any_request(self):
         with self.server() as (endpoint, received):
             with self.assertRaisesRegex(ProbeError, "unexpected_peer"):

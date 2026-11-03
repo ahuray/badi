@@ -88,7 +88,8 @@ links to it. A tested app version is not a claim about Linux in general.
 - **Distribution:** an Arch package candidate (step 6) and a
   [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
   builds, lints and installs in containers (2026-10-23); neither is
-  published, and no GNOME or KDE session has run Badi (step 7). Without an
+  published, no GNOME session has run Badi, and Plasma has run only the
+  package's manual path (step 7). Without an
   installed writing model, the desktop installer lists the models that fit
   the device and lets the user pick one.
 - **Code health:** a full review before the 0.2.0 fresh start (2026-10-24)
@@ -277,12 +278,17 @@ publish need the user's go-ahead first; the rest can start at once.
    the package now has a first graphical-session run (Plasma, below).
    Still open:
    - field observer backends outside Hyprland, so Chromium-based apps, Zen,
-     VS Code and Writer's grey preview suggest there; the observer unit's
-     Hyprland condition goes with them. The observer needs the focused
-     window's process and app id (checked 2026-10-24):
-     - KWin offers `org_kde_plasma_window_management` (app id, and process
-       id since version 8; Fcitx itself uses it) or a KWin script reading
-       `workspace.activeWindow`, so Plasma comes first;
+     VS Code and Writer's grey preview suggest there:
+     - KDE Plasma 6 has one: a KWin script of the observer's own reports
+       the focused window's process and app id
+       ([ADR 0015](docs/decisions/0015-kwin-script-reports-plasma-focus.md)),
+       proved against a headless KWin 6.3.6 only
+       ([observer runbook](adapters/accessibility/README.md#tested-with)).
+       Still open: in the Plasma VM, an observed field in Chromium
+       suggests in Fcitx's panel and Tab lands with zero wrong-field edits,
+       a locked session and another window deny, and Kate's manual path is
+       unchanged; then the grey preview, which needs KWin's client geometry
+       and output scale mapped onto the caret calibration;
      - GNOME's `org.gnome.Shell.Introspect` gives no process id and answers
        only the portal backends, so GNOME needs a Shell extension of Badi's
        own that the user installs;

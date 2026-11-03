@@ -4,7 +4,11 @@ After=graphical-session.target badi-broker.service
 PartOf=graphical-session.target
 ConditionEnvironment=WAYLAND_DISPLAY
 ConditionEnvironment=XDG_RUNTIME_DIR
-ConditionEnvironment=HYPRLAND_INSTANCE_SIGNATURE
+# The focused window comes from Hyprland's IPC or, on KDE Plasma, a KWin
+# script (ADR 0015); "|" makes either session enough. On another desktop
+# systemd skips the observer.
+ConditionEnvironment=|HYPRLAND_INSTANCE_SIGNATURE
+ConditionEnvironment=|XDG_CURRENT_DESKTOP=KDE
 # Keep retrying a transient AT-SPI or session failure. RestartSteps bounds
 # the delay; the unit does not stop after three failures.
 StartLimitIntervalSec=0
@@ -13,6 +17,9 @@ StartLimitIntervalSec=0
 Type=simple
 ExecStart=/usr/bin/python3 -B %h/.local/lib/badi/accessibility/daemon.py
 Restart=on-failure
+# 78: the desktop offers no focused-window source (a Plasma older than 6);
+# retrying cannot help.
+RestartPreventExitStatus=78
 RestartSec=3
 RestartSteps=5
 RestartMaxDelaySec=60

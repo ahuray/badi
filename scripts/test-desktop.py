@@ -953,6 +953,39 @@ class DesktopTests(unittest.TestCase):
         self.assertIn(desktop.OBSERVER_SKIPPED_NOTE, report['notes'])
         self.assertIn('Field observer: not for this session', desktop.doctor_text(report))
 
+    def test_an_observer_without_a_backend_is_a_note_and_kwin_is_named(self):
+        failed = 'LoadState=loaded\nActiveState=failed\nMainPID=0\nConditionResult=yes\nExecMainStatus=78\n'
+        crashed = failed.replace('ExecMainStatus=78', 'ExecMainStatus=1')
+        for fields, expected in ((failed, True), (crashed, False)):
+            with self.subTest(fields=fields), \
+                 patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, fields, '')):
+                self.assertEqual(desktop.observer_service_state().get('no_backend', False), expected)
+        # The unit must not restart the status the doctor reads as "no backend".
+        unit = (desktop.ROOT / 'packaging/systemd/badi-accessibility.service').read_text().splitlines()
+        self.assertIn(f'RestartPreventExitStatus={desktop.OBSERVER_NO_BACKEND_STATUS}', unit)
+        self.assertIn('ConditionEnvironment=|HYPRLAND_INSTANCE_SIGNATURE', unit)
+        self.assertIn('ConditionEnvironment=|XDG_CURRENT_DESKTOP=KDE', unit)
+        service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+        cases = (({'loaded': True, 'ready': False, 'active': 'failed', 'no_backend': True},
+                  desktop.OBSERVER_NO_BACKEND_NOTE, 'Field observer: no backend for this desktop'),
+                 ({'loaded': True, 'ready': True, 'active': 'active', 'desktop': 'kwin', 'bus_enabled': True},
+                  desktop.OBSERVER_KWIN_NOTE, 'Field observer: ready · KWin (KDE Plasma 6)'),
+                 ({'loaded': True, 'ready': True, 'active': 'active', 'desktop': 'hyprland', 'bus_enabled': True},
+                  None, 'Field observer: ready · Hyprland'),
+                 ({'loaded': True, 'ready': True, 'active': 'active', 'bus_enabled': True},
+                  None, 'Field observer: ready\n'))
+        for observer, note, line in cases:
+            with self.subTest(observer=observer), patch.object(desktop, 'service_state', return_value=service), \
+                 patch.object(desktop, 'accessibility_state', return_value=observer), \
+                 patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+                 patch.object(desktop, 'install_state', return_value={}), \
+                 patch.object(desktop, 'control', return_value='{"metrics":{"provider_calls":1}}'):
+                report = desktop.health_report()
+                self.assertEqual(report['problems'], [])
+                if note:
+                    self.assertIn(note, report['notes'])
+                self.assertIn(line, desktop.doctor_text(report) + '\n')
+
     def test_the_settings_panel_is_omarchys(self):
         with patch.object(desktop.badi_install, 'desktop_platform', return_value=desktop.badi_install.GENERIC), \
              patch.object(desktop.subprocess, 'run') as command:

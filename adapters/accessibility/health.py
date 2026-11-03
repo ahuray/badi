@@ -11,6 +11,8 @@ import time
 
 SCHEMA = "badi.accessibility.v1"
 MAX_STATUS_FRAME = 1024
+# Where a running observer learns the focused window (ADR 0015).
+DESKTOPS = ("hyprland", "kwin")
 
 
 class ProbeError(Exception):
@@ -74,8 +76,12 @@ def probe(endpoint, expected_pid):
             if raw.count(b"\n") != 1 or not raw.endswith(b"\n"):
                 raise ProbeError("invalid_response")
             response = json.loads(raw, object_pairs_hook=_object)
+            status = response.get("status") if isinstance(response, dict) else None
+            desktop = status.get("desktop") if isinstance(status, dict) else None
             expected = {"schema": SCHEMA, "id": "health", "ok": True,
                         "status": {"ready": True, "process_id": expected_pid, "protocol_version": 1}}
+            if desktop in DESKTOPS:
+                expected["status"]["desktop"] = desktop
             if (response != expected or response["ok"] is not True or response["status"]["ready"] is not True
                     or type(response["status"]["process_id"]) is not int or type(response["status"]["protocol_version"]) is not int):
                 raise ProbeError("invalid_response")

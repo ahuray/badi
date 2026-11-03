@@ -8,6 +8,15 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- The field observer runs on KDE Plasma 6: a KWin script of its own
+  reports the focused window's process and app id to the observer's
+  private bus connection, accepted only from KWin's verified bus name with
+  a per-run token, and KWin's screen locker must answer unlocked
+  ([ADR 0015](docs/decisions/0015-kwin-script-reports-plasma-focus.md)).
+  Its unit starts in Hyprland or KDE sessions and does not retry where no
+  backend exists (exit 78), and `badi doctor` names the source. Plasma
+  fields show suggestions in Fcitx's panel; proved against a headless KWin
+  6.3.6, not yet in a live Plasma session.
 - Fixed `install-desktop.py` sometimes stopping after replacing files with
   "not running the installed helper with its expected interpreter" (9 of
   100 real unit starts): a probe landing mid-exec read systemd's executor

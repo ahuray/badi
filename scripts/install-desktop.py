@@ -28,8 +28,8 @@ from badi_install import (ACCESSIBILITY_SWITCH, COMPLETE_ACCESSIBILITY, HYPR_REQ
 
 ROOT = Path(__file__).resolve().parents[1]
 # Every module the installed observer imports, beside its daemon.
-OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "preview.py", "health.py",
-                    "debugtrace.py")
+OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "kwin.py", "preview.py",
+                    "health.py", "debugtrace.py")
 SESSION_MODULES = ("daemon.py", "link.py", "style_key.py")
 SESSION_SERVICE = "badi-session.service"
 OMARCHY_REPAIR_HOOKS = ("post-boot.d", "post-update.d")
@@ -334,8 +334,9 @@ def offers_input_method_v2(platform):
 
 
 def require_accessibility_runtime():
-    if not os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") or "/" in os.environ["HYPRLAND_INSTANCE_SIGNATURE"]:
-        raise RuntimeError("Run the native installer in the current Hyprland session. --broker-only does not require the accessibility helper.")
+    if badi_install.observer_desktop() is None:
+        raise RuntimeError("Run the native installer in the current Hyprland or KDE Plasma 6 session. --broker-only "
+                           "does not require the accessibility helper.")
     # Use the service's exact interpreter and actually load native libraries;
     # require_version alone only checks that typelib metadata can be located.
     code = """import ctypes, gi, cairo
@@ -441,7 +442,8 @@ class Plan:
     platform: str = badi_install.OMARCHY
     # Generic only: the system Fcitx's own addon directory.
     system_addons: Path | None = None
-    # Whether this is a Hyprland session, where the field observer runs.
+    # Whether the field observer runs in this session: Hyprland, or KDE
+    # Plasma 6 through its KWin script (ADR 0015).
     observer_session: bool = True
     # Generic only, after the install: the running Fcitx and whether it maps
     # the installed addon (None when no Fcitx runs or it cannot be inspected).
@@ -493,7 +495,7 @@ def preflight(args):
                            "(WAYLAND_DISPLAY and XDG_RUNTIME_DIR are not set here, and an X11 session is "
                            "not supported). Nothing was changed.")
     platform = badi_install.desktop_platform()
-    observer_session = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+    observer_session = badi_install.observer_desktop() is not None
     system_addons = None
     if not args.broker_only and platform == badi_install.OMARCHY:
         require_unlocked()
@@ -916,7 +918,8 @@ def restart_generic(plan):
     Fcitx (im-config's autostart, or the compositor on KDE Plasma), and a
     replacement started from here would lose what that launcher gave it, so
     Fcitx is never restarted: it loads the addon at the next login. The
-    observer starts only in a Hyprland session, which its unit requires."""
+    observer starts only in a Hyprland or KDE Plasma session, which its unit
+    requires."""
     home, runtime = plan.home, plan.runtime
     if not plan.accessibility_enabled:
         run(["systemctl", "--user", "enable", "badi-accessibility.service"])
@@ -945,11 +948,16 @@ def generic_report(plan):
               f"fcitx5; KDE Plasma: Fcitx 5 as the Virtual Keyboard in System Settings), then log out and back "
               f"in; {environment} lets it load the addon. Run badi doctor afterwards.")
     if not plan.observer_session:
-        print("Browser and other observed fields need the field observer, which runs only in a Hyprland session so "
-              "far: Chromium-based apps, Zen, VS Code and Writer's grey preview get no suggestions on this desktop. "
-              "Fcitx's manual fields (Tab requests in apps you allow with badi app ID on), the editors "
-              "(Obsidian, Neovim, Bash: scripts/install-editors.py) and the LibreOffice Writer spelling extension "
-              "work without it. The observer is installed and starts by itself in a Hyprland session.")
+        print("Browser and other observed fields need the field observer, which runs only in a Hyprland or KDE "
+              "Plasma 6 session so far: Chromium-based apps, Zen, VS Code and Writer's grey preview get no "
+              "suggestions on this desktop. Fcitx's manual fields (Tab requests in apps you allow with badi app ID "
+              "on), the editors (Obsidian, Neovim, Bash: scripts/install-editors.py) and the LibreOffice Writer "
+              "spelling extension work without it. The observer is installed and starts by itself in a Hyprland "
+              "or KDE Plasma 6 session.")
+    elif badi_install.observer_desktop() == "kwin":
+        print("Field observer: KDE Plasma, through a KWin script it loads (no preview position yet, so observed "
+              "fields show suggestions in the Fcitx panel). Start Chromium-based apps with "
+              f"{badi_install.OBSERVED_FLAG}, and allow each app or site with badi app or badi site.")
     else:
         print("Grey preview: Hyprland animates new layers, so the preview fades in until a layer rule exempts "
               "it. Add one line — hyprland.lua: "

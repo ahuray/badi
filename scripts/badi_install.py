@@ -126,6 +126,25 @@ FCITX_ENVIRONMENT = Path(".config/environment.d/50-badi-fcitx5.conf")
 FCITX_BUS_NAME = "org.fcitx.Fcitx5"
 
 
+# The field observer's focused-window sources (ADR 0015), named as its status
+# reply names them. Its unit runs it in either session, and nowhere else.
+OBSERVER_DESKTOPS = {"hyprland": "Hyprland", "kwin": "KWin (KDE Plasma 6)"}
+
+
+def observer_desktop(environ=None):
+    """"hyprland" or "kwin" where the field observer can follow focus in this
+    session, else None; adapters/accessibility/desktop.py decides the same."""
+    environ = os.environ if environ is None else environ
+    signature = environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    if signature:
+        return "hyprland" if "/" not in signature else None
+    version = environ.get("KDE_SESSION_VERSION", "")
+    if ("KDE" in environ.get("XDG_CURRENT_DESKTOP", "").split(":") and version.isdigit() and int(version) >= 6
+            and environ.get("WAYLAND_DISPLAY")):
+        return "kwin"
+    return None
+
+
 def desktop_platform():
     """OMARCHY where Omarchy's shell command is installed, otherwise GENERIC."""
     return OMARCHY if shutil.which("omarchy-shell") else GENERIC

@@ -45,6 +45,23 @@ class App:
     sentence_bounded: bool = False  # Its Fcitx surrounding text is only the caret's sentence.
 
 
+class NoDesktopBackend(RuntimeError):
+    """This desktop has no focused-window source the observer supports."""
+
+
+def desktop_backend(environ=None):
+    """Where the focused window's process and app id come from: "hyprland"
+    (its IPC) or "kwin" (KDE Plasma 6, a KWin script; ADR 0015)."""
+    environ = os.environ if environ is None else environ
+    if environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return "hyprland"
+    version = environ.get("KDE_SESSION_VERSION", "")
+    if ("KDE" in environ.get("XDG_CURRENT_DESKTOP", "").split(":") and version.isdigit() and int(version) >= 6
+            and environ.get("WAYLAND_DISPLAY")):
+        return "kwin"
+    raise NoDesktopBackend("no_desktop_backend")
+
+
 def hyprland_directory():
     signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
     runtime = os.environ.get("XDG_RUNTIME_DIR", "")
@@ -114,6 +131,25 @@ class Desktop:
                 raise Denied("desktop_unavailable")
             connection.settimeout(self.remaining(IPC_SECONDS))
         return raw
+
+
+class KWinDesktop(Desktop):
+    """KDE Plasma: the active window from the observer's KWin script, the lock
+    from KWin's screen locker. No monitors, so no preview is calibrated."""
+
+    def __init__(self, apps, remaining, focus):
+        super().__init__(apps, remaining)
+        self.focus = focus
+
+    def active_window(self):
+        return self.focus.active_window(self.remaining)
+
+    def monitors(self):
+        return []
+
+    def lock_query(self):
+        from kwin import KWinLockQuery
+        return KWinLockQuery(self.focus, self.remaining)
 
 
 # Versions whose IPC wire matches the pinned subset: 0.3.2 (checked at

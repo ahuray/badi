@@ -170,6 +170,7 @@ class Observer:
         self.text_ends = False
         self.preview_hold = None
         self.preview_place = None
+        self.desktop = None
         self.operations = {"status": self.status, "hide": self.hide_preview, "inspect": self.inspect,
                            "snapshot": self.snapshot, "preview": self.preview}
 
@@ -208,7 +209,10 @@ class Observer:
             return {"schema": SCHEMA, "id": request_id, "ok": False, "error": str(error), "epoch": self.epoch}
 
     def status(self, _request):
-        return {"status": {"ready": True, "process_id": os.getpid(), "protocol_version": 1}}
+        status = {"ready": True, "process_id": os.getpid(), "protocol_version": 1}
+        if self.desktop is not None:
+            status["desktop"] = self.desktop  # The focused-window source: "hyprland" or "kwin".
+        return {"status": status}
 
     def hide_preview(self, _request):
         # A hidden preview is withdrawn: no later scroll may draw it again.
