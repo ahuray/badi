@@ -8,6 +8,15 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- The field observer follows focus on GNOME through Badi's own GNOME Shell
+  extension, `badi-focus@ahuray.github.io`, which the packages and the
+  installer ship and the user enables: it answers the focused window's
+  process and app id on gnome-shell's own bus connection, and nothing is
+  read while the screen is locked
+  ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)).
+  The unit also starts in GNOME sessions and `badi doctor` reports an
+  extension that does not answer. GNOME's observed fields still get no
+  suggestions: Fcitx names no app there, an open decision.
 - The field observer runs on KDE Plasma 6: a KWin script of its own
   reports the focused window's process and app id to the observer's
   private bus connection, accepted only from KWin's verified bus name with

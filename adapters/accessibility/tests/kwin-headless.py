@@ -46,8 +46,9 @@ def wait(condition, seconds, message):
 
 def session(root):
     from contract import Denied
-    from desktop import App, KWinDesktop
-    from kwin import GioBus, KWinFocus, KWinLockQuery, PLUGIN
+    from desktop import App, SourceDesktop
+    from kwin import KWinFocus, KWinLockQuery, PLUGIN
+    from sessionbus import GioBus
 
     # A new window without an activation token may be refused focus; this
     # private compositor activates each one so every run checks a report.
@@ -74,7 +75,7 @@ def session(root):
         python = os.path.realpath(sys.executable)
         apps = {"one": App(frozenset({python}), frozenset({"org.badi.HeadlessOne"})),
                 "two": App(frozenset({python}), frozenset({"org.badi.HeadlessTwo"}))}
-        desktop = KWinDesktop(apps, remaining, focus)
+        desktop = SourceDesktop(apps, remaining, focus)
         for name, app_id in (("one", "org.badi.HeadlessOne"), ("two", "org.badi.HeadlessTwo")):
             client = subprocess.Popen([sys.executable, "-c", CLIENT, app_id], env=environment,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

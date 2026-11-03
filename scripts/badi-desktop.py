@@ -193,18 +193,22 @@ ALL_SITES_NOTE = ("Every http(s) site is allowed for predictions unless its exac
 ALL_APPS_NOTE = ("Apps use the blocklist: every app Badi supports is allowed unless its rule blocks it "
                  "(badi apps allowlist to return to allowed apps only). The default opens only fields the "
                  "accessibility observer corroborates; a manual Tab-request app still needs badi app APP on.")
-OBSERVER_SKIPPED_NOTE = ("The field observer is installed, but systemd skipped it: it runs only in a Hyprland or KDE "
-                         "Plasma 6 session so far. Browser and other observed fields (Chromium-based apps, Zen, VS "
+OBSERVER_SKIPPED_NOTE = ("The field observer is installed, but systemd skipped it: it runs only in a Hyprland, KDE "
+                         "Plasma 6 or GNOME session so far. Browser and other observed fields (Chromium-based apps, Zen, VS "
                          "Code, Writer's grey preview) get no suggestions here; Fcitx's manual fields, Obsidian, "
                          "Neovim, Bash and the Writer spelling extension work without it.")
 # The observer's exit status when its desktop has no focused-window source.
 OBSERVER_NO_BACKEND_STATUS = "78"
 OBSERVER_NO_BACKEND_NOTE = ("The field observer started but found no focused-window source it supports here (Hyprland, "
-                            "or KDE Plasma 6's KWin scripting), so it stopped and systemd does not retry it. Observed "
+                            "KDE Plasma 6's KWin scripting or GNOME Shell), so it stopped and systemd does not retry it. Observed "
                             "fields get no suggestions; journalctl --user -u badi-accessibility.service names the "
                             "reason. Fcitx's manual fields, the editors and the Writer spelling extension still work.")
 OBSERVER_KWIN_NOTE = ("Field observer: KDE Plasma, through the KWin script it loads (ADR 0015). Plasma has no preview "
                       "position yet, so observed fields show suggestions in the Fcitx panel.")
+OBSERVER_GNOME_NOTE = ("Field observer: GNOME, through Badi's Shell extension (ADR 0016). GNOME has no preview "
+                       "position yet, so observed fields show suggestions in the input method's panel.")
+GNOME_EXTENSION_ACTION = (f"Enable it: gnome-extensions enable {badi_install.GNOME_EXTENSION} (after a new install, "
+                          "log out and back in first so GNOME Shell finds it), then run badi doctor again.")
 SESSION_FCITX_ACTION = (f"Log out and back in: Fcitx reads Badi's addon at login, from ~/{badi_install.FCITX_ENVIRONMENT}"
                         " after scripts/install-desktop.py, or from the system addon directory after the badi "
                         "package. ")
@@ -372,7 +376,7 @@ def observer_service_state():
     state = {"loaded": fields.get("LoadState") == "loaded",
              "active": fields.get("ActiveState", "unknown"),
              "process_id": int(pid) if pid.isdigit() else 0}
-    # systemd checked the unit's start condition (a Hyprland or KDE session)
+    # systemd checked the unit's start condition (a Hyprland, KDE or GNOME session)
     # and skipped the start: expected on other desktops, not a failure.
     if (state["active"] == "inactive" and fields.get("ConditionResult") == "no"
             and fields.get("ConditionTimestampMonotonic", "0") not in ("", "0")):
@@ -381,6 +385,20 @@ def observer_service_state():
     if state["active"] == "failed" and fields.get("ExecMainStatus") == OBSERVER_NO_BACKEND_STATUS:
         state["no_backend"] = True
     return state
+
+
+def gnome_extension_answers():
+    """Whether Badi's Shell extension answers GetFocus now; None when the
+    session bus cannot be asked. Its reply carries no title or content."""
+    try:
+        result = subprocess.run(["busctl", "--user", "--timeout=1s", "call", "org.gnome.Shell",
+                                 "/io/github/ahuray/badi/Focus", "io.github.ahuray.badi.Focus1", "GetFocus"],
+                                capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode == 0:
+        return result.stdout.startswith("ubtussb 1 ")
+    return False if "Unknown" in result.stderr or "No such" in result.stderr else None
 
 
 def observer_probe(endpoint, expected_pid):
@@ -659,6 +677,13 @@ def health_report():
                              "action": "Complete the accessibility setup and relaunch the target application with its supported accessibility/input-method flags."})
         if observer.get("ready") and observer.get("desktop") == "kwin":
             report["notes"].append(OBSERVER_KWIN_NOTE)
+        if observer.get("ready") and observer.get("desktop") == "gnome":
+            report["notes"].append(OBSERVER_GNOME_NOTE)
+            if gnome_extension_answers() is False:
+                problems.append({"code": "gnome_extension_inactive",
+                                 "message": "Badi's GNOME Shell extension does not answer, so observed fields get no "
+                                            "suggestions.",
+                                 "action": GNOME_EXTENSION_ACTION})
     else:
         report["notes"].append("The accessibility field observer is not installed or could not be inspected, so IME-parity apps and observed fields get no suggestions. Model readiness alone does not establish those integrations.")
     try:

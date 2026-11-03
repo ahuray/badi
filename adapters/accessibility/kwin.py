@@ -30,6 +30,7 @@ import threading
 
 from contract import Denied
 from desktop import NoDesktopBackend
+from sessionbus import UNIQUE_NAME, OwnerError, app_id, is_process, process_name, unique_object, verified_owner
 
 KWIN_NAME = "org.kde.KWin"
 KWIN_PROCESS = "kwin_wayland"
@@ -43,7 +44,6 @@ IPC_SECONDS = .15
 STARTUP_SECONDS = 3.0
 STOP_SECONDS = .2
 WINDOW_ID = re.compile(r"\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}\Z")
-UNIQUE_NAME = re.compile(r":[0-9]+\.[0-9]+\Z")
 TOKEN = re.compile(r"[0-9a-f]{32}\Z")
 
 SCRIPT = """\
@@ -100,13 +100,6 @@ def script_source(target, token):
     return SCRIPT.replace("@TARGET@", target).replace("@TOKEN@", token)
 
 
-def app_id(value):
-    """The window's app id when it is plain printable ASCII, else ''."""
-    if isinstance(value, str) and 0 < len(value) <= 255 and all(" " < char < "\x7f" and char != "/" for char in value):
-        return value
-    return ""
-
-
 def parse_window(value):
     """The reported window as a record, None for no active window.
 
@@ -126,29 +119,6 @@ def parse_window(value):
         raise ValueError("invalid_window")
     return {"pid": pid, "app_id": app_id(value["app_id"]), "id": identifier,
             "hidden": value["minimized"] or value["hidden"], "mapped": value["managed"] and not value["deleted"]}
-
-
-def process_name(pid, proc=Path("/proc")):
-    """The kernel's name (at most 15 bytes) for process `pid` when all its
-    user ids are this user's, else None. /proc/PID/status stays readable
-    for an undumpable process, unlike its exe link."""
-    if type(pid) is not int or pid <= 0:
-        return None
-    try:
-        with (proc / str(pid) / "status").open("rb") as stream:
-            lines = stream.read(16384).decode("utf-8", "replace").splitlines()
-    except OSError:
-        return None
-    fields = dict(line.split(":\t", 1) for line in lines if ":\t" in line)
-    uids = fields.get("Uid", "").split()
-    if len(uids) != 4 or any(uid != str(os.getuid()) for uid in uids):
-        return None
-    return fields.get("Name")
-
-
-def is_process(name, expected):
-    """Whether a kernel process name is `expected`, which the kernel cuts to 15 bytes."""
-    return name is not None and name == expected[:15]
 
 
 class KWinFocus:
@@ -208,15 +178,9 @@ class KWinFocus:
     def verified_kwin(self, timeout):
         """The unique bus name of this user's running kwin_wayland."""
         try:
-            owner = self.dbus("GetNameOwner", "(s)", (KWIN_NAME,), "(s)", timeout)[0]
-            credentials = self.dbus("GetConnectionCredentials", "(s)", (owner,), "(a{sv})", timeout)[0]
-        except Exception:
-            raise KWinUnavailable("kwin_unavailable") from None
-        if (not isinstance(owner, str) or not UNIQUE_NAME.fullmatch(owner) or not isinstance(credentials, dict)
-                or credentials.get("UnixUserID") != os.getuid()
-                or not is_process(process_name(credentials.get("ProcessID"), self.proc), KWIN_PROCESS)):
-            raise KWinUnavailable("kwin_unverified")
-        return owner
+            return verified_owner(self.bus, KWIN_NAME, KWIN_PROCESS, timeout, self.proc)
+        except OwnerError as error:
+            raise KWinUnavailable(f"kwin_{error}") from None
 
     def write_script(self):
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -244,7 +208,7 @@ class KWinFocus:
         if not hmac.compare_digest(token.encode(), self.token.encode()) or len(raw.encode()) > MAX_REPORT:
             return False
         try:
-            document = json.loads(raw, object_pairs_hook=_unique_object)
+            document = json.loads(raw, object_pairs_hook=unique_object)
         except ValueError:
             document = None
         if member == "Hello":
@@ -285,6 +249,9 @@ class KWinFocus:
             self.lost = True
             self.window = None
         self.on_lost()
+
+    def lock_query(self, remaining):
+        return KWinLockQuery(self, remaining)
 
     def active_window(self, remaining):
         """The active window in the Desktop's window shape, current as of this call."""
@@ -338,9 +305,6 @@ class KWinFocus:
     def call(self, path, interface, method, signature, args, reply, timeout):
         return self.bus.call(self.kwin, path, interface, method, signature, args, reply, timeout)
 
-    def dbus(self, method, signature, args, reply, timeout):
-        return self.bus.call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", method,
-                             signature, args, reply, timeout)
 
 
 class KWinLockQuery:
@@ -354,79 +318,3 @@ class KWinLockQuery:
 
     def __exit__(self, *_exception):
         self.focus.require_unlocked(self.remaining)
-
-
-class GioBus:
-    """A private session-bus connection: its unique name receives the reports."""
-
-    def __init__(self):
-        from gi.repository import Gio, GLib
-        self.Gio, self.GLib = Gio, GLib
-        address = Gio.dbus_address_get_for_bus_sync(Gio.BusType.SESSION, None)
-        self.connection = Gio.DBusConnection.new_for_address_sync(
-            address, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION,
-            None, None)
-        self.unique_name = self.connection.get_unique_name()
-        self.filter_id = None
-        self.subscription = None
-
-    def call(self, destination, path, interface, method, signature, args, reply, timeout):
-        parameters = self.GLib.Variant(signature, args) if signature else None
-        reply_type = self.GLib.VariantType.new(reply) if reply else None
-        result = self.connection.call_sync(destination, path, interface, method, parameters, reply_type,
-                                           self.Gio.DBusCallFlags.NO_AUTO_START, max(1, round(timeout * 1000)), None)
-        return result.unpack() if result is not None else ()
-
-    def serve(self, path, interface, handler):
-        """Answer method calls to `path` and `interface` with `handler`'s verdict.
-
-        A filter runs on GDBus's message thread in arrival order, before any
-        reply that follows a report reaches a waiting call.
-        """
-        Gio = self.Gio
-
-        def filter_message(connection, message, incoming):
-            if (not incoming or message.get_message_type() != Gio.DBusMessageType.METHOD_CALL
-                    or message.get_path() != path or message.get_interface() != interface):
-                return message
-            body = message.get_body()
-            arguments = body.unpack() if body is not None and body.get_type_string() == "(ss)" else None
-            try:
-                accepted = handler(message.get_sender(), message.get_member(), arguments)
-            except Exception:
-                accepted = False
-            if accepted:
-                answer = Gio.DBusMessage.new_method_reply(message)
-            else:
-                answer = Gio.DBusMessage.new_method_error_literal(message, "org.freedesktop.DBus.Error.AccessDenied",
-                                                                  "refused")
-            connection.send_message(answer, Gio.DBusSendMessageFlags.NONE)
-            return None
-
-        self.filter_id = self.connection.add_filter(filter_message)
-
-    def watch_owner(self, name, callback):
-        def changed(_connection, _sender, _path, _interface, _signal, parameters):
-            _name, _old, new = parameters.unpack()
-            callback(new)
-
-        self.subscription = self.connection.signal_subscribe(
-            "org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged", "/org/freedesktop/DBus", name,
-            self.Gio.DBusSignalFlags.NONE, changed)
-
-    def close(self):
-        if self.filter_id is not None:
-            self.connection.remove_filter(self.filter_id)
-        if self.subscription is not None:
-            self.connection.signal_unsubscribe(self.subscription)
-        if not self.connection.is_closed():
-            self.connection.close_sync(None)
-
-
-def _unique_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate_key")
-        result[key] = value
-    return result

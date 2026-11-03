@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contract import Denied
 import daemon as observer_daemon
-from desktop import App, KWinDesktop, NoDesktopBackend, desktop_backend
+from desktop import App, SourceDesktop, NoDesktopBackend, desktop_backend
 import kwin
 from kwin import KWinFocus, KWinLockQuery, KWinUnavailable, parse_window, script_source
 
@@ -106,14 +106,17 @@ class KWinFixture(unittest.TestCase):
 
 
 class BackendSelectionTests(unittest.TestCase):
-    def test_hyprland_first_then_plasma_6_only(self):
+    def test_hyprland_first_then_plasma_6_then_gnome(self):
         plasma = {"XDG_CURRENT_DESKTOP": "KDE", "KDE_SESSION_VERSION": "6", "WAYLAND_DISPLAY": "wayland-0"}
         self.assertEqual(desktop_backend({"HYPRLAND_INSTANCE_SIGNATURE": "x", **plasma}), "hyprland")
         self.assertEqual(desktop_backend(plasma), "kwin")
         self.assertEqual(desktop_backend({**plasma, "XDG_CURRENT_DESKTOP": "foo:KDE"}), "kwin")
+        self.assertEqual(desktop_backend({**plasma, "XDG_CURRENT_DESKTOP": "GNOME"}), "gnome")
+        self.assertEqual(desktop_backend({**plasma, "XDG_CURRENT_DESKTOP": "ubuntu:GNOME"}), "gnome")
         for environment in ({**plasma, "KDE_SESSION_VERSION": "5"}, {**plasma, "KDE_SESSION_VERSION": ""},
-                            {**plasma, "XDG_CURRENT_DESKTOP": "GNOME"}, {**plasma, "XDG_CURRENT_DESKTOP": "KDE-ish"},
-                            {**plasma, "WAYLAND_DISPLAY": ""}, {}):
+                            {**plasma, "XDG_CURRENT_DESKTOP": "KDE-ish"}, {**plasma, "XDG_CURRENT_DESKTOP": "sway"},
+                            {**plasma, "WAYLAND_DISPLAY": ""}, {**plasma, "XDG_CURRENT_DESKTOP": "GNOME",
+                                                                "WAYLAND_DISPLAY": ""}, {}):
             with self.subTest(environment=environment), self.assertRaisesRegex(NoDesktopBackend, "no_desktop_backend"):
                 desktop_backend(environment)
 
@@ -124,7 +127,8 @@ class BackendSelectionTests(unittest.TestCase):
                             {"XDG_CURRENT_DESKTOP": "KDE", "KDE_SESSION_VERSION": "6", "WAYLAND_DISPLAY": "w"},
                             {"XDG_CURRENT_DESKTOP": "KDE", "KDE_SESSION_VERSION": "7", "WAYLAND_DISPLAY": "w"},
                             {"XDG_CURRENT_DESKTOP": "KDE", "KDE_SESSION_VERSION": "5", "WAYLAND_DISPLAY": "w"},
-                            {"XDG_CURRENT_DESKTOP": "ubuntu:GNOME", "WAYLAND_DISPLAY": "w"}):
+                            {"XDG_CURRENT_DESKTOP": "ubuntu:GNOME", "WAYLAND_DISPLAY": "w"},
+                            {"XDG_CURRENT_DESKTOP": "GNOME"}, {"XDG_CURRENT_DESKTOP": "sway", "WAYLAND_DISPLAY": "w"}):
             try:
                 expected = desktop_backend(environment)
             except NoDesktopBackend:
@@ -339,7 +343,7 @@ class DesktopTests(KWinFixture):
 
     def test_the_identity_rule_applies_unchanged(self):
         focus, bus = self.focus()
-        desktop = KWinDesktop({"test": self.app()}, lambda limit: limit, focus)
+        desktop = SourceDesktop({"test": self.app()}, lambda limit: limit, focus)
         self.assertEqual(desktop.window(desktop.app("test"))["pid"], os.getpid())
         self.assertEqual(desktop.monitors(), [])
         for serial, value in enumerate((window(app_id="org.badi.Other"), window(minimized=True),
@@ -377,23 +381,23 @@ class DaemonTests(unittest.TestCase):
 
         plasma = {"XDG_CURRENT_DESKTOP": "KDE", "KDE_SESSION_VERSION": "6", "WAYLAND_DISPLAY": "wayland-0",
                   "HYPRLAND_INSTANCE_SIGNATURE": ""}
-        with patch.dict(os.environ, plasma), patch("kwin.GioBus", lambda: object()), patch("kwin.KWinFocus", Focus):
+        with patch.dict(os.environ, plasma), patch("sessionbus.GioBus", lambda: object()), patch("kwin.KWinFocus", Focus):
             self.daemon.watch()
         self.assertEqual(started, ["kwin-field-observer.js"])
-        self.assertIsInstance(self.daemon.backend.desktop, KWinDesktop)
+        self.assertIsInstance(self.daemon.backend.desktop, SourceDesktop)
         self.assertIsNone(self.daemon.window_events)
         self.assertEqual(self.daemon.observer.request({"schema": "badi.accessibility.v1", "id": "s", "op": "status"})
                          ["status"]["desktop"], "kwin")
         # Both callbacks only schedule work on the main loop.
-        self.daemon.kwin_focus.on_change()
-        self.daemon.kwin_focus.on_lost()
-        self.assertEqual([call[0] for call in self.idle], [self.daemon.kwin_window_changed, self.daemon.lose_desktop])
+        self.daemon.focus_source.on_change()
+        self.daemon.focus_source.on_lost()
+        self.assertEqual([call[0] for call in self.idle], [self.daemon.source_window_changed, self.daemon.lose_desktop])
 
     def test_a_kwin_change_invalidates_the_tracked_field(self):
         notices = []
         self.daemon.observer.notify = notices.append
         self.daemon.observer.tracked = {"app_id": "chromium"}
-        self.assertFalse(self.daemon.kwin_window_changed())
+        self.assertFalse(self.daemon.source_window_changed())
         self.assertEqual(notices[-1]["reason"], "window_changed")
         self.assertIsNone(self.daemon.observer.tracked)
 

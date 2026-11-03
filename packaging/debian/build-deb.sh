@@ -104,6 +104,10 @@ for unit in badi-broker badi-accessibility badi-session; do
     sed 's|%h/.local/lib/badi/|/usr/lib/badi/|g' "packaging/systemd/$unit.service" \
         > "$stage/usr/lib/systemd/user/$unit.service"
 done
+# Badi's GNOME Shell extension (ADR 0016); each user enables it themselves.
+extension=badi-focus@ahuray.github.io
+install -Dm644 -t "$stage/usr/share/gnome-shell/extensions/$extension" \
+    "adapters/gnome-shell/$extension/metadata.json" "adapters/gnome-shell/$extension/extension.js"
 # Desktop notifications from the session helper name this icon.
 install -Dm644 packaging/io.github.ahuray.badi.svg \
     "$stage/usr/share/icons/hicolor/scalable/apps/io.github.ahuray.badi.svg"

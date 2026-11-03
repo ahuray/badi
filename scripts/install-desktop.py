@@ -28,9 +28,11 @@ from badi_install import (ACCESSIBILITY_SWITCH, COMPLETE_ACCESSIBILITY, HYPR_REQ
 
 ROOT = Path(__file__).resolve().parents[1]
 # Every module the installed observer imports, beside its daemon.
-OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "kwin.py", "preview.py",
-                    "health.py", "debugtrace.py")
+OBSERVER_MODULES = ("daemon.py", "contract.py", "desktop.py", "field.py", "geometry.py", "gnome.py", "kwin.py",
+                    "preview.py", "health.py", "sessionbus.py", "debugtrace.py")
 SESSION_MODULES = ("daemon.py", "link.py", "style_key.py")
+# Badi's GNOME Shell extension (ADR 0016), installed outside Omarchy.
+GNOME_EXTENSION_FILES = ("metadata.json", "extension.js")
 SESSION_SERVICE = "badi-session.service"
 OMARCHY_REPAIR_HOOKS = ("post-boot.d", "post-update.d")
 # Packaged launchers; a user's copy of the same name shadows one.
@@ -335,8 +337,8 @@ def offers_input_method_v2(platform):
 
 def require_accessibility_runtime():
     if badi_install.observer_desktop() is None:
-        raise RuntimeError("Run the native installer in the current Hyprland or KDE Plasma 6 session. --broker-only "
-                           "does not require the accessibility helper.")
+        raise RuntimeError("Run the native installer in the current Hyprland, KDE Plasma 6 or GNOME session. "
+                           "--broker-only does not require the accessibility helper.")
     # Use the service's exact interpreter and actually load native libraries;
     # require_version alone only checks that typelib metadata can be located.
     code = """import ctypes, gi, cairo
@@ -442,8 +444,9 @@ class Plan:
     platform: str = badi_install.OMARCHY
     # Generic only: the system Fcitx's own addon directory.
     system_addons: Path | None = None
-    # Whether the field observer runs in this session: Hyprland, or KDE
-    # Plasma 6 through its KWin script (ADR 0015).
+    # Whether the field observer runs in this session: Hyprland, KDE Plasma 6
+    # through its KWin script (ADR 0015), or GNOME through Badi's Shell
+    # extension (ADR 0016).
     observer_session: bool = True
     # Generic only, after the install: the running Fcitx and whether it maps
     # the installed addon (None when no Fcitx runs or it cannot be inspected).
@@ -815,6 +818,12 @@ def install_prepared_files(plan, installation):
             install(ROOT / "adapters/accessibility" / name, library / "accessibility" / name)
         install(ROOT / "packaging/systemd/badi-accessibility.service",
                 home / ".config/systemd/user/badi-accessibility.service")
+    if native and not plan.omarchy:
+        # GNOME finds the extension at its next login; enabling it stays the user's step.
+        extension = badi_install.GNOME_EXTENSION
+        for name in GNOME_EXTENSION_FILES:
+            install(ROOT / "adapters/gnome-shell" / extension / name,
+                    home / ".local/share/gnome-shell/extensions" / extension / name)
     if native and plan.omarchy:
         install(ROOT / "packaging/hypr/badi.lua", plan.config_home / "hypr/badi.lua")
         # Omarchy runs these at every login and after omarchy-update; its
@@ -918,8 +927,8 @@ def restart_generic(plan):
     Fcitx (im-config's autostart, or the compositor on KDE Plasma), and a
     replacement started from here would lose what that launcher gave it, so
     Fcitx is never restarted: it loads the addon at the next login. The
-    observer starts only in a Hyprland or KDE Plasma session, which its unit
-    requires."""
+    observer starts only in a Hyprland, KDE Plasma or GNOME session, which its
+    unit requires."""
     home, runtime = plan.home, plan.runtime
     if not plan.accessibility_enabled:
         run(["systemctl", "--user", "enable", "badi-accessibility.service"])
@@ -948,12 +957,18 @@ def generic_report(plan):
               f"fcitx5; KDE Plasma: Fcitx 5 as the Virtual Keyboard in System Settings), then log out and back "
               f"in; {environment} lets it load the addon. Run badi doctor afterwards.")
     if not plan.observer_session:
-        print("Browser and other observed fields need the field observer, which runs only in a Hyprland or KDE "
-              "Plasma 6 session so far: Chromium-based apps, Zen, VS Code and Writer's grey preview get no "
+        print("Browser and other observed fields need the field observer, which runs only in a Hyprland, KDE "
+              "Plasma 6 or GNOME session so far: Chromium-based apps, Zen, VS Code and Writer's grey preview get no "
               "suggestions on this desktop. Fcitx's manual fields (Tab requests in apps you allow with badi app ID "
               "on), the editors (Obsidian, Neovim, Bash: scripts/install-editors.py) and the LibreOffice Writer "
-              "spelling extension work without it. The observer is installed and starts by itself in a Hyprland "
-              "or KDE Plasma 6 session.")
+              "spelling extension work without it. The observer is installed and starts by itself in a Hyprland, "
+              "KDE Plasma 6 or GNOME session.")
+    elif badi_install.observer_desktop() == "gnome":
+        print("Field observer: GNOME, through Badi's Shell extension, which you enable yourself: log out and back "
+              f"in so GNOME Shell finds it, then run gnome-extensions enable {badi_install.GNOME_EXTENSION}. Until "
+              "then observed fields get no suggestions; badi doctor says whether it answers. Observed fields show "
+              f"suggestions in the input method's panel. Start Chromium-based apps with {badi_install.OBSERVED_FLAG}, "
+              "and allow each app or site with badi app or badi site.")
     elif badi_install.observer_desktop() == "kwin":
         print("Field observer: KDE Plasma, through a KWin script it loads (no preview position yet, so observed "
               "fields show suggestions in the Fcitx panel). Start Chromium-based apps with "

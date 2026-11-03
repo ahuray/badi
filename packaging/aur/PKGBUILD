@@ -66,7 +66,7 @@ package() {
     ln -s ../lib/badi/badi-desktop.py "$pkgdir/usr/bin/badi"
     ln -s ../lib/badi/badi-desktop.py "$pkgdir/usr/bin/badi-desktop"
     ln -s ../lib/badi/badictl "$pkgdir/usr/bin/badictl"
-    for file in daemon contract desktop field geometry kwin preview health debugtrace; do
+    for file in daemon contract desktop field geometry gnome kwin preview health sessionbus debugtrace; do
         install -Dm644 "adapters/accessibility/$file.py" "$pkgdir/usr/lib/badi/accessibility/$file.py"
     done
     for file in daemon link style_key; do
@@ -84,6 +84,11 @@ package() {
     install -Dm644 ui/omarchy-plugin/fcitx-theme.py "$pkgdir/usr/share/badi/omarchy/fcitx-theme.py"
     install -Dm644 packaging/omarchy/badi-repair.hook "$pkgdir/usr/share/badi/omarchy/badi-repair.hook"
     install -Dm644 packaging/hypr/badi.lua "$pkgdir/usr/share/badi/hypr/badi.lua"
+    # Badi's GNOME Shell extension (ADR 0016); each user enables it themselves.
+    for file in metadata.json extension.js; do
+        install -Dm644 "adapters/gnome-shell/badi-focus@ahuray.github.io/$file" \
+            "$pkgdir/usr/share/gnome-shell/extensions/badi-focus@ahuray.github.io/$file"
+    done
     install -Dm644 packaging/io.github.ahuray.badi.desktop \
         "$pkgdir/usr/share/applications/io.github.ahuray.badi.desktop"
     install -Dm644 packaging/io.github.ahuray.badi.svg \

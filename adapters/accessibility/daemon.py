@@ -16,7 +16,7 @@ import time
 import warnings
 
 from contract import Denied, MAX_FRAME, Observer, SCHEMA
-from desktop import App, KWinDesktop, NoDesktopBackend, WindowEvents, desktop_backend, hyprland_directory
+from desktop import App, NoDesktopBackend, SourceDesktop, WindowEvents, desktop_backend, hyprland_directory
 from field import FieldBackend
 
 # An unrecognized executable never inherits another application's permission.
@@ -142,8 +142,8 @@ class Daemon:
         self.socket_identity = None
         self.lock_fd = None
         self.window_events = None
-        self.kwin_bus = None
-        self.kwin_focus = None
+        self.source_bus = None
+        self.focus_source = None
         self.failed = False
         self.preview = None
         self.preview_retry_at = 0
@@ -540,6 +540,8 @@ class Daemon:
         self.listener.register("object:state-changed:focused")
         if kind == "kwin":
             self.watch_kwin()
+        elif kind == "gnome":
+            self.watch_gnome()
         else:
             self.window_events = WindowEvents.connect(directory)
             self.GLib.io_add_watch(self.window_events.fileno(), self.GLib.IO_IN | self.GLib.IO_HUP | self.GLib.IO_ERR,
@@ -549,15 +551,27 @@ class Daemon:
     def watch_kwin(self):
         """KDE Plasma: the observer's KWin script reports each activation
         (ADR 0015). Reports arrive on GDBus's thread; the main loop acts."""
-        from kwin import GioBus, KWinFocus
-        self.kwin_bus = GioBus()
-        self.kwin_focus = KWinFocus(self.kwin_bus, self.path.parent / "kwin-field-observer.js",
-                                    on_change=lambda: self.GLib.idle_add(self.kwin_window_changed),
+        from kwin import KWinFocus
+        from sessionbus import GioBus
+        self.source_bus = GioBus()
+        self.focus_source = KWinFocus(self.source_bus, self.path.parent / "kwin-field-observer.js",
+                                    on_change=lambda: self.GLib.idle_add(self.source_window_changed),
                                     on_lost=lambda: self.GLib.idle_add(self.lose_desktop))
-        self.kwin_focus.start()
-        self.backend.desktop = KWinDesktop(APPS, self.backend.remaining, self.kwin_focus)
+        self.focus_source.start()
+        self.backend.desktop = SourceDesktop(APPS, self.backend.remaining, self.focus_source)
 
-    def kwin_window_changed(self):
+    def watch_gnome(self):
+        """GNOME: Badi's Shell extension answers each inspection and signals
+        focus changes (ADR 0016). The extension may be enabled later."""
+        from gnome import GnomeFocus
+        from sessionbus import GioBus
+        self.source_bus = GioBus()
+        self.focus_source = GnomeFocus(self.source_bus, on_change=lambda: self.GLib.idle_add(self.source_window_changed),
+                                     on_lost=lambda: self.GLib.idle_add(self.lose_desktop))
+        self.focus_source.start()
+        self.backend.desktop = SourceDesktop(APPS, self.backend.remaining, self.focus_source)
+
+    def source_window_changed(self):
         if self.observer.tracked:
             self.observer.invalidate("window_changed")
         self.withdraw_producer()
@@ -602,10 +616,10 @@ class Daemon:
             self.event_bus.close_sync(None)
         if self.window_events is not None:
             self.window_events.close()
-        if self.kwin_focus is not None:
-            self.kwin_focus.stop()
-        if self.kwin_bus is not None:
-            self.kwin_bus.close()
+        if self.focus_source is not None:
+            self.focus_source.stop()
+        if self.source_bus is not None:
+            self.source_bus.close()
         if self.server is not None:
             self.server.close()
         self.remove_own_socket()

@@ -32,7 +32,8 @@ NATIVE_SOURCES = ('target/release/badi-broker', 'target/release/badictl', 'scrip
                   'packaging/systemd/badi-session.service', 'packaging/omarchy/badi-repair.hook',
                   'THIRD-PARTY-NOTICES.txt') + tuple(
                   'adapters/accessibility/' + name for name in installer.OBSERVER_MODULES) + tuple(
-                  'adapters/session/' + name for name in installer.SESSION_MODULES)
+                  'adapters/session/' + name for name in installer.SESSION_MODULES) + tuple(
+                  f'adapters/gnome-shell/{receipts.GNOME_EXTENSION}/' + name for name in installer.GNOME_EXTENSION_FILES)
 
 
 def setUpModule():
@@ -1246,7 +1247,7 @@ class GenericInstallTests(unittest.TestCase):
              patch.object(installer, 'wait_native_addon') as omarchy_addon, \
              patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(runtime),
                                      'XDG_CONFIG_HOME': str(home / '.config'), 'HYPRLAND_INSTANCE_SIGNATURE': '',
-                                     'XDG_CURRENT_DESKTOP': 'GNOME', 'KDE_SESSION_VERSION': '',
+                                     'XDG_CURRENT_DESKTOP': 'sway', 'KDE_SESSION_VERSION': '',
                                      **(environment or {})}), \
              patch('sys.argv', ['install-desktop.py', *argv]), \
              contextlib.redirect_stdout(io.StringIO()) as output:
@@ -1279,13 +1280,13 @@ class GenericInstallTests(unittest.TestCase):
                          '.local/share/applications/io.github.ahuray.badi.desktop'):
                 self.assertFalse((home / path).exists(), path)
             self.assertEqual((home / '.config/fcitx5/profile').read_text(), 'preserve keyboard profile')
-            # The observer is enabled for a later Hyprland or Plasma session but not started here.
+            # The observer is enabled for a later Hyprland, Plasma or GNOME session but not started here.
             self.assertIn(['systemctl', '--user', 'enable', 'badi-accessibility.service'], calls)
             self.assertNotIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
             self.assertFalse(self.observer_waited or self.runtime_checked)
             self.assertIn('next login', self.output)
             self.assertIn('Fcitx was not restarted', self.output)
-            self.assertIn('runs only in a Hyprland or KDE Plasma 6 session', self.output)
+            self.assertIn('runs only in a Hyprland, KDE Plasma 6 or GNOME session', self.output)
             _backup, _document, changed = only_backup(home)
             self.assertIn('.config/environment.d/50-badi-fcitx5.conf', changed, 'the file has a scoped rollback')
 
@@ -1322,13 +1323,26 @@ class GenericInstallTests(unittest.TestCase):
             self.assertNotIn('badi-preview-noanim', self.output)
             self.assertFalse([call for call in calls if call[:2] == ['systemctl', '--user'] and 'fcitx' in ' '.join(call)])
 
+    def test_a_gnome_session_installs_the_extension_but_leaves_enabling_it_to_the_user(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home, calls = self.generic_install(Path(temporary), environment={'XDG_CURRENT_DESKTOP': 'ubuntu:GNOME'},
+                                               fcitx_process=4242)
+            extension = home / '.local/share/gnome-shell/extensions/badi-focus@ahuray.github.io'
+            self.assertEqual(sorted(path.name for path in extension.iterdir()), ['extension.js', 'metadata.json'])
+            self.assertIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
+            self.assertTrue(self.observer_waited and self.runtime_checked)
+            self.assertIn('gnome-extensions enable badi-focus@ahuray.github.io', self.output)
+            # Enabling an extension is the user's choice: no gnome-extensions or gsettings call.
+            self.assertFalse([call for call in calls if call[0] in ('gnome-extensions', 'gsettings', 'gdbus')
+                              and 'enable' in ' '.join(map(str, call))])
+
     def test_a_plasma_5_session_leaves_the_observer_for_later(self):
         with tempfile.TemporaryDirectory() as temporary:
             _home, calls = self.generic_install(Path(temporary),
                                                 environment={'XDG_CURRENT_DESKTOP': 'KDE', 'KDE_SESSION_VERSION': '5'})
             self.assertNotIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
             self.assertFalse(self.observer_waited or self.runtime_checked)
-            self.assertIn('runs only in a Hyprland or KDE Plasma 6 session', self.output)
+            self.assertIn('runs only in a Hyprland, KDE Plasma 6 or GNOME session', self.output)
 
     def test_broker_enable_recovers_an_interrupted_install_but_preserves_autostart_off(self):
         cases = (
@@ -1457,6 +1471,10 @@ class PayloadListTests(unittest.TestCase):
 
     def test_observer_and_session_modules(self):
         self.assertEqual(sorted(installer.OBSERVER_MODULES), self.modules('adapters/accessibility'))
+        extension = 'adapters/gnome-shell/' + installer.badi_install.GNOME_EXTENSION
+        self.assertEqual(sorted(installer.GNOME_EXTENSION_FILES),
+                         sorted(path.name for path in (self.ROOT / extension).iterdir()))
+        self.assertEqual(sorted(self.pkgbuild_loop(extension)), sorted(installer.GNOME_EXTENSION_FILES))
         self.assertEqual(sorted(installer.SESSION_MODULES), self.modules('adapters/session'))
         self.assertEqual([f'{name}.py' for name in self.pkgbuild_loop('adapters/accessibility')],
                          self.modules('adapters/accessibility'))

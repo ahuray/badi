@@ -8,10 +8,12 @@ published.
 
 One part of the desktop contract differs from Omarchy's: the
 [field observer](../../adapters/accessibility/README.md) runs only in a
-Hyprland or KDE Plasma 6 session (there through a KWin script, showing
-suggestions in Fcitx's panel without the grey preview, and not yet tried
-live). Under GNOME, Chromium-based apps, Zen, VS Code and Writer's grey
-preview therefore get no suggestions. Fcitx's
+Hyprland, KDE Plasma 6 or GNOME session. On Plasma it uses a KWin script and
+shows suggestions in Fcitx's panel without the grey preview, not yet tried
+live. On GNOME it uses Badi's [Shell extension](../../adapters/gnome-shell/README.md),
+which the package ships and each user enables, but GNOME hands Fcitx no app
+name for observed fields, so Chromium-based apps, Zen, VS Code and Writer's
+grey preview still get no suggestions there. Fcitx's
 manual fields (a Tab request in an app allowed with `badi app ID on`),
 Obsidian, Neovim, Bash and the
 [Writer spelling extension](../../adapters/libreoffice/README.md) do not
@@ -91,9 +93,10 @@ As each desktop user, never as root:
    systemctl --user enable --now badi-broker.service badi-session.service badi-accessibility.service
    ```
 
-   systemd skips the observer outside a Hyprland or KDE session, and `badi
-   doctor` says so instead of reporting a problem; on Plasma it names KWin
-   as the observer's source.
+   systemd skips the observer outside a Hyprland, KDE or GNOME session, and
+   `badi doctor` says so instead of reporting a problem; it names the
+   observer's source. On GNOME, log out and back in, then enable the
+   extension with `gnome-extensions enable badi-focus@ahuray.github.io`.
 4. Make Fcitx 5 the input method: `im-config -n fcitx5` on Debian and
    Ubuntu, or Fcitx 5 as the Virtual Keyboard in KDE Plasma's settings. Log
    out and back in. The packaged addon sits in Fcitx's own directory, so it

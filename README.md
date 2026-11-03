@@ -188,8 +188,11 @@ Plasma 6 sessions
 Plasma it shows suggestions in Fcitx's panel, with no grey preview, and has
 not been tried in a live session yet; a Debian 13 Plasma 6.3 session ran the
 package's manual fields, the Bash adapter and lock-screen denial
-([tested with](packaging/debian/README.md#tested-with)). No GNOME session
-has run Badi yet.
+([tested with](packaging/debian/README.md#tested-with)). On GNOME the
+observer follows focus through Badi's own Shell extension, which you enable
+([extension](adapters/gnome-shell/README.md)), but observed fields get no
+suggestions yet: GNOME hands Fcitx no app name for them. No live GNOME
+session has run Badi yet.
 
 The installers build user-local files, back up everything they replace and
 restart Badi's services and, on Omarchy, Fcitx. The newest three backups of each installer

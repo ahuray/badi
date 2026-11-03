@@ -12,7 +12,7 @@ import time
 SCHEMA = "badi.accessibility.v1"
 MAX_STATUS_FRAME = 1024
 # Where a running observer learns the focused window (ADR 0015).
-DESKTOPS = ("hyprland", "kwin")
+DESKTOPS = ("hyprland", "kwin", "gnome")
 
 
 class ProbeError(Exception):

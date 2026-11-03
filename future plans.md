@@ -136,6 +136,15 @@ Standing user decisions:
   their flags files (2026-10-24).
 
 Open decisions, for the user:
+- **GNOME app identity.** GNOME relays every Wayland text-input app (GTK 4,
+  Chromium, Electron) to Fcitx through its IBus frontend with no program
+  name (checked under headless GNOME Shell 48.7 with Fcitx 5.1.12), so the
+  addon has no app id and denies the field. Badi's GNOME extension knows the
+  focused app, verified by the observer's identity rule. Taking the app id
+  from the observer for exactly such an unnamed IBus context would open
+  GNOME's observed fields, but moves app identity from Fcitx to the observer
+  there ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)).
+  Allow that, or leave GNOME to Fcitx's manual fields and the editors.
 - **Terminal privacy.** A terminal cannot mark a password prompt, so a
   passphrase of two or more words in an allowed terminal can reach the local
   model. Keep it, make terminals explicit-only, or pause after prompts such as
@@ -289,13 +298,12 @@ publish need the user's go-ahead first; the rest can start at once.
        a locked session and another window deny, and Kate's manual path is
        unchanged; then the grey preview, which needs KWin's client geometry
        and output scale mapped onto the caret calibration;
-     - GNOME's `org.gnome.Shell.Introspect` gives no process id and answers
-       only the portal backends, so GNOME needs a Shell extension of Badi's
-       own that the user installs and enables; its contract is proposed in
-       [ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)
-       and waits for the user's approval. Before implementing it, a GNOME 48
-       VM run of `badi debug watch` while typing in Chromium must show
-       whether Fcitx names each app there or only the Shell;
+     - GNOME has one: Badi's own Shell extension
+       ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)),
+       proved against headless GNOME Shell 46 and 48. Its observed fields
+       wait on the GNOME app-id decision below; after it, a GNOME VM must
+       show an observed Chromium field suggesting with zero wrong-field
+       edits;
      - AT-SPI's own process id is a debugging aid, and its application name
        is not the app id;
    - in a VM with GNOME 48 (Debian 13) and Plasma: `im-config -n fcitx5`

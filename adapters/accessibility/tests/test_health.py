@@ -55,11 +55,11 @@ class HealthTests(unittest.TestCase):
 
     def test_the_focused_window_source_is_reported_when_known(self):
         base = {"ready": True, "process_id": os.getpid(), "protocol_version": 1}
-        for desktop in ("hyprland", "kwin"):
+        for desktop in ("hyprland", "kwin", "gnome"):
             response = {"schema": SCHEMA, "id": "health", "ok": True, "status": {**base, "desktop": desktop}}
             with self.subTest(desktop=desktop), self.server(response) as (endpoint, _received):
                 self.assertEqual(probe(endpoint, os.getpid()), {**base, "desktop": desktop})
-        for desktop in ("gnome", "", None, 1):
+        for desktop in ("sway", "", None, 1):
             response = {"schema": SCHEMA, "id": "health", "ok": True, "status": {**base, "desktop": desktop}}
             with self.subTest(desktop=desktop), self.server(response) as (endpoint, _received):
                 with self.assertRaisesRegex(ProbeError, "invalid_response"):

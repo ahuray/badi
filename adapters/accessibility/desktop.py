@@ -51,14 +51,19 @@ class NoDesktopBackend(RuntimeError):
 
 def desktop_backend(environ=None):
     """Where the focused window's process and app id come from: "hyprland"
-    (its IPC) or "kwin" (KDE Plasma 6, a KWin script; ADR 0015)."""
+    (its IPC), "kwin" (KDE Plasma 6, a KWin script; ADR 0015) or "gnome"
+    (Badi's Shell extension; ADR 0016)."""
     environ = os.environ if environ is None else environ
     if environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
         return "hyprland"
+    desktops = environ.get("XDG_CURRENT_DESKTOP", "").split(":")
+    if not environ.get("WAYLAND_DISPLAY"):
+        raise NoDesktopBackend("no_desktop_backend")
     version = environ.get("KDE_SESSION_VERSION", "")
-    if ("KDE" in environ.get("XDG_CURRENT_DESKTOP", "").split(":") and version.isdigit() and int(version) >= 6
-            and environ.get("WAYLAND_DISPLAY")):
+    if "KDE" in desktops and version.isdigit() and int(version) >= 6:
         return "kwin"
+    if "GNOME" in desktops:
+        return "gnome"
     raise NoDesktopBackend("no_desktop_backend")
 
 
@@ -133,9 +138,10 @@ class Desktop:
         return raw
 
 
-class KWinDesktop(Desktop):
-    """KDE Plasma: the active window from the observer's KWin script, the lock
-    from KWin's screen locker. No monitors, so no preview is calibrated."""
+class SourceDesktop(Desktop):
+    """A desktop whose focused window and lock come from a focus source: the
+    KWin script on Plasma (ADR 0015), the Shell extension on GNOME (ADR 0016).
+    No monitors, so no preview is calibrated."""
 
     def __init__(self, apps, remaining, focus):
         super().__init__(apps, remaining)
@@ -148,8 +154,7 @@ class KWinDesktop(Desktop):
         return []
 
     def lock_query(self):
-        from kwin import KWinLockQuery
-        return KWinLockQuery(self.focus, self.remaining)
+        return self.focus.lock_query(self.remaining)
 
 
 # Versions whose IPC wire matches the pinned subset: 0.3.2 (checked at
