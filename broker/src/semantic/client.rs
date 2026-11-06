@@ -1624,6 +1624,30 @@ impl StreamAccumulator {
         self.token_logprobs.first().map(|&(bytes, _)| bytes)
     }
 
+    /// Where the token that writes the last letter of the word `echo` left
+    /// unfinished ends, when `shown` (the text after the echo) goes on with
+    /// that word: ` autom` then `atically`. `None` when the echo does not end
+    /// inside a word, `shown` starts something else, or the probabilities do
+    /// not cover the stream.
+    fn finished_word_end(&self, echo: &str, shown: &str) -> Option<usize> {
+        if !echo.ends_with(char::is_alphabetic) || !self.probabilities_known() {
+            return None;
+        }
+        let letters = shown
+            .find(|character: char| !character.is_alphabetic())
+            .unwrap_or(shown.len());
+        if letters == 0 {
+            return None;
+        }
+        let last_letter = echo.len() + letters - 1;
+        let mut end = 0;
+        self.token_logprobs.iter().find_map(|&(bytes, _)| {
+            let begin = end;
+            end += bytes;
+            (begin <= last_letter && last_letter < end).then_some(end)
+        })
+    }
+
     /// Whether the first streamed token, once known, fails to begin with the
     /// whole `echo`; unknown probabilities leave nothing to check it by.
     fn first_token_breaks(&self, echo: Option<&str>) -> bool {
@@ -2019,16 +2043,23 @@ fn gate_confidence(
         return observed;
     };
     let echo_bytes = shape.echoed_prefix.map_or(0, str::len);
-    // The token that writes a typed lexicon word (` whether` after `whet`)
-    // was chosen among those the stem allows; its probability is how likely
-    // that word was before anything was typed, so it is not counted. A
-    // suggestion that only finishes the word is judged by that choice and
-    // the lexicon alone.
-    let counted_from = accumulator
-        .first_token_bytes()
-        .filter(|&bytes| shape.first_token_must_extend && bytes > echo_bytes)
+    // The tokens that finish the word a healed echo left unfinished
+    // (` automatically` after ` autom`, ` whether` after ` whet`) were chosen
+    // among those the typed letters allow. Their probability is how likely
+    // that word was before anything was typed, or is skewed by the echo's
+    // forced split (` `, `doc`, `u`, then `ments`), so they are not counted:
+    // the lexicon judges that word (`validate_proposal`), and every later
+    // token counts. A suggestion that only finishes the word is judged by
+    // the lexicon alone. An echo of spaces finishes no word, so the next
+    // word's first token always counts.
+    let counted_from = shape
+        .echoed_prefix
+        .and_then(|echo| accumulator.finished_word_end(echo, output))
+        .filter(|&end| end > echo_bytes)
         .unwrap_or(echo_bytes);
-    let shown_end = echo_bytes + output.len();
+    // A stop period the runtime withheld and the provider restored is no
+    // token, so it neither counts nor leaves the shown text unscored.
+    let shown_end = (echo_bytes + output.len()).min(accumulator.content_bytes);
     let minimum =
         accumulator.shown_min_logprob(counted_from, shown_end.saturating_sub(counted_from));
     let word_only =

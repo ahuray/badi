@@ -8,6 +8,15 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Half-typed English words are finished again when the model is unsure of
+  the word itself: the confidence gate no longer counts the tokens that
+  finish the typed word (`autom` → `atically`), whose probability is how
+  likely that word was before any letter was typed, and the stop period
+  restored after a stream no longer withholds a suggestion that only
+  finishes the word (`bud` → `get.`). The lexicon still judges that word,
+  and every later word still needs −2.75. On the Lab's 134 English stems
+  the intended word was finished 92 times against 75; an unblinded check
+  of the 21 changed suggestions found none harmful.
 - The Omarchy panel's pinned host moved to Omarchy 4.5.0 (`v4.5.0`): only
   `PluginRegistry` changed since rc3, in its reload watcher, not an API the
   popout uses, so the panel installs on the released Omarchy again (the
