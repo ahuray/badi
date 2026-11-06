@@ -413,10 +413,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       Chromium has used text-input-v3 without the flag since 137. Check live
       whether Badi's per-app flags can go for current Chromium and Brave;
       Electron apps on an older Chromium may still need them.
-- [ ] Re-pin the panel to Omarchy 4.5 once it is tagged (still `v4.5.0-rc1`
-      on 2026-10-24; `quattro` is 47 commits past it, including the
-      notification panel's removal, omarchy#16430, which Badi does not use:
-      the screen-share hold reads PipeWire). Run the host lane first.
 - [ ] Leftovers of the 2026-10-20 Omarchy 4.0.6 audit: the panel's Fcitx
       theme takes its font size only from Ghostty's config (`fcitx-theme.py`),
       each bar instance registers the `badi-writing` IPC target (several

@@ -8,6 +8,10 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- The Omarchy panel's pinned host moved to Omarchy 4.5.0 (`v4.5.0`): only
+  `PluginRegistry` changed since rc3, in its reload watcher, not an API the
+  popout uses, so the panel installs on the released Omarchy again (the
+  installer's source check refused the 4.5.0 host).
 - Fixed the Arch package leaving `/usr/lib/badi` behind on removal after
   `badi` ran as root (for example `sudo badi doctor`): its bytecode cache
   was not the package's. The packaged command now writes no bytecode, as
