@@ -13,7 +13,7 @@ While the screen is being shared through the desktop portal, Badi shows no sugge
 ## How to get to it (user POV)
 
 - Share the screen from a browser (`getDisplayMedia`), OBS or a meeting app; Omarchy's picker chooses what to share.
-- While it is shared, `badi status` starts with `Badi: Held while the screen is shared`, and the panel's hero reads `HELD · SCREEN SHARED`.
+- While it is shared, and settings are not paused, `badi status` starts with `Badi: Held while the screen is shared`, and the panel's hero reads `Held · screen shared`. A settings pause still reads `Badi: Paused` and the hero `Paused`.
 - `badi screen-share suggest` keeps suggesting; `badi screen-share hold` returns to the default.
 
 ## Driving it with verify-badi
