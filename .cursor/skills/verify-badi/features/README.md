@@ -49,7 +49,7 @@ Each feature file starts with an H1 and one paragraph of user-visible behavior, 
 
 ## Features
 
-- [Word suggestion](./word-suggestion.md) covers grey text, the next word, the whole suggestion, Fcitx's numbered other first words, another continuation in Obsidian and Neovim, dismissal, an explicit request, and a literal Tab.
+- [Word suggestion](./word-suggestion.md) covers grey text, the next word, the whole suggestion, a numbered list of other first words in an Fcitx field, Obsidian and Neovim, dismissal, an explicit request, and a literal Tab.
 - [Suggestion length](./suggestion-length.md) covers one or two words versus up to four.
 - [Spelling](./spelling.md) covers an unambiguous English correction on the Bash path, and the real-model and Writer paths that a VM cannot stand in for.
 - [Selection revision](./selection-revision.md) covers the grammar fix, refined wording, and a synonym for a short selection, applying and dismissing them, and the refusals.

@@ -1,6 +1,6 @@
 # Prediction Lab
 
-Prediction Lab compares continuations and word completion on a draft you type. Expected answers are for scoring only. The Lab does not read the screen, edit another app, or change the installed broker. The page has two tabs: Prediction and Word completion. There is no Spelling tab; production spelling is scored inside a Prediction run that uses current Badi logic.
+Prediction Lab compares continuations and word completion on a draft you type. Expected answers are for scoring only. The Lab does not read the screen, edit another app, or change the installed broker. The page has two tabs: Prediction and Word completion. There is no Spelling tab. A Prediction run that uses current Badi logic can show an English correction as a spelling replacement; continuation agreement does not score that replacement.
 
 ## Sub-features
 

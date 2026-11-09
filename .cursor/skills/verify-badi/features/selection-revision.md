@@ -13,7 +13,7 @@ Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar. The
 
 ## How to get to it (user POV)
 
-- In an allowed Chromium-based app's plain text field, or a native exact field, select a line of disposable text with an error ("She dont know where is the station") and press Ctrl+Shift+Space. Press it again for a refined wording. On a short selection such as one word, press it again for a synonym, and again for another. A longer line's next press returns to grammar. Escape or an edit starts the cycle over. Obsidian, Neovim and Writer do not revise a selection.
+- In an allowed Chromium-based app's plain text field, or a native exact field, select a line of disposable text with an error ("She dont know where is the station") and press Ctrl+Shift+Space. Press it again for a refined wording. On a short selection such as one word, press it again for a synonym, and again for another. A longer line's next press returns to grammar. A selection that is already correct shows "Badi found nothing to change", and the next press continues to the next mode of that same selection. Escape or an edit starts the cycle over. Obsidian, Neovim and Writer do not revise a selection.
 - The first request starts the revision model and takes a few seconds. The model stops after ten idle minutes.
 - `badi revise` says whether the model is installed; `badi revise install` downloads it.
 
@@ -25,14 +25,14 @@ Preconditions:
 - `badi doctor` names the installed commit and `badi revise` reports the model installed.
 - A throwaway browser profile on a disposable local page, and `badi debug on --text` for the trace.
 
-- **Grammar fix and apply.** Select the sentence, press the chord, check the marked change in Fcitx's candidate list, press Tab. The trace shows `revision_dispatched_unverified` then `revision_confirmed`, and the field reads the fixed sentence.
+- **Grammar fix and apply.** Select the sentence, press the chord, check the marked change in Fcitx's candidate list, press Tab. The Fcitx trace records `commit` events whose `reason` is `revision_dispatched_unverified`, then `revision_confirmed`, and the field reads the fixed sentence.
 - **Refine, synonym, and dismiss.** On a one-to-three-word selection, press the chord three times (grammar, refine, synonym), then Escape. The field and the selection are unchanged. On a longer line, the second press is refine and the next returns to grammar.
-- **Nothing to change.** A correct selection shows "Badi found nothing to change" (`no_change`).
+- **Nothing to change.** A correct selection shows "Badi found nothing to change" (`no_change`). That answer does not restart the cycle: the next chord asks for the next mode of the same selection.
 - **Refusal.** In a password field the trace shows no `revision.request` and no key lines.
 
 ## Gotchas
 
-- Rich editors are refused (`unsupported_selection`): their blocks cannot be matched to Fcitx's text exactly.
+- A rich editor is refused by the observer as `unsupported_selection`: its blocks cannot be matched to Fcitx's text exactly. The notice Fcitx shows for that denial is the one-line selection message, and the addon trace reason is `observer_snapshot_denied`.
 - Only one line of 1–600 characters is revised; a longer or multi-line selection shows "Badi revises one line of up to 600 characters — select again".
 - Undo is the app's: in Chromium one Ctrl+Z restores the selection's text.
 - A shown revision is development-quality model output; judge the gate (language, facts kept, at most half of the words changed by a grammar check), not the wording.

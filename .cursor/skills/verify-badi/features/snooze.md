@@ -35,3 +35,4 @@ Preconditions:
 - `badictl status` omits `snoozes` when the list is empty. A missing key is the idle state. A present key is a recorded subject.
 - `snooze-others` is not driven headless: the instance grants Bash only, so a second app cannot suggest. Do not treat Bash going quiet as proof that another app still works.
 - Snooze while already paused is refused. Resume the pause before snoozing.
+- When focused fields belong to more than one app or site, snooze refuses with `error_code=rejected:ambiguous_session` and records nothing.
