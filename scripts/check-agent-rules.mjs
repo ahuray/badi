@@ -4,8 +4,9 @@
 //   documents    future plans.md stays the only backlog
 //   vocabulary   the Lab calls badi_broker::vocabulary::complete
 //   notices      THIRD-PARTY-NOTICES.txt lists the Cargo.lock versions
+//   feature-map  verify-badi quotes panel copy the QML actually shows
 //
-//   node scripts/check-agent-rules.mjs [--only changelog|documents|vocabulary|notices] [--rev SHA]
+//   node scripts/check-agent-rules.mjs [--only changelog|documents|vocabulary|notices|feature-map] [--rev SHA]
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -13,7 +14,8 @@ import { pathToFileURL } from "node:url";
 import process from "node:process";
 
 const repository = path.resolve(import.meta.dirname, "..");
-const CHECKS = ["changelog", "documents", "vocabulary", "notices"];
+const CHECKS = ["changelog", "documents", "vocabulary", "notices", "feature-map"];
+const FEATURE_MAP = ".cursor/skills/verify-badi/";
 const NOTICES_FIX = "Run python3 scripts/third-party-notices.py and commit THIRD-PARTY-NOTICES.txt.";
 const LAB_SRC = "evaluation/writing/lab-worker/src/";
 
@@ -307,6 +309,26 @@ export function noticesProblems(lockText, noticesText) {
   return problems;
 }
 
+// The panel hero is one string in SettingsView.qml. The feature map copied
+// a different one (`HELD · SCREEN SHARED`) through three upkeep passes
+// (PRs 153, 154, 161) until PR 179. A backtick containing "·" has to be
+// that source, not a paraphrase.
+export function featureMapProblems(markdownFiles, sourceText) {
+  const problems = [];
+  for (const file of markdownFiles) {
+    if (!file.path.startsWith(FEATURE_MAP) || !file.path.endsWith(".md")) continue;
+    for (const match of file.text.matchAll(/`([^`\n]*·[^`\n]*)`/gu)) {
+      const copy = match[1];
+      if (!sourceText.includes(copy)) {
+        problems.push(
+          `${file.path} quotes \`${copy}\`, which is not the panel or status text. Copy it from ui/omarchy-plugin/*.qml or scripts/badi-desktop.py.`,
+        );
+      }
+    }
+  }
+  return problems;
+}
+
 function textAt(rev, file) {
   if (!rev) {
     const full = path.join(repository, file);
@@ -315,6 +337,17 @@ function textAt(rev, file) {
   }
   const shown = git(["show", `${rev}:${file}`], true);
   return shown.status === 0 ? shown.stdout : null;
+}
+
+function featureMapAt(rev) {
+  const names = treeFiles(rev);
+  const markdown = names
+    .filter((file) => file.startsWith(FEATURE_MAP) && file.endsWith(".md"))
+    .map((file) => ({ path: file, text: textAt(rev, file) ?? "" }));
+  const sources = names.filter((file) =>
+    (file.startsWith("ui/omarchy-plugin/") && file.endsWith(".qml")) || file === "scripts/badi-desktop.py");
+  const sourceText = sources.map((file) => textAt(rev, file) ?? "").join("\n");
+  return featureMapProblems(markdown, sourceText);
 }
 
 function noticesAt(rev) {
@@ -357,6 +390,7 @@ function run() {
   }
   if (want.includes("vocabulary")) problems.push(...vocabularyProblems(vocabularyFiles(rev)));
   if (want.includes("notices")) problems.push(...noticesAt(rev));
+  if (want.includes("feature-map")) problems.push(...featureMapAt(rev));
   if (problems.length > 0) {
     process.stderr.write(`${problems.join("\n\n")}\n`);
     process.exitCode = 1;

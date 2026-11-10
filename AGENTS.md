@@ -81,6 +81,7 @@ should serve current work.
 | [future plans.md](<future plans.md>) is the only backlog; no parallel planning, handoff or report document | the same check | Exit 1, naming the file to delete |
 | The Lab finishes a word by calling `badi_broker::vocabulary::complete` | the same check | Exit 1 when `evaluation/writing/lab-worker/src` scans words with `unicode_word_indices`, or no file there calls that function |
 | [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) lists each shipped crate at the version in [Cargo.lock](Cargo.lock) | the same check | Exit 1 naming the crate and `python3 scripts/third-party-notices.py`. The Rust job still runs that script's `--check` |
+| A verify-badi backtick that contains `·` is the panel or status string | the same check | Exit 1 naming the feature file. The string is in `ui/omarchy-plugin/*.qml` or `scripts/badi-desktop.py` |
 
 ## Architecture
 

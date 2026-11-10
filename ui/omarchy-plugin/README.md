@@ -44,8 +44,8 @@ Every open starts compact, and search always covers every setting. From the
 top:
 
 - **Hero:** the mark, the model as a pill, Badi's mode as a glyph and word
-  (`⏵⏵ SUGGESTING`, `⏸ PAUSED`, `⏸ HELD · SCREEN SHARED`, `◌ LOADING`,
-  `○ MODEL OFFLINE`, `◇ NO APP ALLOWED`) and a switch that pauses or
+  (`⏵⏵ Suggesting`, `⏸ Paused`, `⏸ Held · screen shared`, `◌ Loading`,
+  `○ Model offline`, `◇ No app allowed`) and a switch that pauses or
   resumes. While the screen-share hold is on (the session helper's report in
   `badictl overview`, [runbook](../../adapters/session/README.md#screen-sharing)),
   the status reads "Held while the screen is shared"; the switch stays on,
