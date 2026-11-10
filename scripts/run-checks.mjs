@@ -6,6 +6,7 @@ import process from "node:process";
 
 const DEFAULT_CHECKS = [
   "agent-rules:check",
+  "formal:check",
   "docs:check",
   "accessibility:check",
   "session:check",

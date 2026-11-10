@@ -1,7 +1,23 @@
 ---
 name: verify-badi-formal-withhold
 description: Checks Badi's pause, snooze and screen-share withhold ordering with TLA+ (TLC) and the broker withhold_ tests. Use when a change touches runtime pause, settings pause, desktop hold, screen-share grace, snooze, ambiguous_session, or whether a suggestion may be admitted.
+formal: true
 sync_commit: 972c5a52900a8ceec57528664734c7ae0ee31180
+# Covered code. scripts/formal-sync-check.py reads this list.
+covered:
+  - broker/src/engine/authority.rs
+  - broker/src/engine/settings.rs
+  - broker/src/engine/mod.rs
+  - broker/src/engine/desktop.rs
+  - broker/src/engine/session.rs
+  - broker/src/engine/generation.rs
+  - broker/src/engine/snooze.rs
+  - broker/src/protocol.rs
+  - broker/src/settings/policy.rs
+# Spec files. A covered-file commit is in sync only when it also changes one of these.
+spec:
+  - .cursor/skills/verify-badi-formal-withhold/Withhold.tla
+  - .cursor/skills/verify-badi-formal-withhold/Withhold.cfg
 ---
 
 # Verify withhold ordering
@@ -21,6 +37,8 @@ From the repository root:
 ```
 
 Exit 0 means TLC found no counterexample and every `withhold_` test in `broker/src/engine/tests/withhold.rs` passed. The script prints a TLC summary and a final line `TLC exit N; cargo test exit N`. Any other exit is a failure. A TLC "No error has been found" line is not success on its own.
+
+The sync gate is a different command, `python3 scripts/formal-sync-check.py`. It fails when a covered file is not the file named by `sync_commit`. CI runs it on every pull request, and runs `check.sh` only when a covered file, a spec file, or `check.sh` changed.
 
 The checker is TLA+ 1.7.4, TLC 2.19 of 08 August 2024, jar sha256 `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`. The script downloads that jar into the user cache and refuses a different hash. It needs `java` (OpenJDK 21 is enough; Debian and Ubuntu package `openjdk-21-jre-headless`) and `curl`. It does not install Rust.
 
@@ -53,11 +71,13 @@ TLC passing while a `withhold_` test fails means the running broker broke the pr
 
 ## When the code changes
 
-Confirm the model still describes the functions in [Coverage](#coverage). A green `check.sh` is not that confirmation. Move `sync_commit` in this file only after that confirmation, to the commit you confirmed. Follow pstack /maintain-formal-verification-skill: edit the model, the config, this skill and the `withhold_` tests, not product code, and do not weaken the property to pass.
+`scripts/formal-sync-check.py` reads `sync_commit`, `covered` and `spec` above. A skill is included when its directory name contains `formal`, or when frontmatter sets `formal: true`. The check fails when a covered file was modified, added, renamed or deleted since `sync_commit`, unless that same commit also changes a spec file. `check.sh` is not a spec file. Moving `sync_commit` to the commit you confirmed makes the files match again. A later spec-only commit does not excuse an earlier code change.
+
+Confirm the model still describes the functions in [Coverage](#coverage). A green `check.sh` is not that confirmation. Move `sync_commit` in this file only after that confirmation, to the commit you confirmed. Follow /maintain-formal-verification-skill: edit the model, the config, this skill and the `withhold_` tests, not product code, and do not weaken the property to pass.
 
 ## Coverage
 
-Confirmed against commit `972c5a52900a8ceec57528664734c7ae0ee31180`. The model describes these functions as of that commit. The `withhold_` tests call them.
+Confirmed against commit `972c5a52900a8ceec57528664734c7ae0ee31180`. The model describes these functions as of that commit. The `withhold_` tests call them. The frontmatter `covered` list is the file list CI reads, and it names the files in this table.
 
 | TLC action or operator | Code |
 | --- | --- |
