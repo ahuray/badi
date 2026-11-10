@@ -82,6 +82,7 @@ should serve current work.
 | The Lab finishes a word by calling `badi_broker::vocabulary::complete` | the same check | Exit 1 when `evaluation/writing/lab-worker/src` scans words with `unicode_word_indices`, or no file there calls that function |
 | [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) lists each shipped crate at the version in [Cargo.lock](Cargo.lock) | the same check | Exit 1 naming the crate and `python3 scripts/third-party-notices.py`. The Rust job still runs that script's `--check` |
 | A verify-badi backtick that contains `·` is the panel or status string | the same check | Exit 1 naming the feature file. The string is in `ui/omarchy-plugin/*.qml` or `scripts/badi-desktop.py` |
+| Arch CI installs packages with [scripts/ci-arch-snapshot.sh](scripts/ci-arch-snapshot.sh) | the same check | Exit 1 when [.github/workflows/ci.yml](.github/workflows/ci.yml) calls `pacman -S` itself. The script sets `DisableDownloadTimeout` and retries; `BADI_ARCH_SNAPSHOT` must be a copy of it |
 
 ## Architecture
 

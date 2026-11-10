@@ -5,8 +5,9 @@
 //   vocabulary   the Lab calls badi_broker::vocabulary::complete
 //   notices      THIRD-PARTY-NOTICES.txt lists the Cargo.lock versions
 //   feature-map  verify-badi quotes panel copy the QML actually shows
+//   arch         CI installs Arch packages through scripts/ci-arch-snapshot.sh
 //
-//   node scripts/check-agent-rules.mjs [--only changelog|documents|vocabulary|notices|feature-map] [--rev SHA]
+//   node scripts/check-agent-rules.mjs [--only changelog|documents|vocabulary|notices|feature-map|arch] [--rev SHA]
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -14,7 +15,9 @@ import { pathToFileURL } from "node:url";
 import process from "node:process";
 
 const repository = path.resolve(import.meta.dirname, "..");
-const CHECKS = ["changelog", "documents", "vocabulary", "notices", "feature-map"];
+const CHECKS = ["changelog", "documents", "vocabulary", "notices", "feature-map", "arch"];
+const ARCH_SCRIPT = "scripts/ci-arch-snapshot.sh";
+const ARCH_KEY = "  BADI_ARCH_SNAPSHOT: |";
 const FEATURE_MAP = ".cursor/skills/verify-badi/";
 const NOTICES_FIX = "Run python3 scripts/third-party-notices.py and commit THIRD-PARTY-NOTICES.txt.";
 const LAB_SRC = "evaluation/writing/lab-worker/src/";
@@ -359,6 +362,82 @@ function noticesAt(rev) {
   return noticesProblems(lock, notices);
 }
 
+function normalizeScript(text) {
+  return `${text.replace(/\s+$/u, "")}\n`;
+}
+
+// The snapshot helper is inlined into the workflow because the Arch image
+// has no git until pacman has run. The block is the lines indented under
+// BADI_ARCH_SNAPSHOT, which is the script with a four-space indent.
+export function embeddedSnapshot(ciText) {
+  const lines = ciText.split("\n");
+  const start = lines.indexOf(ARCH_KEY);
+  if (start === -1) return null;
+  const body = [];
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index];
+    if (line === "") {
+      body.push("");
+      continue;
+    }
+    if (!line.startsWith("    ")) break;
+    body.push(line.slice(4));
+  }
+  while (body.length > 0 && body[body.length - 1] === "") body.pop();
+  return body.length === 0 ? null : `${body.join("\n")}\n`;
+}
+
+export function barePacmanLines(ciText) {
+  const lines = ciText.split("\n");
+  const start = lines.indexOf(ARCH_KEY);
+  let end = start;
+  if (start !== -1) {
+    end = start + 1;
+    for (; end < lines.length; end++) {
+      const line = lines[end];
+      if (line !== "" && !line.startsWith("    ")) break;
+    }
+  }
+  const found = [];
+  lines.forEach((line, index) => {
+    if (start !== -1 && index > start && index < end) return;
+    if (/pacman\s+-S/u.test(line)) found.push(`${index + 1}: ${line.trim()}`);
+  });
+  return found;
+}
+
+export function archSnapshotProblems(ciText, scriptText) {
+  const problems = [];
+  const bare = barePacmanLines(ciText);
+  if (bare.length > 0) {
+    problems.push(
+      `.github/workflows/ci.yml installs packages with pacman directly:\n  ${bare.join("\n  ")}\narchive.archlinux.org stalls these jobs ("Operation too slow"; runs 38242538936, 38684819408, 39558825776). Call ${ARCH_SCRIPT}. Before checkout, pipe BADI_ARCH_SNAPSHOT, which must be a copy of that script. It sets DisableDownloadTimeout and retries.`,
+    );
+  }
+  if (scriptText === null) return problems;
+  const embedded = embeddedSnapshot(ciText);
+  if (embedded === null) {
+    problems.push(
+      `.github/workflows/ci.yml has no BADI_ARCH_SNAPSHOT block. Paste ${ARCH_SCRIPT} there. The Arch image has no git until that script has run.`,
+    );
+  } else if (embedded !== normalizeScript(scriptText)) {
+    problems.push(
+      `BADI_ARCH_SNAPSHOT in .github/workflows/ci.yml is not ${ARCH_SCRIPT}. Paste the script into that block. The job container cannot read the file until pacman has installed git.`,
+    );
+  }
+  if (!scriptText.includes("DisableDownloadTimeout") || !scriptText.includes("pacman_retry")) {
+    problems.push(`${ARCH_SCRIPT} must set DisableDownloadTimeout and retry pacman.`);
+  }
+  return problems;
+}
+
+function archAt(rev) {
+  const ci = textAt(rev, ".github/workflows/ci.yml");
+  const script = textAt(rev, ARCH_SCRIPT);
+  if (ci === null) return [".github/workflows/ci.yml is missing."];
+  return archSnapshotProblems(ci, script);
+}
+
 function selected() {
   const only = process.argv.indexOf("--only");
   if (only === -1) return CHECKS;
@@ -391,6 +470,7 @@ function run() {
   if (want.includes("vocabulary")) problems.push(...vocabularyProblems(vocabularyFiles(rev)));
   if (want.includes("notices")) problems.push(...noticesAt(rev));
   if (want.includes("feature-map")) problems.push(...featureMapAt(rev));
+  if (want.includes("arch")) problems.push(...archAt(rev));
   if (problems.length > 0) {
     process.stderr.write(`${problems.join("\n\n")}\n`);
     process.exitCode = 1;

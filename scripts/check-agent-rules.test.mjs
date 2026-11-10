@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { spawnSync } from "node:child_process";
-import { changelogProblems, cargoLockVersions, diffAddsUnderNewestHeading, featureMapProblems, isProductPath, noticesProblems, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { test } from "node:test";
+import { archSnapshotProblems, changelogProblems, cargoLockVersions, diffAddsUnderNewestHeading, featureMapProblems, isProductPath, noticesProblems, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
 
 const lookup = "evaluation/writing/lab-worker/src/context_lookup.rs";
 
@@ -117,6 +119,56 @@ test("the feature map before PR 179 fails, and current main passes", () => {
   assert.match(failed.stderr, /HELD · SCREEN SHARED/);
   const passed = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "feature-map", "--rev", main], { encoding: "utf8" });
   assert.equal(passed.status, 0, passed.stderr);
+});
+
+test("the Arch snapshot helper retries, and a direct pacman install fails the rule", () => {
+  const root = mkdtempSync(`${tmpdir()}/badi-arch-`);
+  const bin = `${root}/bin`;
+  const conf = `${root}/pacman.conf`;
+  const mirror = `${root}/mirrorlist`;
+  writeFileSync(conf, "[options]\nHoldPkg = pacman\n");
+  spawnSync("mkdir", ["-p", bin]);
+  writeFileSync(`${bin}/pacman`, "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$BADI_PACMAN_LOG\"\ncount=$(wc -l < \"$BADI_PACMAN_LOG\")\nif [[ \"$count\" -lt 3 ]]; then echo 'Operation too slow' >&2; exit 1; fi\nexit 0\n");
+  chmodSync(`${bin}/pacman`, 0o755);
+  const env = {
+    ...process.env,
+    PATH: `${bin}:/usr/bin:/bin`,
+    BADI_PACMAN_CONF: conf,
+    BADI_MIRRORLIST: mirror,
+    BADI_ARCH_RETRY_SLEEP: "0",
+    BADI_PACMAN_LOG: `${root}/log`,
+  };
+  writeFileSync(env.BADI_PACMAN_LOG, "");
+  const ok = spawnSync("bash", ["scripts/ci-arch-snapshot.sh", "2026/10/18", "git"], { env, encoding: "utf8" });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(readFileSync(conf, "utf8"), /^DisableDownloadTimeout$/m);
+  const calls = readFileSync(env.BADI_PACMAN_LOG, "utf8").trim().split("\n");
+  assert.equal(calls.length, 4, calls.join(" | "));
+  assert.match(calls[2], /^-Syyu/);
+  assert.match(calls[3], /^-S --needed --noconfirm git$/);
+
+  writeFileSync(env.BADI_PACMAN_LOG, "");
+  writeFileSync(`${bin}/pacman`, "#!/bin/bash\necho 'Failed to connect' >&2\nexit 1\n");
+  chmodSync(`${bin}/pacman`, 0o755);
+  const failed = spawnSync("bash", ["scripts/ci-arch-snapshot.sh", "2026/08/31", "git"], { env, encoding: "utf8" });
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /failed after 5 attempts/);
+
+  const direct = "jobs:\n  arch:\n    steps:\n      - run: pacman -Syyu --noconfirm\n";
+  assert.match(archSnapshotProblems(direct, null)[0], /pacman -Syyu/);
+  assert.match(archSnapshotProblems(direct, null)[0], /scripts\/ci-arch-snapshot\.sh/);
+});
+
+test("the Arch workflow that timed out fails, and this tree's helper matches", () => {
+  const timedOut = "161351c15834367f23ea3cb2c1c7066da7c0f90a";
+  const main = "972c5a52900a8ceec57528664734c7ae0ee31180";
+  for (const rev of [timedOut, main]) {
+    const run = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "arch", "--rev", rev], { encoding: "utf8" });
+    assert.equal(run.status, 1, run.stdout);
+    assert.match(run.stderr, /pacman -S/);
+  }
+  const here = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "arch"], { encoding: "utf8" });
+  assert.equal(here.status, 0, here.stderr);
 });
 
 test("a push is checked from its old tip, or alone when it replaced history", () => {
