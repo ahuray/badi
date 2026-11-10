@@ -160,11 +160,12 @@ test("the Arch snapshot helper retries, and a direct pacman install fails the ru
 });
 
 test("the Arch workflow that timed out fails, and this tree's helper matches", () => {
-  const timedOut = "161351c15834367f23ea3cb2c1c7066da7c0f90a";
-  const main = "972c5a52900a8ceec57528664734c7ae0ee31180";
-  for (const rev of [timedOut, main]) {
+  // The Actions runs that stalled (161351c and the others) predate the 0.2.0
+  // root, so a normal clone has no such object. c948ffd is that root, and
+  // 972c5a5 is current main: both still call pacman directly.
+  for (const rev of ["c948ffd92efda219ad54d0ee3fbd879869db9ec1", "972c5a52900a8ceec57528664734c7ae0ee31180"]) {
     const run = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "arch", "--rev", rev], { encoding: "utf8" });
-    assert.equal(run.status, 1, run.stdout);
+    assert.equal(run.status, 1, `${rev}\n${run.stderr}`);
     assert.match(run.stderr, /pacman -S/);
   }
   const here = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "arch"], { encoding: "utf8" });
