@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
-import { changelogProblems, cargoLockVersions, diffAddsUnderNewestHeading, isProductPath, noticesProblems, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
+import { changelogProblems, cargoLockVersions, diffAddsUnderNewestHeading, featureMapProblems, isProductPath, noticesProblems, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
 
 const lookup = "evaluation/writing/lab-worker/src/context_lookup.rs";
 
@@ -97,6 +97,26 @@ test("current main's notices match, and the jsonschema bump did not need a rewri
     const run = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "notices", "--rev", rev], { encoding: "utf8" });
     assert.equal(run.status, 0, run.stderr);
   }
+});
+
+test("a feature-map hero that the panel does not show fails", () => {
+  const source = 'text: "Held · screen shared"';
+  const wrong = [{ path: ".cursor/skills/verify-badi/features/screen-share-hold.md", text: "the hero reads `HELD · SCREEN SHARED`" }];
+  const right = [{ path: wrong[0].path, text: "the hero reads `Held · screen shared`" }];
+  assert.match(featureMapProblems(wrong, source)[0], /HELD · SCREEN SHARED/);
+  assert.match(featureMapProblems(wrong, source)[0], /ui\/omarchy-plugin/);
+  assert.deepEqual(featureMapProblems(right, source), []);
+  assert.deepEqual(featureMapProblems([{ path: "README.md", text: "`HELD · SCREEN SHARED`" }], source), []);
+});
+
+test("the feature map before PR 179 fails, and current main passes", () => {
+  const before = "23b9285b3101ada4e4ffad6e1f8b8e41037817bb";
+  const main = "972c5a52900a8ceec57528664734c7ae0ee31180";
+  const failed = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "feature-map", "--rev", before], { encoding: "utf8" });
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /HELD · SCREEN SHARED/);
+  const passed = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "feature-map", "--rev", main], { encoding: "utf8" });
+  assert.equal(passed.status, 0, passed.stderr);
 });
 
 test("a push is checked from its old tip, or alone when it replaced history", () => {
