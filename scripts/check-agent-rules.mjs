@@ -1,10 +1,11 @@
-// Three checks for mistakes agents repeated here.
+// Checks for mistakes agents repeated here.
 //
 //   changelog    a behavior commit updates CHANGELOG.md itself
 //   documents    future plans.md stays the only backlog
 //   vocabulary   the Lab calls badi_broker::vocabulary::complete
+//   notices      THIRD-PARTY-NOTICES.txt lists the Cargo.lock versions
 //
-//   node scripts/check-agent-rules.mjs [--only changelog|documents|vocabulary] [--rev SHA]
+//   node scripts/check-agent-rules.mjs [--only changelog|documents|vocabulary|notices] [--rev SHA]
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -12,7 +13,8 @@ import { pathToFileURL } from "node:url";
 import process from "node:process";
 
 const repository = path.resolve(import.meta.dirname, "..");
-const CHECKS = ["changelog", "documents", "vocabulary"];
+const CHECKS = ["changelog", "documents", "vocabulary", "notices"];
+const NOTICES_FIX = "Run python3 scripts/third-party-notices.py and commit THIRD-PARTY-NOTICES.txt.";
 const LAB_SRC = "evaluation/writing/lab-worker/src/";
 
 const SKIP_PRODUCT = /(?:^|\/)(?:tests?|examples)\//u;
@@ -265,6 +267,65 @@ function vocabularyFiles(rev) {
     .map((file) => ({ path: file, text: readAt(rev, file) }));
 }
 
+export function cargoLockVersions(text) {
+  const versions = new Map();
+  for (const match of text.matchAll(/\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"/gu)) {
+    const found = versions.get(match[1]) ?? new Set();
+    found.add(match[2]);
+    versions.set(match[1], found);
+  }
+  return versions;
+}
+
+// Cargo.lock is the source of the versions linked into the binaries.
+// THIRD-PARTY-NOTICES.txt is generated from it. Dependabot and agents
+// updated the lock and left the notices file behind (PRs 155, 156, 178).
+export function noticesProblems(lockText, noticesText) {
+  const versions = cargoLockVersions(lockText);
+  const marker = "Components\n----------\n";
+  const start = noticesText.indexOf(marker);
+  const end = noticesText.indexOf("\nLicence texts\n");
+  if (start === -1 || end === -1 || end < start) {
+    return [`THIRD-PARTY-NOTICES.txt has no Components section. ${NOTICES_FIX}`];
+  }
+  const problems = [];
+  for (const line of noticesText.slice(start + marker.length, end).split("\n")) {
+    if (!line.trim() || line.includes("compiled into the Fcitx addon")) continue;
+    const match = /^(\S+) (\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/u.exec(line);
+    if (!match) {
+      problems.push(`THIRD-PARTY-NOTICES.txt has an unreadable component line: ${line}\n${NOTICES_FIX}`);
+      continue;
+    }
+    const name = match[1];
+    const version = match[2];
+    const have = versions.get(name);
+    if (!have || !have.has(version)) {
+      const listed = have ? [...have].sort().join(", ") : "nothing";
+      problems.push(`THIRD-PARTY-NOTICES.txt lists ${name} ${version} but Cargo.lock has ${listed}. ${NOTICES_FIX}`);
+    }
+  }
+  return problems;
+}
+
+function textAt(rev, file) {
+  if (!rev) {
+    const full = path.join(repository, file);
+    if (!existsSync(full)) return null;
+    return readFileSync(full, "utf8");
+  }
+  const shown = git(["show", `${rev}:${file}`], true);
+  return shown.status === 0 ? shown.stdout : null;
+}
+
+function noticesAt(rev) {
+  const lock = textAt(rev, "Cargo.lock");
+  const notices = textAt(rev, "THIRD-PARTY-NOTICES.txt");
+  if (lock === null || notices === null) {
+    return [`Cargo.lock or THIRD-PARTY-NOTICES.txt is missing. ${NOTICES_FIX}`];
+  }
+  return noticesProblems(lock, notices);
+}
+
 function selected() {
   const only = process.argv.indexOf("--only");
   if (only === -1) return CHECKS;
@@ -295,6 +356,7 @@ function run() {
     }
   }
   if (want.includes("vocabulary")) problems.push(...vocabularyProblems(vocabularyFiles(rev)));
+  if (want.includes("notices")) problems.push(...noticesAt(rev));
   if (problems.length > 0) {
     process.stderr.write(`${problems.join("\n\n")}\n`);
     process.exitCode = 1;

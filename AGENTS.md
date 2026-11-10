@@ -80,6 +80,7 @@ should serve current work.
 | A commit that changes broker, adapter, protocol, panel, packaging or installer behavior also adds a [CHANGELOG.md](CHANGELOG.md) line under `## Unreleased` | [`scripts/check-agent-rules.mjs`](scripts/check-agent-rules.mjs) via `npm run agent-rules:check` | Exit 1, naming that commit and the product files. A later commit that only edits the changelog still fails |
 | [future plans.md](<future plans.md>) is the only backlog; no parallel planning, handoff or report document | the same check | Exit 1, naming the file to delete |
 | The Lab finishes a word by calling `badi_broker::vocabulary::complete` | the same check | Exit 1 when `evaluation/writing/lab-worker/src` scans words with `unicode_word_indices`, or no file there calls that function |
+| [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) lists each shipped crate at the version in [Cargo.lock](Cargo.lock) | the same check | Exit 1 naming the crate and `python3 scripts/third-party-notices.py`. The Rust job still runs that script's `--check` |
 
 ## Architecture
 

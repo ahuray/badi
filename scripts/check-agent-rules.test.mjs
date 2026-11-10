@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changelogProblems, diffAddsUnderNewestHeading, isProductPath, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
+import { spawnSync } from "node:child_process";
+import { changelogProblems, cargoLockVersions, diffAddsUnderNewestHeading, isProductPath, noticesProblems, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
 
 const lookup = "evaluation/writing/lab-worker/src/context_lookup.rs";
 
@@ -68,6 +69,34 @@ test("only a changelog line under the newest heading counts", () => {
   assert.equal(diffAddsUnderNewestHeading(underRelease, text), false, "a line under an old release is not the newest heading");
   assert.equal(diffAddsUnderNewestHeading(blankOnly, text), false);
   assert.equal(diffAddsUnderNewestHeading(underUnreleased, "# Changelog\n\n- New thing.\n"), false, "no heading, no credit");
+});
+
+test("notices follow Cargo.lock, and an unshipped crate is not part of the file", () => {
+  const lock = [
+    "[[package]]",
+    'name = "tokio"',
+    'version = "1.54.1"',
+    "",
+    "[[package]]",
+    'name = "jsonschema"',
+    'version = "0.60.2"',
+    "",
+  ].join("\n");
+  const stale = "Components\n----------\n\ntokio 1.53.3  MIT\nnlohmann-json 3.12.0  MIT  compiled into the Fcitx addon\n\nLicence texts\n";
+  assert.match(noticesProblems(lock, stale)[0], /tokio 1\.53\.3 but Cargo.lock has 1\.54\.1/);
+  assert.match(noticesProblems(lock, stale)[0], /python3 scripts\/third-party-notices\.py/);
+  assert.deepEqual(noticesProblems(lock, stale.replace("tokio 1.53.3", "tokio 1.54.1")), []);
+  assert.deepEqual([...cargoLockVersions(lock).get("jsonschema")], ["0.60.2"]);
+});
+
+test("current main's notices match, and the jsonschema bump did not need a rewrite", () => {
+  const main = "972c5a52900a8ceec57528664734c7ae0ee31180";
+  const jsonschema = "4f79746206f136a763953da4bc77598b2308e84b";
+  const fixed = "1f9d7cfcfca55afac6f9a4cc6bf68e5a98c18f21";
+  for (const rev of [main, jsonschema, fixed]) {
+    const run = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "notices", "--rev", rev], { encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+  }
 });
 
 test("a push is checked from its old tip, or alone when it replaced history", () => {
