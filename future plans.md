@@ -430,14 +430,16 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       and the model's choice among candidates. On 26 disposable development
       cases Gemma 3 1B chose the intended word in 18, a wrong one in 2
       (`Zeitt → Zeigt`, `cassa → casas`) and abstained on 6
-      ([broker runbook](broker/README.md#suggestion-limits)). That choice is
+      ([broker runbook](broker/README.md#suggestion-limits)). That choice was
       an uncached model call of 0.4–0.6 s at the 28 W limit (1–2.5 s with
-      the earlier Qwen3 1.7B at 15 W), so it fits Writer's spelling budget
-      but often not the 550 ms typing budget; a cached spelling prompt slot
-      would close that gap. At 15 W the real-model probe
+      the earlier Qwen3 1.7B at 15 W), often missing the 550 ms typing
+      budget; since 2026-11-11 both spelling prompts use the prompt cache
+      and warm-up primes the English prefix, and in paired interleaved
+      real-model runs (PL1 80 W, power-saver) the probe
       `installed_model_produces_continuations_and_spelling_replacements`
-      fails 5 of 12 runs this way, before and after the 2026-11-06 gate
-      change alike (`recieve` chosen in 450–550 ms). The Lab has no
+      went from 6 of 6 failures to 6 of 6 passes (`teh` median 535 → 93 ms,
+      `output/writing/2026-11-11-spelling-cache/`). The held-out quality
+      measurement above is still open. The Lab has no
       separate spelling engine: measure through `production_boundary` with
       the dictionary languages on.
 

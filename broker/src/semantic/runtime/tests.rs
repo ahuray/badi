@@ -465,31 +465,34 @@ async fn warm_up_reports_completion_and_failure_without_failing_the_runtime()
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let runtime = owned_runtime_at(listener.local_addr()?)?;
     let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("warm-up connection");
-        let mut request = Vec::new();
-        let mut buffer = [0_u8; 4096];
-        loop {
-            let read = socket.read(&mut buffer).await.expect("warm-up request");
-            assert_ne!(read, 0);
-            request.extend_from_slice(&buffer[..read]);
-            let text = String::from_utf8_lossy(&request);
-            let Some((headers, body)) = text.split_once("\r\n\r\n") else {
-                continue;
-            };
-            let length: usize = headers
-                .lines()
-                .find_map(|line| line.strip_prefix("content-length: "))
-                .expect("content length")
-                .parse()
-                .expect("length");
-            if body.len() >= length {
-                break;
+        // The warm-up completion and the spelling prime that follows it.
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("warm-up connection");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let read = socket.read(&mut buffer).await.expect("warm-up request");
+                assert_ne!(read, 0);
+                request.extend_from_slice(&buffer[..read]);
+                let text = String::from_utf8_lossy(&request);
+                let Some((headers, body)) = text.split_once("\r\n\r\n") else {
+                    continue;
+                };
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .expect("content length")
+                    .parse()
+                    .expect("length");
+                if body.len() >= length {
+                    break;
+                }
             }
-        }
-        socket
+            socket
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
             .await
             .expect("warm-up reply");
+        }
         let (_stalled, _) = listener.accept().await.expect("stalled connection");
         tokio::time::sleep(Duration::from_secs(2)).await;
     });
