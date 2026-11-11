@@ -406,7 +406,10 @@ pub(crate) fn choice_payload(before: &str, word: &str, candidates: &[String]) ->
         "seed": 42,
         "stop": ["\n"],
         "stream": true,
-        "cache_prompt": false,
+        // Cached like a continuation, so a field's repeated choices reuse
+        // their shared context prefix and the writing window's cached prefix
+        // survives a choice in the RAM prompt cache.
+        "cache_prompt": true,
     })
 }
 

@@ -288,7 +288,11 @@ prints pinned download advice and downloads nothing
   before spawn, after spawn and after readiness confirm the same files by
   device, inode, size and times.
 - **Warm-up.** Before binding the socket, one fixed two-token completion warms
-  the model; a failure only leaves the first request cold.
+  the model; a failure only leaves the first request cold. A second fixed
+  completion then primes the English spelling prompt's prefix in the RAM
+  prompt cache (a synthetic typo, best effort within the same bound), so the
+  first correction does not re-read the prompt's fixed examples inside the
+  typing budget.
 - **Containment.** The runtime (llama.cpp `llama-server`) starts through a
   parent-death helper and cannot outlive the broker. If it exits, the broker
   exits 1; the [service unit](../packaging/systemd/badi-broker.service) restarts
@@ -736,7 +740,10 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   inside an opened quote (`The intended word is "`) and its raw answer is read
   up to the closing quote; echoing the typo is how the model abstains. After
   a bare `Answer:`, base models such as Gemma 3 1B start a new line and never
-  answer. A word without its typed
+  answer. Both spelling prompts run with prompt caching on, so their
+  prefixes live in the RAM prompt cache beside the writing window's and a
+  choice does not re-read them inside the typing budget (still one slot).
+  A word without its typed
   space is checked only on an explicit request, and a capitalized word
   mid-sentence only in German. Replacements are 2-32 characters with case
   (Unicode Lowercase or Uppercase) plus the optional space, in every
@@ -765,6 +772,7 @@ universal scores.
 | Typed lexicon words | Paired Lab, 134 English stems from the development references (34 mid-sentence) and 29 prefixes ending on a finished word, seed 42, 15 W, `output/writing/2026-10-23-word-stems/` | Intended word finished 75 times against 0 (23 of the mid-sentence ones against 0); text running on after the stem 9 against 40; finished words kept their 23 suggestions; shown p90 392 against 485 ms. Forbidding the lone space token: 124 of 134 first tokens stood against 91 |
 | Word-finishing tokens and the restored period not counted | Paired Lab `production_boundary`, the 134 English stems, 29 finished words and 41 mid-sentence cases of the typed-words trial plus the 16 development and 19 real-text cases (English, German, Persian), seed 42, 15 W, `output/writing/2026-11-06-partial-words/` | Intended word finished 92 times against 75, nothing shown 18 against 38, another word 14 against 12 (`areas`, US `behavior`); shown p50 263 against 260 ms. Finished words, German and real text unchanged; the four changes the rule cannot make (two Persian, two English) were cut at 550 ms |
 | Word-finishing tokens, live | Installed `23b9285` with this change (uncommitted), Chromium 155 isolated profile, an empty disposable field, 15 W, `output/native-trials/2026-11-07-partial-words/` | All five stems the gate had withheld showed the model's suggestion (no context word matched): `docum` → `ents below for information` (Tab landed `documents`), `autom` → `atically detect`, `patie` → `nce.`, `confi` → `rm the following`, `bud` → `get.`; later words −1.56 to −2.17 |
+| Word-finishing tokens, live on the other surfaces | Installed `3454e2e` (2026-11-11), the same five stems in disposable fields, `output/native-trials/2026-11-11-partial-words-surfaces/` | All five finished the intended word on every surface, Tab (Bash: Ctrl-X Tab again) landed `documents` on the first: Bash 5.3.20 in Ghostty 1.4.0 (`terminal` shows; nothing submitted), Neovim 0.12.6 in Ghostty 1.4.0 (LazyVim and `nvim -u NORC` with the installed plugin), Obsidian 1.14.4-2/Electron 43 headed on Wayland (temporary vault and profile, checkout broker binary), and Omawrite 0.7.2 as the native Fcitx field (an empty field per stem; with several paragraphs every request was `observer_context_mismatch`, fail-closed). Ghostty's typed line finished all five too, when the Neovim plugin had not loaded (`-u NONE`) |
 | Confidence floor, calibration | Gemma 3 1B's exact production payloads replayed for 301 reviewed development suggestions, three blind label rounds each; every replay reproduced its text | The lowest token log-probability separates useful from unhelpful or harmful at an AUC of 0.70–0.77 overall, strongly in German and not at all in English; the first word's confidence alone was much weaker |
 | Confidence floor, held out | Confirmation outputs (224 shown), rule frozen before the test | Harmful additions 15 → 10, unhelpful 18 → 10, harm falling or holding in every language; lost 7 of 51 useful full additions (2 English, 3 Persian); 19% fewer suggestions |
 | Confidence floor, live | Chromium 154, 15 W, 115 paced word pauses of the same disposable text | Preview p50 294 against 218 ms (p90 395 against 265; 4 against 0 over 550 ms) after the last key; 92 against 112 pauses showed one, 17 withheld as `low_confidence` |
@@ -773,6 +781,7 @@ universal scores.
 | Fallback healing set | Sealed and development sets before the catalog's per-model review | German unlisted: the sealed set rose from 1 to 9 harmful. English kept by user decision at +1 harmful for +19 useful in 40 |
 | Mid-line prompts | The 41 English mid-sentence development cases | The rejoin showed two suggestions, one matching the reference; a framed prompt missed 550 ms on every cold case; a probability check showed only the punctuation completion; naming the line after the caret (`following_text`) showed one and missed 550 ms on 34 of 41, uncached |
 | Spelling choice prompt | 26 disposable development cases (German, Spanish, French), 28 W | The quoted prompt chose the intended word in 18 with Gemma 3 1B (2 wrong, 6 abstained), 15 with Llama 3.2 1B (4 wrong) and 22 with Qwen3 1.7B (3 wrong), 0.4–0.6 s per choice; a bare `Answer:` chose 1, 4 and 20 |
+| Cached spelling prompts, primed at warm-up | Paired real-model runs (frozen worktrees, prebuilt binaries interleaved, PL1 80 W, powersave governor, power-saver profile), `output/writing/2026-11-11-spelling-cache/` | `installed_model_produces_continuations_and_spelling_replacements` failed 6 of 6 before and passed 6 of 6 after; the model's English choices took median 93 against 535 ms (`teh`), 94 against 551 ms (`teh `), 110 ms (`recieve`, unreached before). The continuation probe passed 2 of 3 on both arms with matching medians (first case 551 ms both), so the prime did not cost the window its prefix cache |
 
 ## Shutdown and tests
 

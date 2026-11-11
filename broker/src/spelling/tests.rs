@@ -171,7 +171,7 @@ fn the_choice_prompt_opens_the_answer_on_its_own_line() {
         "Wir treffen uns morgen im Hauss\nIn this sentence, \"Hauss\" is a typo for one of: Haus, Hass.\nThe intended word is \""
     );
     assert_eq!(payload["stop"], json!(["\n"]));
-    assert_eq!(payload["cache_prompt"], json!(false));
+    assert_eq!(payload["cache_prompt"], json!(true));
     // The answer is read up to its closing quote; an echoed typo matches no
     // candidate and abstains.
     assert_eq!(chosen("Haus\" because", &candidates), Some(&candidates[0]));

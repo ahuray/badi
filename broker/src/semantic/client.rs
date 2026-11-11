@@ -44,6 +44,11 @@ const WRITING_HTTP_GRACE: Duration = Duration::from_millis(100);
 const AUTHORIZATION_CHALLENGE_TEXT: &str = "badi-owned-runtime-challenge";
 const WARM_UP_PROMPT: &str = "Thank you for your";
 const WARM_UP_TOKENS: u16 = 2;
+/// Fixed synthetic typo whose correction primes the spelling prompt prefix
+/// in the runtime's RAM prompt cache during warm-up, so the first real
+/// correction does not re-read the prompt's fixed examples inside the typing
+/// budget. No user text.
+const WARM_UP_SPELLING_WORD: &str = "teh";
 // A non-streaming reply also echoes generation settings; its body is discarded.
 const MAX_WARM_UP_RESPONSE_BYTES: usize = 64 * 1_024;
 /// First-token candidates read for an alternative, and how many of them may
@@ -1000,9 +1005,10 @@ impl SemanticClient {
         }
     }
 
-    /// Run one fixed, tiny completion so that a real request is not the
-    /// runtime's first inference. It carries no user text; the reply is
-    /// checked for status, type and size only and then discarded.
+    /// Run the fixed warm-up completions so that a real request is not the
+    /// runtime's first inference: one tiny continuation, then the spelling
+    /// prime. Neither carries user text; replies are checked for status,
+    /// type and size only and then discarded.
     pub async fn warm_up(
         &self,
         timeout: Duration,
@@ -1021,6 +1027,7 @@ impl SemanticClient {
     }
 
     async fn warm_up_inner(&self, timeout: Duration) -> Result<(), ClientError> {
+        let deadline = Instant::now() + timeout;
         let body = serde_json::to_vec(&serde_json::json!({
             "prompt": WARM_UP_PROMPT,
             "n_predict": WARM_UP_TOKENS,
@@ -1030,6 +1037,29 @@ impl SemanticClient {
             "cache_prompt": false,
         }))
         .map_err(|_| ClientError::InvalidRequest)?;
+        self.warm_completion(body, timeout).await?;
+        // Prime the English spelling prompt prefix in the RAM prompt cache,
+        // best effort within what is left of the warm-up bound: a failure
+        // only leaves the first correction cold, exactly as a failed
+        // warm-up leaves the first continuation cold.
+        // Keep a small margin inside the caller's bound, so a prime that
+        // merely runs out of room still reports the warm-up as completed.
+        let prime_budget = deadline
+            .saturating_duration_since(Instant::now())
+            .saturating_sub(Duration::from_millis(25));
+        if !prime_budget.is_zero() {
+            let mut prime = crate::writing::correction_payload(WARM_UP_SPELLING_WORD);
+            prime["stream"] = serde_json::json!(false);
+            if let Ok(body) = serde_json::to_vec(&prime) {
+                let _ =
+                    tokio::time::timeout(prime_budget, self.warm_completion(body, prime_budget))
+                        .await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn warm_completion(&self, body: Vec<u8>, timeout: Duration) -> Result<(), ClientError> {
         let response = self
             .post_runtime("/completion", body, Some(timeout))
             .await?;

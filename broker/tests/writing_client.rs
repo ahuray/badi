@@ -947,6 +947,7 @@ async fn fact_fence_counts_invented_numbers_as_rejected_output() -> Result<(), B
     Ok(())
 }
 
+#[derive(Clone, Copy)]
 enum WarmUpReply {
     Json,
     Status(&'static str),
@@ -954,46 +955,56 @@ enum WarmUpReply {
     Stall,
 }
 
+/// Serves the warm-up completion; a `Json` reply also serves the spelling
+/// prime that follows it, and both payloads are returned.
 async fn warm_up_endpoint(
     reply: WarmUpReply,
 ) -> Result<
     (
         std::net::SocketAddr,
-        tokio::task::JoinHandle<(String, serde_json::Value)>,
+        tokio::task::JoinHandle<(String, Vec<serde_json::Value>)>,
     ),
     Box<dyn Error>,
 > {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let endpoint = listener.local_addr()?;
     let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.expect("HTTP connection");
-        let mut bytes = Vec::new();
-        let mut buffer = [0; 4096];
-        let (headers, payload) = loop {
-            let read = socket.read(&mut buffer).await.expect("HTTP request");
-            assert_ne!(read, 0);
-            bytes.extend_from_slice(&buffer[..read]);
-            let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") else {
-                continue;
-            };
-            let headers = std::str::from_utf8(&bytes[..end])
-                .expect("headers")
-                .to_owned();
-            let length: usize = headers
-                .lines()
-                .find_map(|line| {
-                    let (key, value) = line.split_once(':')?;
-                    key.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse().expect("body size"))
-                })
-                .expect("content length");
-            if bytes.len() >= end + 4 + length {
-                let payload = serde_json::from_slice(&bytes[end + 4..end + 4 + length])
-                    .expect("request JSON");
-                break (headers, payload);
-            }
+        let requests = if matches!(reply, WarmUpReply::Json) {
+            2
+        } else {
+            1
         };
-        let response = match reply {
+        let mut first_headers = String::new();
+        let mut payloads = Vec::new();
+        for index in 0..requests {
+            let (mut socket, _) = listener.accept().await.expect("HTTP connection");
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 4096];
+            let (headers, payload) = loop {
+                let read = socket.read(&mut buffer).await.expect("HTTP request");
+                assert_ne!(read, 0);
+                bytes.extend_from_slice(&buffer[..read]);
+                let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = std::str::from_utf8(&bytes[..end])
+                    .expect("headers")
+                    .to_owned();
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (key, value) = line.split_once(':')?;
+                        key.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().expect("body size"))
+                    })
+                    .expect("content length");
+                if bytes.len() >= end + 4 + length {
+                    let payload = serde_json::from_slice(&bytes[end + 4..end + 4 + length])
+                        .expect("request JSON");
+                    break (headers, payload);
+                }
+            };
+            let response = match reply {
             WarmUpReply::Json => {
                 let body = r#"{"content":" time","stop":true}"#;
                 format!(
@@ -1013,15 +1024,20 @@ async fn warm_up_endpoint(
                 String::new()
             }
         };
-        let _ = socket.write_all(response.as_bytes()).await;
-        (headers, payload)
+            let _ = socket.write_all(response.as_bytes()).await;
+            if index == 0 {
+                first_headers = headers;
+            }
+            payloads.push(payload);
+        }
+        (first_headers, payloads)
     });
     Ok((endpoint, server))
 }
 
 #[tokio::test]
-async fn warm_up_sends_one_fixed_tiny_completion_and_discards_its_reply()
--> Result<(), Box<dyn Error>> {
+async fn warm_up_sends_fixed_completions_and_discards_their_replies() -> Result<(), Box<dyn Error>>
+{
     let (endpoint, server) = warm_up_endpoint(WarmUpReply::Json).await?;
     let client = fixture_client(SemanticClientConfig::new(
         endpoint,
@@ -1031,15 +1047,16 @@ async fn warm_up_sends_one_fixed_tiny_completion_and_discards_its_reply()
     client
         .warm_up(Duration::from_secs(2), CancellationToken::new())
         .await?;
-    let (headers, payload) = server.await?;
+    let (headers, payloads) = server.await?;
     assert!(headers.starts_with("POST /completion HTTP/1.1\r\n"));
     assert!(
         headers
             .lines()
             .any(|line| line.eq_ignore_ascii_case("authorization: Bearer public-fixture-token"))
     );
+    assert_eq!(payloads.len(), 2);
     assert_eq!(
-        payload,
+        payloads[0],
         serde_json::json!({
             "prompt": "Thank you for your",
             "n_predict": 2,
@@ -1049,6 +1066,18 @@ async fn warm_up_sends_one_fixed_tiny_completion_and_discards_its_reply()
             "cache_prompt": false,
         })
     );
+    // The second fixed completion primes the spelling prompt prefix: the
+    // production correction payload, unstreamed, with prompt caching on.
+    let prime = &payloads[1];
+    assert!(
+        prime["prompt"]
+            .as_str()
+            .is_some_and(|prompt| prompt.starts_with("Correct spelling.")),
+        "{prime}"
+    );
+    assert_eq!(prime["cache_prompt"], serde_json::json!(true));
+    assert_eq!(prime["stream"], serde_json::json!(false));
+    assert_eq!(prime["n_predict"], serde_json::json!(4));
     Ok(())
 }
 

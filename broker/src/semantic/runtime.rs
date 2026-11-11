@@ -42,7 +42,8 @@ const MAX_MODEL_ORIGIN_BYTES: usize = 64;
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(20);
-/// Bound for the single warm-up completion after readiness.
+/// Bound for warm-up after readiness: the tiny completion and the spelling
+/// prime share it.
 pub const WARM_UP_TIMEOUT: Duration = Duration::from_secs(2);
 // A cancelled cold prefill may still be unwinding inside the runtime. Allow
 // that work and its HTTP readers to stop before the process-group kill fallback.

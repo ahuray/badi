@@ -8,6 +8,13 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Spelling corrections the model chooses now arrive inside the typing
+  budget: both spelling prompts use the runtime's prompt cache (the RAM
+  cache keeps their prefixes beside the writing window's, still one slot),
+  and warm-up primes the English correction prefix with a fixed synthetic
+  typo. In paired real-model runs the model's English choices took a
+  median 93 ms against 535 ms (`teh`), and the real-model probe that
+  failed 6 of 6 interleaved runs before passed 6 of 6 after.
 - Half-typed English words are finished again when the model is unsure of
   the word itself: the confidence gate no longer counts the tokens that
   finish the typed word (`autom` → `atically`), whose probability is how
