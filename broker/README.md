@@ -566,18 +566,23 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   extends it (` report`, ` the`); a shorter one spelled out something else
   from pieces (`and` → `andash`), so the stream is dropped at that token and
   the unhealed prompt is sent within the same budget
-  (`CompletionPlan::finished_word`). The confidence gate skips the token
-  that writes the word: its probability is how likely the word was before
-  any letter was typed.
+  (`CompletionPlan::finished_word`). The confidence gate does not count the
+  token that writes the word (below).
 - **Abstention.** A continuation abstains when it adds a number absent from the
   typed text, and every request when the caret splits a word.
 - **Token confidence gate.** Each continuation request asks the runtime for
   `n_probs: 1` (pre-sampling), and a continuation is shown only when every
   token of its shown text has a log-probability of at least −2.75
   (`writing::CONFIDENCE_FLOOR`, user decision). Tokens wholly
-  inside the healed echo and a withheld stop token do not count; a token
-  that straddles the echo does. Missing or misaligned probabilities fail
-  closed. A withheld suggestion is `low_confidence`, and `model done` in the
+  inside the healed echo, a withheld stop token and the period restored for
+  it do not count. Neither do the tokens that finish a half-typed English
+  word the echo leaves open (` autom` then `atically`, or a typed lexicon
+  word): their probability is how likely that word was before any letter
+  was typed, or is skewed by the echo's forced split (` `, `doc`, `u`, then
+  `ments`), and the lexicon judges the word, so a suggestion that only
+  finishes it shows on the lexicon alone. Every later token counts, and so
+  does a token that straddles an echo of spaces. Missing or misaligned
+  probabilities fail closed. A withheld suggestion is `low_confidence`, and `model done` in the
   trace carries `min_logprob`. The whole suggestion is judged before
   display. Spelling choices are not gated. Cutting before the first
   low-confidence token instead removed almost no harm, because invented
@@ -758,6 +763,8 @@ universal scores.
 | `short` length | Paired Lab, 395 requests in six languages, two blind rounds, 15 W, `output/writing/2026-10-20-suggestion-length/` | Harmful additions 16/20 → 8/9 with more useful full additions; p50 201 against 259 ms. Up to eight words (`f9515e0`) doubled them to 32/39, rising in five languages |
 | Persian token budget | Lab `production_boundary`, the 13 Persian development cases, Qwen3 1.7B | 21 tokens (2.6×): all 13 missed 550 ms and four returned no word. 8 tokens: two misses, a word for every case 21 had answered (one shorter: `نظر من` became `نظر`); neither matched a reference first word |
 | Typed lexicon words | Paired Lab, 134 English stems from the development references (34 mid-sentence) and 29 prefixes ending on a finished word, seed 42, 15 W, `output/writing/2026-10-23-word-stems/` | Intended word finished 75 times against 0 (23 of the mid-sentence ones against 0); text running on after the stem 9 against 40; finished words kept their 23 suggestions; shown p90 392 against 485 ms. Forbidding the lone space token: 124 of 134 first tokens stood against 91 |
+| Word-finishing tokens and the restored period not counted | Paired Lab `production_boundary`, the 134 English stems, 29 finished words and 41 mid-sentence cases of the typed-words trial plus the 16 development and 19 real-text cases (English, German, Persian), seed 42, 15 W, `output/writing/2026-11-06-partial-words/` | Intended word finished 92 times against 75, nothing shown 18 against 38, another word 14 against 12 (`areas`, US `behavior`); shown p50 263 against 260 ms. Finished words, German and real text unchanged; the four changes the rule cannot make (two Persian, two English) were cut at 550 ms |
+| Word-finishing tokens, live | Installed `23b9285` with this change (uncommitted), Chromium 155 isolated profile, an empty disposable field, 15 W, `output/native-trials/2026-11-07-partial-words/` | All five stems the gate had withheld showed the model's suggestion (no context word matched): `docum` → `ents below for information` (Tab landed `documents`), `autom` → `atically detect`, `patie` → `nce.`, `confi` → `rm the following`, `bud` → `get.`; later words −1.56 to −2.17 |
 | Confidence floor, calibration | Gemma 3 1B's exact production payloads replayed for 301 reviewed development suggestions, three blind label rounds each; every replay reproduced its text | The lowest token log-probability separates useful from unhelpful or harmful at an AUC of 0.70–0.77 overall, strongly in German and not at all in English; the first word's confidence alone was much weaker |
 | Confidence floor, held out | Confirmation outputs (224 shown), rule frozen before the test | Harmful additions 15 → 10, unhelpful 18 → 10, harm falling or holding in every language; lost 7 of 51 useful full additions (2 English, 3 Persian); 19% fewer suggestions |
 | Confidence floor, live | Chromium 154, 15 W, 115 paced word pauses of the same disposable text | Preview p50 294 against 218 ms (p90 395 against 265; 4 against 0 over 550 ms) after the last key; 92 against 112 pauses showed one, 17 withheld as `low_confidence` |

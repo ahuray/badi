@@ -656,6 +656,18 @@ async fn the_token_that_writes_a_typed_lexicon_word_is_not_held_to_the_floor()
     let (_, outcome) =
         event_exchange(before, vec![token_event_with(" report", -4.0), eos.clone()]).await?;
     assert_eq!(shown_text(outcome).as_deref(), Some("ort"));
+    // Also before the stop period the provider restores, which is no token.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" report", -4.0),
+            serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"word",
+                "stopping_word":".","completion_probabilities":[
+                    {"id":9,"token":"","bytes":[],"logprob":-7.0,"top_logprobs":[]}]}),
+        ],
+    )
+    .await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some("ort."));
     // A later token under the floor still withholds the suggestion.
     let (_, outcome) = event_exchange(
         before,
@@ -1687,10 +1699,14 @@ async fn the_confidence_gate_shows_a_suggestion_only_when_every_shown_token_is_l
 }
 
 #[tokio::test]
-async fn a_token_inside_the_healed_echo_does_not_count_but_one_that_straddles_it_does()
+async fn the_healed_echo_and_the_tokens_that_finish_its_word_do_not_count_but_later_ones_do()
 -> Result<(), Box<dyn Error>> {
     let before = "Please review the docum";
     let eos = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
+    let period = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"word",
+        "stopping_word":".","completion_probabilities":[
+            {"id":9,"token":"","bytes":[],"logprob":-7.0,"top_logprobs":[]}]});
+    // A token wholly inside the echo does not count.
     let (_, outcome) = event_exchange(
         before,
         vec![
@@ -1703,12 +1719,60 @@ async fn a_token_inside_the_healed_echo_does_not_count_but_one_that_straddles_it
     )
     .await?;
     assert_eq!(shown_text(outcome).as_deref(), Some("ent and provide"));
+    // Nor does the one that straddles it and finishes the typed word: the
+    // lexicon judges that word.
     let (_, outcome) = event_exchange(
         before,
         vec![
             token_event_with(" doc", -0.1),
             token_event_with("ument", -5.0),
             token_event_with(" and", -0.1),
+            eos.clone(),
+        ],
+    )
+    .await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some("ent and"));
+    // Nor a token after the echo that still writes letters of that word.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" docum", -0.1),
+            token_event_with("ents", -6.0),
+            token_event_with(" below", -0.5),
+            eos.clone(),
+        ],
+    )
+    .await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some("ents below"));
+    // Only the rest of the word, then the restored stop period: the lexicon
+    // alone decides.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![token_event_with(" document", -5.0), period.clone()],
+    )
+    .await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some("ent."));
+    // A later word under the floor still withholds the whole suggestion.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" document", -5.0),
+            token_event_with(" and", -0.1),
+            token_event_with(" invoices", -3.0),
+            eos.clone(),
+        ],
+    )
+    .await?;
+    assert!(matches!(
+        outcome,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::LowConfidence)
+    ));
+    // An echo of spaces finishes no word: the next word's token counts.
+    let (_, outcome) = event_exchange(
+        "Please send me what we discussed ",
+        vec![
+            token_event_with(" final", -5.0),
+            token_event_with(" report", -0.1),
             eos,
         ],
     )

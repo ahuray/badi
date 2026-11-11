@@ -88,6 +88,9 @@ async fn installed_model_completes_partial_words_and_selected_languages() {
     )
     .await
     .expect("verified runtime");
+    // Persian is off by default but keeps its regression probes, so every
+    // language the provider writes is on, as in the Lab.
+    runtime.set_language_preferences(&badi_broker::writing::LanguagePreferences::all());
     for (before, language) in [
         ("Please review the docum", "en"),
         ("The software should autom", "en"),

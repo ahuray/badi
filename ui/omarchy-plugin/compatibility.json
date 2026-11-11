@@ -2,13 +2,13 @@
   "schema": "badi.omarchy-plugin-compatibility.v1",
   "artifact": "io.github.ahuray.badi@0.1.0",
   "omarchy": {
-    "package": "4.5.0rc3-1",
+    "package": "4.5.0-3",
     "source_repository": "https://github.com/omacom/omarchy.git",
-    "source_tag": "v4.5.0-rc3",
-    "source_commit": "8d19ad75ace59af8b6ded52f8b2bec1b15adda7c",
+    "source_tag": "v4.5.0",
+    "source_commit": "ac2690cd7be4f47e4a255f5e2e78d904d436b068",
     "contract_files": {
       "shell/shell.qml": "sha256:d6d99af10ca020ca2c578bc7f67bf674d954efc206012a71af6769c662c37c37",
-      "shell/services/PluginRegistry.qml": "sha256:4144e7023bb03df9a745af90774a0d159cf2264ade864d6e68ec3f5b46ccd7e3",
+      "shell/services/PluginRegistry.qml": "sha256:3acf0f442fd8da5b9acd1eaf4cd19b7617cbe22d29bedb22e5a3bd527a8421d1",
       "shell/Ui/qmldir": "sha256:182255446c5774d5a8f4772ec50ba317e6ceb0d36f3f3e81d6e68da08ee11be3",
       "shell/Commons/qmldir": "sha256:3c29f0e3ca8984a8dd2cb9227f9458147242d06873cff5c189ed5616234ed13e",
       "bin/omarchy-plugin-validate": "sha256:b6f6aba33a329a5ccd339050fbb2ce82272b791dd1f0d6a28c1837caa035b8c4",

@@ -413,10 +413,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       Chromium has used text-input-v3 without the flag since 137. Check live
       whether Badi's per-app flags can go for current Chromium and Brave;
       Electron apps on an older Chromium may still need them.
-- [ ] Re-pin the panel to Omarchy 4.5 once it is tagged (still `v4.5.0-rc1`
-      on 2026-10-24; `quattro` is 47 commits past it, including the
-      notification panel's removal, omarchy#16430, which Badi does not use:
-      the screen-share hold reads PipeWire). Run the host lane first.
 - [ ] Leftovers of the 2026-10-20 Omarchy 4.0.6 audit: the panel's Fcitx
       theme takes its font size only from Ghostty's config (`fcitx-theme.py`),
       each bar instance registers the `badi-writing` IPC target (several
@@ -438,8 +434,12 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       an uncached model call of 0.4–0.6 s at the 28 W limit (1–2.5 s with
       the earlier Qwen3 1.7B at 15 W), so it fits Writer's spelling budget
       but often not the 550 ms typing budget; a cached spelling prompt slot
-      would close that gap. The Lab has no separate spelling engine: measure
-      through `production_boundary` with the dictionary languages on.
+      would close that gap. At 15 W the real-model probe
+      `installed_model_produces_continuations_and_spelling_replacements`
+      fails 5 of 12 runs this way, before and after the 2026-11-06 gate
+      change alike (`recieve` chosen in 450–550 ms). The Lab has no
+      separate spelling engine: measure through `production_boundary` with
+      the dictionary languages on.
 
 - [ ] Qualify French, Spanish and Portuguese before turning them on by default
       (they are opt-in with `badi suggest LANG on`). Gather independently

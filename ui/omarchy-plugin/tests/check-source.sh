@@ -22,10 +22,10 @@ jq -e '
 ' "$artifact_dir/manifest.json" >/dev/null
 
 jq -e '
-  .omarchy.package == "4.5.0rc3-1"
+  .omarchy.package == "4.5.0-3"
   and .omarchy.source_repository == "https://github.com/omacom/omarchy.git"
-  and .omarchy.source_tag == "v4.5.0-rc3"
-  and .omarchy.source_commit == "8d19ad75ace59af8b6ded52f8b2bec1b15adda7c"
+  and .omarchy.source_tag == "v4.5.0"
+  and .omarchy.source_commit == "ac2690cd7be4f47e4a255f5e2e78d904d436b068"
 ' "$compatibility" >/dev/null
 
 if grep -En 'ShellRoot|execDetached|Qt\.openUrlExternally|/bin/(ba)?sh|(^|[[:space:]])(ba)?sh[[:space:]]+-c|console\.(log|warn|error)' "${source_files[@]}"; then

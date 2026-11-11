@@ -402,8 +402,10 @@ class DaemonTests(unittest.TestCase):
         self.assertIsNone(self.daemon.observer.tracked)
 
     def test_another_desktop_has_no_backend(self):
-        with patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "GNOME", "HYPRLAND_INSTANCE_SIGNATURE": "",
-                                     "KDE_SESSION_VERSION": ""}), \
+        # A Wayland desktop with no backend, set whole so the host's own
+        # session (a real WAYLAND_DISPLAY, GNOME or Plasma) cannot select one.
+        with patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "sway", "WAYLAND_DISPLAY": "wayland-0",
+                                     "HYPRLAND_INSTANCE_SIGNATURE": "", "KDE_SESSION_VERSION": ""}), \
                 self.assertRaisesRegex(NoDesktopBackend, "no_desktop_backend"):
             self.daemon.watch()
         self.assertEqual(observer_daemon.NO_DESKTOP_BACKEND, 78)
