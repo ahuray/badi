@@ -1478,6 +1478,14 @@ class PayloadListTests(unittest.TestCase):
                 return sorted(match.group(1).split())
         self.fail(f'no PKGBUILD loop installs {folder}')
 
+    def deb_loop(self, folder):
+        import re
+        text = (self.ROOT / 'packaging/debian/build-deb.sh').read_text().replace('\\\n', ' ')
+        for match in re.finditer(r'for module in ([^;]+); do\s+install -m644 "([^"$]+)\$module\.py"', text):
+            if match.group(2).rstrip('/') == folder:
+                return sorted(match.group(1).split())
+        self.fail(f'no build-deb.sh loop installs {folder}')
+
     def modules(self, folder):
         return sorted(path.name for path in (self.ROOT / folder).glob('*.py'))
 
@@ -1491,6 +1499,10 @@ class PayloadListTests(unittest.TestCase):
         self.assertEqual([f'{name}.py' for name in self.pkgbuild_loop('adapters/accessibility')],
                          self.modules('adapters/accessibility'))
         self.assertEqual([f'{name}.py' for name in self.pkgbuild_loop('adapters/session')],
+                         self.modules('adapters/session'))
+        self.assertEqual([f'{name}.py' for name in self.deb_loop('adapters/accessibility')],
+                         self.modules('adapters/accessibility'))
+        self.assertEqual([f'{name}.py' for name in self.deb_loop('adapters/session')],
                          self.modules('adapters/session'))
 
     def test_the_packaged_command_writes_no_bytecode(self):

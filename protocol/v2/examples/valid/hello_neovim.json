@@ -17,8 +17,10 @@
       "commit.applied",
       "control",
       "policy",
+      "text_replacement",
       "long_reading_window",
-      "editor_focus"
+      "editor_focus",
+      "alternative_list"
     ]
   }
 }

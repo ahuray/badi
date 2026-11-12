@@ -572,7 +572,7 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   from pieces (`and` → `andash`), so the stream is dropped at that token and
   the unhealed prompt is sent within the same budget
   (`CompletionPlan::finished_word`). The confidence gate does not count the
-  token that writes the word (below).
+  tokens that finish the word (below).
 - **Abstention.** A continuation abstains when it adds a number absent from the
   typed text, and every request when the caret splits a word.
 - **Token confidence gate.** Each continuation request asks the runtime for
@@ -585,7 +585,8 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   word): their probability is how likely that word was before any letter
   was typed, or is skewed by the echo's forced split (` `, `doc`, `u`, then
   `ments`), and the lexicon judges the word, so a suggestion that only
-  finishes it shows on the lexicon alone. Every later token counts, and so
+  finishes it shows on the lexicon alone. Every later token counts, as does
+  a boundary token that also writes letters of a later word, and so
   does a token that straddles an echo of spaces. Missing or misaligned
   probabilities fail closed. A withheld suggestion is `low_confidence`, and `model done` in the
   trace carries `min_logprob`. The whole suggestion is judged before
@@ -720,8 +721,10 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   suggestions shown and fewer than 8% accepted, an automatic suggestion
   needs every token at −2.25 or better; under 4%, −1.75. A level loosens only
   at 15% and 8%, and with fewer than 50 shown it stays as it was. It only
-  tightens `CONFIDENCE_FLOOR`; explicit requests, corrections and
-  completions the model did not score keep their own gates, and `badi stats
+  tightens `CONFIDENCE_FLOOR` over the gate's counted minimum, so the
+  lexicon-only finish of a healed English word is not tightened either.
+  Explicit requests, corrections and completions the model did not score keep
+  their own gates, and `badi stats
   forget` resets it. A withheld suggestion counts as `low_confidence`, and
   the trace's `suggestion withheld` names `quiet_app` and its floor
   (`engine/quietness.rs`). Tested live in Chromium 155: on a page origin
@@ -747,9 +750,10 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   A word without its typed
   space is checked only on an explicit request, and a capitalized word
   mid-sentence only in German. Replacements are 2-32 characters with case
-  (Unicode Lowercase or Uppercase) plus the optional space, in every
-  validator, each tested against
-  [the shared fixture](../protocol/spelling-replacement-fixtures.json). The
+  (Unicode Lowercase or Uppercase) plus the optional space in the broker,
+  shared-client and Writer validators, each tested against
+  [the shared fixture](../protocol/spelling-replacement-fixtures.json);
+  editor-side checks additionally bind the exact suffix and byte range. The
   [LibreOffice Writer extension](../adapters/libreoffice/README.md) (adapter and
   target kind `libreoffice`, app id `libreoffice-writer`, settings adapter
   `libreoffice`) gets corrections only, automatic or explicit, under its own

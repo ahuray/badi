@@ -171,6 +171,7 @@ local function extend(text, word)
   })
   if not ok then return end
   visible.text = text
+  visible.display = text
   state.shown.text = text
 end
 
@@ -194,8 +195,9 @@ local function ensure_bridge()
     on_event = function(message)
       if message.event == 'clear' then
         -- Expiry, revocation, pause or disconnect: the grant behind the
-        -- preview is gone, so the preview goes too.
-        if state.visible and not state.accepting then invalidate(nil) end
+        -- preview is gone, so the preview goes too. This also stale-outs an
+        -- acceptance whose grant reply has not been applied yet.
+        if state.visible then invalidate(nil) end
       elseif message.event == 'update' then
         extend(message.text, message.word)
       elseif message.event == 'state' then
@@ -482,7 +484,7 @@ end
 
 accept = function(acceptance)
   local visible = state.visible
-  if not visible or not visible.text or state.accepting or not state.bridge then return end
+  if not visible or not visible.text or state.accepting or state.pending or not state.bridge then return end
   local s = visible.snapshot
   local generation = state.generation
   state.accepting = true
@@ -510,7 +512,8 @@ accept = function(acceptance)
       expected = reply.replace_before == nil and (acceptance == 'all' and text == visible.text
         or (acceptance == 'word' and context.insertable(text) and visible.text:sub(1, #text) == text))
     end
-    if not expected or not context.insertable(text) or not matches(s) then
+    local policy_allowed = state.policy == nil or policy_reason(true) == nil
+    if not expected or not policy_allowed or not context.insertable(text) or not matches(s) then
       state.bridge:notify({ op = 'result', status = 'stale' })
       invalidate(nil)
       set_status('stale')

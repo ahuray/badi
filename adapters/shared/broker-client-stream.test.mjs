@@ -43,10 +43,19 @@ async function fakeBroker(onSuggest) {
             display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always' });
         } else if (message.type === 'suggest.request') {
           const coordinates = { session_id: message.session_id, focus_epoch: message.focus_epoch, revision: message.revision };
-          const show = (n, text, ttl = 15000) => {
-            texts.set(`s${n}`, text);
+          const show = (n, text, ttl = 15000, extra = {}) => {
+            const spec = {
+              text,
+              acceptWord: extra.accept_word ?? ' the',
+              replaceBefore: extra.replace_before,
+              grantText: extra.grant_text,
+              grantReplaceBefore: extra.grant_replace_before ?? extra.replace_before,
+            };
+            texts.set(`s${n}`, spec);
             return frame({ id: message.id, type: 'suggestion.show', ...coordinates, payload: {
-              fingerprint: message.payload.fingerprint, suggestion_id: `s${n}`, text, accept_word: ' the',
+              fingerprint: message.payload.fingerprint, suggestion_id: `s${n}`, text,
+              accept_word: spec.acceptWord,
+              ...(spec.replaceBefore !== undefined ? { replace_before: spec.replaceBefore } : {}),
               ttl_ms: ttl, provider: 'local_model' } });
           };
           onSuggest({ socket, show });
@@ -55,7 +64,7 @@ async function fakeBroker(onSuggest) {
           reply('control.result', { accepted: true }, coordinates);
           socket.write(frame({ id: 'clear-1', type: 'suggestion.clear', ...coordinates, payload: {
             fingerprint: message.payload.fingerprint, suggestion_id: message.payload.suggestion_id, reason: 'superseded' } }));
-          texts.set('s2', ' again soon');
+          texts.set('s2', { text: ' again soon', acceptWord: ' again' });
           socket.write(frame({ id: message.id, type: 'suggestion.list', ...coordinates, payload: {
             fingerprint: message.payload.fingerprint, suggestion_id: message.payload.suggestion_id,
             words: ['so', 'again'], ttl_ms: 15000, provider: 'local_model' } }));
@@ -66,8 +75,11 @@ async function fakeBroker(onSuggest) {
             fingerprint: message.payload.fingerprint, suggestion_id: 's2', text: ' again soon',
             accept_word: ' again', ttl_ms: 15000, provider: 'local_model' } }));
         } else if (message.type === 'control.request') {
+          const spec = texts.get(message.payload.suggestion_id);
+          const acceptance = message.payload.action === 'accept_word' ? 'word' : 'all';
           reply('commit.prepare', { fingerprint: message.payload.fingerprint, suggestion_id: message.payload.suggestion_id,
-            text: texts.get(message.payload.suggestion_id), acceptance: 'all' },
+            text: spec?.grantText ?? (acceptance === 'word' ? spec?.acceptWord : spec?.text), acceptance,
+            ...(spec?.grantReplaceBefore !== undefined ? { replace_before: spec.grantReplaceBefore } : {}) },
           { session_id: message.session_id, focus_epoch: message.focus_epoch, revision: message.revision });
         }
       }
@@ -119,6 +131,83 @@ test('a numbered list replaces the shown suggestion and a pick shows its continu
     assert.equal(client.acceptWord, ' again');
     assert.equal(client.alternativeWords, null, 'the pick spends the list');
     await assert.rejects(client.pickAlternative('again'), 'a spent list cannot pick twice');
+  } finally {
+    client.close();
+    await broker.close();
+  }
+});
+
+test('a negotiated correction binds its exact suffix through word acceptance', async () => {
+  const broker = await fakeBroker(({ socket, show }) => socket.write(show(1, 'address ', 15000, {
+    accept_word: 'address ', replace_before: 'adress ',
+  })));
+  const client = new BrokerClient('neovim', { textReplacement: true });
+  try {
+    assert.equal(await client.connect(broker.path), true);
+    assert.equal(await client.suggest('Please check the adress ', { language: 'en' }), 'address ');
+    assert.equal(client.replacementBefore, 'adress ');
+    assert.equal(client.acceptWord, 'address ');
+    await assert.rejects(client.alternative(), /No suggestion to replace/);
+    const grant = await client.authorize('word');
+    assert.equal(grant.text, 'address ');
+    assert.equal(grant.replaceBefore, 'adress ');
+  } finally {
+    client.close();
+    await broker.close();
+  }
+});
+
+test('a replacement is rejected without negotiated text replacement', async () => {
+  const broker = await fakeBroker(({ socket, show }) => socket.write(show(1, 'address ', 15000, {
+    accept_word: 'address ', replace_before: 'adress ',
+  })));
+  const client = new BrokerClient('neovim');
+  try {
+    assert.equal(await client.connect(broker.path), true);
+    await assert.rejects(client.suggest('Please check the adress ', { language: 'en' }),
+      /Invalid model suggestion/);
+    assert.equal(client.replacementBefore, undefined);
+  } finally {
+    client.close();
+    await broker.close();
+  }
+});
+
+test('a grant for another replacement suffix is revoked', async () => {
+  const broker = await fakeBroker(({ socket, show }) => socket.write(show(1, 'address ', 15000, {
+    accept_word: 'address ', replace_before: 'adress ', grant_replace_before: 'other ',
+  })));
+  const client = new BrokerClient('neovim', { textReplacement: true });
+  try {
+    assert.equal(await client.connect(broker.path), true);
+    assert.equal(await client.suggest('Please check the adress ', { language: 'en' }), 'address ');
+    await assert.rejects(client.authorize('word'), /Acceptance was revoked/);
+  } finally {
+    client.close();
+    await broker.close();
+  }
+});
+
+test('a streamed frame cannot turn a continuation into a replacement', async () => {
+  let socket;
+  let show;
+  const broker = await fakeBroker(request => {
+    ({ socket, show } = request);
+    socket.write(show(1, ' the'));
+  });
+  const client = new BrokerClient('neovim', { textReplacement: true });
+  try {
+    assert.equal(await client.connect(broker.path), true);
+    const updates = [];
+    client.on('update', text => updates.push(text));
+    assert.equal(await client.suggest('Thank you for', { language: 'en' }), ' the');
+    socket.write(show(2, ' the address ', 15000, {
+      accept_word: ' the address ', replace_before: 'adress ',
+    }));
+    await delay(50);
+    assert.deepEqual(updates, []);
+    assert.equal(client.replacementBefore, undefined);
+    assert.equal(client.acceptWord, ' the');
   } finally {
     client.close();
     await broker.close();

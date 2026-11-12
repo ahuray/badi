@@ -1150,13 +1150,13 @@ pub(crate) fn unambiguous_correction(word: &str) -> Option<String> {
         .flatten()
 }
 
-pub(crate) fn correction_payload(word: &str) -> Value {
+pub(crate) fn correction_payload(word: &str, stream: bool) -> Value {
     // Cached like a continuation: the fixed examples are the prompt prefix
     // of every English correction, and the runtime's RAM prompt cache keeps
     // that prefix beside the writing window's, so neither re-reads the other
     // away. Warm-up primes it (see `SemanticClient::warm_up`).
     json!({"prompt":format!("Correct spelling. Return one word.\nrecieve -> receive\nhelo -> hello\nworld -> world\n{word} ->"),
-        "n_predict":4,"temperature":0.0,"seed":42,"stop":["\n"],"stream":true,"cache_prompt":true})
+        "n_predict":4,"temperature":0.0,"seed":42,"stop":["\n"],"stream":stream,"cache_prompt":true})
 }
 
 /// Restrict spelling edits to a single insertion, deletion, substitution, or

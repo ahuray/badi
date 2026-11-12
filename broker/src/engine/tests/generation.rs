@@ -827,14 +827,6 @@ impl CompletionProvider for TriggerProvider {
         ProviderKind::PhraseV1
     }
 
-    async fn complete(
-        &self,
-        _request: ProviderRequest,
-        _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        unreachable!("the broker requests outcomes with a trigger")
-    }
-
     async fn propose_outcome(
         &self,
         request: ProviderRequest,

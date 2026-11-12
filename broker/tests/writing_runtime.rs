@@ -1,6 +1,23 @@
 use std::collections::BTreeSet;
 
-use badi_broker::provider::{CompletionProvider, ProviderRequest, RequestTrigger};
+use badi_broker::provider::{CompletionProvider, ProviderRequest, RequestTrigger, WritingProposal};
+
+async fn propose<P: CompletionProvider>(
+    provider: &P,
+    request: ProviderRequest,
+    cancellation: CancellationToken,
+    allow_replacement: bool,
+) -> Result<Option<WritingProposal>, badi_broker::provider::ProviderError> {
+    provider
+        .propose_outcome(
+            request,
+            cancellation,
+            allow_replacement,
+            RequestTrigger::Automatic,
+        )
+        .await
+        .map(|reply| reply.outcome.into_proposal())
+}
 use tokio_util::sync::CancellationToken;
 
 /// Opt-in real boundary: uses the pinned model/runtime already installed locally.
@@ -27,19 +44,19 @@ async fn installed_model_produces_continuations_and_spelling_replacements() {
         ("We need to review the changes before", None),
     ] {
         let started = std::time::Instant::now();
-        let result = runtime
-            .propose(
-                ProviderRequest {
-                    before: before.to_owned(),
-                    after: String::new(),
-                    language: Some("en".to_owned()),
-                    vocabulary: None,
-                },
-                CancellationToken::new(),
-                true,
-            )
-            .await
-            .expect("inference");
+        let result = propose(
+            &runtime,
+            ProviderRequest {
+                before: before.to_owned(),
+                after: String::new(),
+                language: Some("en".to_owned()),
+                vocabulary: None,
+            },
+            CancellationToken::new(),
+            true,
+        )
+        .await
+        .expect("inference");
         eprintln!(
             "synthetic_input={before:?} proposal={result:?} elapsed_ms={}",
             started.elapsed().as_millis()
@@ -99,19 +116,19 @@ async fn installed_model_completes_partial_words_and_selected_languages() {
         ("برای حل این مشکل باید", "fa"),
     ] {
         let started = std::time::Instant::now();
-        let proposal = runtime
-            .propose(
-                ProviderRequest {
-                    before: before.to_owned(),
-                    after: String::new(),
-                    language: Some(language.to_owned()),
-                    vocabulary: None,
-                },
-                CancellationToken::new(),
-                false,
-            )
-            .await
-            .expect("inference");
+        let proposal = propose(
+            &runtime,
+            ProviderRequest {
+                before: before.to_owned(),
+                after: String::new(),
+                language: Some(language.to_owned()),
+                vocabulary: None,
+            },
+            CancellationToken::new(),
+            false,
+        )
+        .await
+        .expect("inference");
         eprintln!(
             "synthetic_input={before:?} language={language} proposal={proposal:?} elapsed_ms={}",
             started.elapsed().as_millis()
@@ -141,19 +158,19 @@ async fn installed_model_completes_partial_words_and_selected_languages() {
         let before = format!("{background} Before sending the final report, {ending}");
         assert!(before.chars().count() <= 512);
         let started = std::time::Instant::now();
-        let proposal = runtime
-            .propose(
-                ProviderRequest {
-                    before,
-                    after: String::new(),
-                    language: Some("en".to_owned()),
-                    vocabulary: None,
-                },
-                CancellationToken::new(),
-                false,
-            )
-            .await
-            .expect("bounded cold/warm inference");
+        let proposal = propose(
+            &runtime,
+            ProviderRequest {
+                before,
+                after: String::new(),
+                language: Some("en".to_owned()),
+                vocabulary: None,
+            },
+            CancellationToken::new(),
+            false,
+        )
+        .await
+        .expect("bounded cold/warm inference");
         eprintln!(
             "synthetic_long_context_end={ending:?} proposal={proposal:?} elapsed_ms={}",
             started.elapsed().as_millis()

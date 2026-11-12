@@ -970,7 +970,7 @@ fn dictionary_spelling_returns_only_unambiguous_single_edits() {
 fn correction_payload_caches_its_fixed_prompt_prefix() {
     // Regression: uncached, the choice re-read its fixed examples inside
     // the 550 ms typing budget and missed it (`recieve` in 450–550 ms).
-    let payload = super::correction_payload("recieve");
+    let payload = super::correction_payload("recieve", true);
     assert_eq!(payload["cache_prompt"], serde_json::json!(true));
     assert_eq!(payload["stream"], serde_json::json!(true));
     assert!(

@@ -86,8 +86,12 @@ install -m755 "$target_dir/release/badi-broker" "$target_dir/release/badictl" "$
 strip --strip-unneeded --remove-section=.comment --remove-section=.note \
     "$library/badi-broker" "$library/badictl" "$addon"
 install -m644 scripts/badi-desktop.py scripts/badi_install.py "$library/"
-install -m644 adapters/accessibility/*.py "$library/accessibility/"
-install -m644 adapters/session/*.py "$library/session/"
+for module in contract daemon debugtrace desktop field geometry gnome health kwin preview sessionbus; do
+    install -m644 "adapters/accessibility/$module.py" "$library/accessibility/"
+done
+for module in daemon link style_key; do
+    install -m644 "adapters/session/$module.py" "$library/session/"
+done
 # Scripts run as programs get Debian's interpreter path and the executable
 # bit, and write no bytecode: run as root they would leave __pycache__
 # directories in /usr/lib/badi that dpkg does not own (the units pass -B too).

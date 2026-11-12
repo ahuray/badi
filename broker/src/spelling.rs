@@ -384,7 +384,8 @@ fn edit_distance(a: &str, b: &str) -> usize {
 }
 
 /// The model chooses between dictionary candidates in the sentence's context.
-/// The prompt stays short: it is never cached, so its prefill is the cost.
+/// The prompt stays short: its changing context comes first, so only a
+/// repeated choice with the same context prefix reuses much of its prefill.
 /// It ends inside an opened quote, so a base model names a word on the same
 /// line; after a bare `Answer:` Gemma 3 1B starts a new line and never
 /// answered (2026-10-19). The answer is read raw up to its closing quote

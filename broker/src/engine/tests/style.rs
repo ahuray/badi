@@ -17,7 +17,10 @@ use crate::protocol::{
     ProviderKind, Selection, SessionControlRequestPayload, SessionId, SessionOpenPayload,
     SuggestRequestPayload, TargetDescriptor, TargetKind,
 };
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
+use crate::provider::{
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderReply, ProviderRequest,
+    RequestTrigger,
+};
 use crate::settings::{
     BatteryMode, BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA,
     SettingsV2, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
@@ -35,12 +38,14 @@ impl CompletionProvider for WordProvider {
         ProviderKind::PhraseV1
     }
 
-    async fn complete(
+    async fn propose_outcome(
         &self,
         _request: ProviderRequest,
         _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(Some("report".to_owned()))
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError> {
+        Ok(ProviderOutcome::from_text(Some("report".to_owned())).into())
     }
 }
 

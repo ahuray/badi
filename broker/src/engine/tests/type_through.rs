@@ -330,13 +330,15 @@ impl CompletionProvider for LengthProvider {
         self.lengths.lock().expect("lengths").push(length);
     }
 
-    async fn complete(
+    async fn propose_outcome(
         &self,
         request: ProviderRequest,
         _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
-        Ok(Some(format!(" revision {}", request.before)))
+        Ok(ProviderOutcome::from_text(Some(format!(" revision {}", request.before))).into())
     }
 }
 

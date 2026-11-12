@@ -8,6 +8,12 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- A code-review pass tightened three exactness edges: a model token that
+  also writes the next word now counts in the confidence gate instead of
+  riding the finished-word exemption; a Neovim acceptance revoked or
+  superseded while its grant is in flight now inserts nothing; and an
+  Obsidian context slice that would split an astral character drops the
+  orphan half instead of losing suggestions around it.
 - Neovim now shows spelling corrections as `adress → address` and, on Tab
   or Ctrl+Right, replaces exactly that suffix (including its typed space)
   in one native undo step. The plugin negotiates `text_replacement`; a

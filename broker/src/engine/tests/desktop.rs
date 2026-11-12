@@ -21,7 +21,10 @@ use crate::protocol::{
     OriginScheme, ProviderKind, ReasonCode, ScreenShare, Selection, SessionId, SessionOpenPayload,
     SuggestRequestPayload, TargetDescriptor, TargetKind,
 };
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
+use crate::provider::{
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderReply, ProviderRequest,
+    RequestTrigger,
+};
 use crate::settings::{
     BatteryMode, BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA,
     ScreenShareMode, SettingsV2, StableIdentity, StoragePaths, SubjectPermissions, SubjectRule,
@@ -59,17 +62,19 @@ impl CompletionProvider for TimedProvider {
         ProviderKind::PhraseV1
     }
 
-    async fn complete(
+    async fn propose_outcome(
         &self,
         request: ProviderRequest,
         _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         self.started
             .lock()
             .expect("start times")
             .push(Instant::now());
-        Ok(Some(format!(" after {}", request.before.len())))
+        Ok(ProviderOutcome::from_text(Some(format!(" after {}", request.before.len()))).into())
     }
 }
 

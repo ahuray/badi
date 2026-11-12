@@ -40,7 +40,7 @@ const requests = createInterface({input: process.stdin, terminal: false});
 for await (const line of requests) {
   if (--remaining < 0) break;
   const command = JSON.parse(line);
-  appendFileSync(process.env.BADI_TEST_EVENTS, JSON.stringify({operation:command.operation, applied:command.applied})+'\n');
+  appendFileSync(process.env.BADI_TEST_EVENTS, JSON.stringify({operation:command.operation, applied:command.applied, status:command.status})+'\n');
   if (command.operation === 'status') send('READY', '1');
   else if (command.operation === 'suggest') {
     const before = Buffer.from(command.before, 'base64').toString('utf8');
@@ -243,7 +243,7 @@ class PreviewTests(unittest.TestCase):
         shell.request('write teh', '  teh → the')
         shell.send(REQUEST)
         shell.buffer('write teh')
-        self.assertIn({'operation': 'result', 'applied': False}, shell.operations())
+        self.assertIn({'operation': 'result', 'status': 'stale'}, shell.operations())
 
     def test_dismissal_edit_and_ordinary_tab(self):
         shell = self.shell()

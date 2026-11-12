@@ -20,14 +20,6 @@ impl CompletionProvider for ScoredProvider {
         ProviderKind::PhraseV1
     }
 
-    async fn complete(
-        &self,
-        _request: ProviderRequest,
-        _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(Some(" revision".to_owned()))
-    }
-
     async fn propose_outcome(
         &self,
         _request: ProviderRequest,

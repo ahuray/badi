@@ -2,7 +2,25 @@ use tokio_util::sync::CancellationToken;
 
 use crate::protocol::MAX_BEFORE_CHARS;
 
-use super::{CompletionProvider, DeterministicPhraseProvider, ProviderRequest};
+use super::{CompletionProvider, DeterministicPhraseProvider, ProviderRequest, RequestTrigger};
+
+async fn propose_text(
+    provider: &DeterministicPhraseProvider,
+    request: ProviderRequest,
+) -> Option<String> {
+    provider
+        .propose_outcome(
+            request,
+            CancellationToken::new(),
+            false,
+            RequestTrigger::Automatic,
+        )
+        .await
+        .expect("provider result")
+        .outcome
+        .into_proposal()
+        .map(|proposal| proposal.text)
+}
 
 #[tokio::test]
 async fn phrase_provider_is_deterministic() {
@@ -13,32 +31,24 @@ async fn phrase_provider_is_deterministic() {
         language: Some("en".to_owned()),
         vocabulary: None,
     };
-    let first = provider
-        .complete(request.clone(), CancellationToken::new())
-        .await
-        .expect("provider result");
-    let second = provider
-        .complete(request, CancellationToken::new())
-        .await
-        .expect("provider result");
+    let first = propose_text(&provider, request.clone()).await;
+    let second = propose_text(&provider, request).await;
     assert_eq!(first, second);
     assert_eq!(first.as_deref(), Some(" for your time"));
 }
 
 #[tokio::test]
 async fn default_phrase_provider_is_silent_without_an_explicit_rule() {
-    let result = DeterministicPhraseProvider::default()
-        .complete(
-            ProviderRequest {
-                before: "An unmatched sentence".to_owned(),
-                after: String::new(),
-                language: Some("en".to_owned()),
-                vocabulary: None,
-            },
-            CancellationToken::new(),
-        )
-        .await
-        .expect("provider result");
+    let result = propose_text(
+        &DeterministicPhraseProvider::default(),
+        ProviderRequest {
+            before: "An unmatched sentence".to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+            vocabulary: None,
+        },
+    )
+    .await;
 
     assert_eq!(result, None);
 }
@@ -90,28 +100,23 @@ async fn default_phrase_provider_abstains_on_unsafe_near_matches() {
             vocabulary: None,
         },
     ] {
-        let result = provider
-            .complete(request, CancellationToken::new())
-            .await
-            .expect("provider result");
+        let result = propose_text(&provider, request).await;
         assert_eq!(result, None);
     }
 }
 
 #[tokio::test]
 async fn default_phrase_provider_accepts_an_english_locale() {
-    let result = DeterministicPhraseProvider::default()
-        .complete(
-            ProviderRequest {
-                before: "Dear reviewer,\n  Looking Forward".to_owned(),
-                after: String::new(),
-                language: Some("en-GB".to_owned()),
-                vocabulary: None,
-            },
-            CancellationToken::new(),
-        )
-        .await
-        .expect("provider result");
+    let result = propose_text(
+        &DeterministicPhraseProvider::default(),
+        ProviderRequest {
+            before: "Dear reviewer,\n  Looking Forward".to_owned(),
+            after: String::new(),
+            language: Some("en-GB".to_owned()),
+            vocabulary: None,
+        },
+    )
+    .await;
 
     assert_eq!(result.as_deref(), Some(" to hearing from you"));
 }

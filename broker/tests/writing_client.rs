@@ -4,7 +4,7 @@ use std::time::Duration;
 use badi_broker::NoSuggestionReason;
 use badi_broker::provider::{
     AlternativeAsk, CompletionProvider, ProviderError, ProviderOutcome, ProviderRequest,
-    RequestTrigger,
+    RequestTrigger, WritingProposal,
 };
 use badi_broker::semantic::client::{
     ClientError, CompletionDisposition, RequestObserver, SemanticClient, SemanticClientConfig,
@@ -31,6 +31,23 @@ fn fixture_client(config: SemanticClientConfig) -> Result<SemanticClient, Client
         healing: Vec::new(),
     });
     Ok(client)
+}
+
+async fn propose<P: CompletionProvider>(
+    provider: &P,
+    request: ProviderRequest,
+    cancellation: CancellationToken,
+    allow_replacement: bool,
+) -> Result<Option<WritingProposal>, ProviderError> {
+    provider
+        .propose_outcome(
+            request,
+            cancellation,
+            allow_replacement,
+            RequestTrigger::Automatic,
+        )
+        .await
+        .map(|reply| reply.outcome.into_proposal())
 }
 
 fn request(before: &str, language: Option<&str>) -> ProviderRequest {
@@ -771,13 +788,13 @@ async fn spelling_and_continuation_share_one_deadline() -> Result<(), Box<dyn Er
         "public-fixture-token",
     )?)?;
     let started = std::time::Instant::now();
-    let result = client
-        .propose(
-            request("This is teh", Some("en")),
-            CancellationToken::new(),
-            true,
-        )
-        .await?;
+    let result = propose(
+        &client,
+        request("This is teh", Some("en")),
+        CancellationToken::new(),
+        true,
+    )
+    .await?;
     assert!(
         started.elapsed() < Duration::from_millis(600),
         "correction cannot reset the request budget"
@@ -803,19 +820,27 @@ async fn unambiguous_spelling_does_not_require_an_inference_round_trip()
         ("The shipping adress ", "address ", "adress "),
         ("Please give an exampel ", "example ", "exampel "),
     ] {
-        let result = client
-            .propose(request(before, Some("en")), CancellationToken::new(), true)
-            .await?
-            .expect("dictionary correction");
+        let result = propose(
+            &client,
+            request(before, Some("en")),
+            CancellationToken::new(),
+            true,
+        )
+        .await?
+        .expect("dictionary correction");
         assert_eq!(result.text, expected);
         assert_eq!(result.replace_before.as_deref(), Some(original));
     }
     let cancelled = CancellationToken::new();
     cancelled.cancel();
     assert!(matches!(
-        client
-            .propose(request("The shipping adress", Some("en")), cancelled, true)
-            .await,
+        propose(
+            &client,
+            request("The shipping adress", Some("en")),
+            cancelled,
+            true
+        )
+        .await,
         Err(badi_broker::provider::ProviderError::Cancelled)
     ));
     assert!(
@@ -828,13 +853,13 @@ async fn unambiguous_spelling_does_not_require_an_inference_round_trip()
     // typo cannot take the dictionary edit path, even if inference is down.
     for (language, replacement) in [("en", false), ("de", true)] {
         assert!(matches!(
-            client
-                .propose(
-                    request("The shipping adress", Some(language)),
-                    CancellationToken::new(),
-                    replacement,
-                )
-                .await,
+            propose(
+                &client,
+                request("The shipping adress", Some(language)),
+                CancellationToken::new(),
+                replacement,
+            )
+            .await,
             Err(badi_broker::provider::ProviderError::Unavailable)
         ));
     }
@@ -953,9 +978,19 @@ enum WarmUpReply {
     Status(&'static str),
     EventStream,
     Stall,
+    PrimeStatus(&'static str),
+    PrimeStall,
 }
 
-/// Serves the warm-up completion; a `Json` reply also serves the spelling
+fn warm_up_json_response() -> String {
+    let body = r#"{"content":" time","stop":true}"#;
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// Serves the warm-up completion; successful replies also serve the spelling
 /// prime that follows it, and both payloads are returned.
 async fn warm_up_endpoint(
     reply: WarmUpReply,
@@ -969,7 +1004,10 @@ async fn warm_up_endpoint(
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let endpoint = listener.local_addr()?;
     let server = tokio::spawn(async move {
-        let requests = if matches!(reply, WarmUpReply::Json) {
+        let requests = if matches!(
+            reply,
+            WarmUpReply::Json | WarmUpReply::PrimeStatus(_) | WarmUpReply::PrimeStall
+        ) {
             2
         } else {
             1
@@ -978,52 +1016,25 @@ async fn warm_up_endpoint(
         let mut payloads = Vec::new();
         for index in 0..requests {
             let (mut socket, _) = listener.accept().await.expect("HTTP connection");
-            let mut bytes = Vec::new();
-            let mut buffer = [0; 4096];
-            let (headers, payload) = loop {
-                let read = socket.read(&mut buffer).await.expect("HTTP request");
-                assert_ne!(read, 0);
-                bytes.extend_from_slice(&buffer[..read]);
-                let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") else {
-                    continue;
-                };
-                let headers = std::str::from_utf8(&bytes[..end])
-                    .expect("headers")
-                    .to_owned();
-                let length: usize = headers
-                    .lines()
-                    .find_map(|line| {
-                        let (key, value) = line.split_once(':')?;
-                        key.eq_ignore_ascii_case("content-length")
-                            .then(|| value.trim().parse().expect("body size"))
-                    })
-                    .expect("content length");
-                if bytes.len() >= end + 4 + length {
-                    let payload = serde_json::from_slice(&bytes[end + 4..end + 4 + length])
-                        .expect("request JSON");
-                    break (headers, payload);
+            let (headers, payload) = read_http_request(&mut socket).await;
+            let response = match (reply, index) {
+                (WarmUpReply::PrimeStatus(status), 1) | (WarmUpReply::Status(status), _) => {
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                    )
+                }
+                (WarmUpReply::PrimeStall, 1) | (WarmUpReply::Stall, _) => {
+                    tokio::time::sleep(Duration::from_millis(800)).await;
+                    String::new()
+                }
+                (WarmUpReply::Json | WarmUpReply::PrimeStatus(_) | WarmUpReply::PrimeStall, _) => {
+                    warm_up_json_response()
+                }
+                (WarmUpReply::EventStream, _) => {
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
+                        .to_owned()
                 }
             };
-            let response = match reply {
-            WarmUpReply::Json => {
-                let body = r#"{"content":" time","stop":true}"#;
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                )
-            }
-            WarmUpReply::Status(status) => format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
-            ),
-            WarmUpReply::EventStream => {
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n"
-                    .to_owned()
-            }
-            WarmUpReply::Stall => {
-                tokio::time::sleep(Duration::from_millis(800)).await;
-                String::new()
-            }
-        };
             let _ = socket.write_all(response.as_bytes()).await;
             if index == 0 {
                 first_headers = headers;
@@ -1078,6 +1089,29 @@ async fn warm_up_sends_fixed_completions_and_discards_their_replies() -> Result<
     assert_eq!(prime["cache_prompt"], serde_json::json!(true));
     assert_eq!(prime["stream"], serde_json::json!(false));
     assert_eq!(prime["n_predict"], serde_json::json!(4));
+    Ok(())
+}
+
+#[tokio::test]
+async fn warm_up_prime_failure_or_stall_still_completes_within_the_bound()
+-> Result<(), Box<dyn Error>> {
+    for reply in [
+        WarmUpReply::PrimeStatus("500 Internal Server Error"),
+        WarmUpReply::PrimeStall,
+    ] {
+        let (endpoint, server) = warm_up_endpoint(reply).await?;
+        let client = fixture_client(SemanticClientConfig::new(
+            endpoint,
+            "warm-up-fixture",
+            "public-fixture-token",
+        )?)?;
+        let started = std::time::Instant::now();
+        client
+            .warm_up(Duration::from_millis(500), CancellationToken::new())
+            .await?;
+        assert!(started.elapsed() < Duration::from_millis(600));
+        assert_eq!(server.await?.1.len(), 2, "the prime was attempted");
+    }
     Ok(())
 }
 
@@ -1148,8 +1182,8 @@ async fn warm_up_failures_are_bounded_and_classified_without_content() -> Result
     Ok(())
 }
 
-/// Reads one HTTP request from `socket` and returns its JSON body.
-async fn read_payload(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
+/// Reads one HTTP request from `socket` and returns its headers and JSON body.
+async fn read_http_request(socket: &mut tokio::net::TcpStream) -> (String, serde_json::Value) {
     let mut bytes = Vec::new();
     let mut buffer = [0; 4096];
     loop {
@@ -1159,8 +1193,10 @@ async fn read_payload(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
         let Some(end) = bytes.windows(4).position(|value| value == b"\r\n\r\n") else {
             continue;
         };
-        let length: usize = std::str::from_utf8(&bytes[..end])
+        let headers = std::str::from_utf8(&bytes[..end])
             .expect("headers")
+            .to_owned();
+        let length: usize = headers
             .lines()
             .find_map(|line| {
                 let (key, value) = line.split_once(':')?;
@@ -1169,10 +1205,16 @@ async fn read_payload(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
             })
             .expect("content length");
         if bytes.len() >= end + 4 + length {
-            return serde_json::from_slice(&bytes[end + 4..end + 4 + length])
-                .expect("request JSON");
+            let payload =
+                serde_json::from_slice(&bytes[end + 4..end + 4 + length]).expect("request JSON");
+            return (headers, payload);
         }
     }
+}
+
+/// Reads one HTTP request from `socket` and returns its JSON body.
+async fn read_payload(socket: &mut tokio::net::TcpStream) -> serde_json::Value {
+    read_http_request(socket).await.1
 }
 
 /// How the fixture runtime ends its stream.
@@ -1429,13 +1471,13 @@ async fn a_spelling_attempt_that_spends_the_budget_sends_no_continuation()
         "deadline-fixture",
         "public-fixture-token",
     )?)?;
-    let result = client
-        .propose(
-            request("This is teh ", Some("en")),
-            CancellationToken::new(),
-            true,
-        )
-        .await?;
+    let result = propose(
+        &client,
+        request("This is teh ", Some("en")),
+        CancellationToken::new(),
+        true,
+    )
+    .await?;
     assert!(result.is_none());
     let correction = server.await?;
     assert_ne!(correction["grammar"], "root ::= \" \" [^<>\\n\\r`]*");
@@ -1480,22 +1522,22 @@ async fn a_request_observer_sees_each_runtime_body_exactly_as_sent() -> Result<(
     )?)?
     .with_request_observer(std::sync::Arc::clone(&recorder) as _);
     // A dictionary correction sends nothing, so there is nothing to observe.
-    let correction = observed
-        .propose(
-            request("The shipping adress ", Some("en")),
-            CancellationToken::new(),
-            true,
-        )
-        .await?;
+    let correction = propose(
+        &observed,
+        request("The shipping adress ", Some("en")),
+        CancellationToken::new(),
+        true,
+    )
+    .await?;
     assert_eq!(correction.expect("correction").text, "address ");
     assert!(recorder.0.lock().expect("recorder").is_empty());
-    let continuation = observed
-        .propose(
-            request("Please review the", Some("en")),
-            CancellationToken::new(),
-            true,
-        )
-        .await?;
+    let continuation = propose(
+        &observed,
+        request("Please review the", Some("en")),
+        CancellationToken::new(),
+        true,
+    )
+    .await?;
     assert_eq!(continuation.expect("continuation").text, " report");
     let sent = server.await?;
     let bodies = recorder.0.lock().expect("recorder").clone();
@@ -1781,6 +1823,27 @@ async fn the_healed_echo_and_the_tokens_that_finish_its_word_do_not_count_but_la
     )
     .await?;
     assert_eq!(shown_text(outcome).as_deref(), Some("ent."));
+    // A boundary token may also write the following space, but if it writes
+    // letters of the next word its joint probability counts in full.
+    let (_, outcome) = event_exchange(
+        before,
+        vec![
+            token_event_with(" documents ", -5.0),
+            token_event_with("below", -0.1),
+            eos.clone(),
+        ],
+    )
+    .await?;
+    assert_eq!(shown_text(outcome).as_deref(), Some("ents below"));
+    let (_, outcome) = event_exchange(
+        before,
+        vec![token_event_with(" documents below", -5.0), eos.clone()],
+    )
+    .await?;
+    assert!(matches!(
+        outcome,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::LowConfidence)
+    ));
     // A later word under the floor still withholds the whole suggestion.
     let (_, outcome) = event_exchange(
         before,

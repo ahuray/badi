@@ -1048,8 +1048,7 @@ impl SemanticClient {
             .saturating_duration_since(Instant::now())
             .saturating_sub(Duration::from_millis(25));
         if !prime_budget.is_zero() {
-            let mut prime = crate::writing::correction_payload(WARM_UP_SPELLING_WORD);
-            prime["stream"] = serde_json::json!(false);
+            let prime = crate::writing::correction_payload(WARM_UP_SPELLING_WORD, false);
             if let Ok(body) = serde_json::to_vec(&prime) {
                 let _ =
                     tokio::time::timeout(prime_budget, self.warm_completion(body, prime_budget))
@@ -1113,7 +1112,7 @@ impl SemanticClient {
                 let asked = unambiguous.is_none();
                 let answer = if asked {
                     self.spelling_completion(
-                        &crate::writing::correction_payload(target.word),
+                        &crate::writing::correction_payload(target.word, true),
                         false,
                         cancellation,
                         started,
@@ -1302,22 +1301,6 @@ impl CompletionProvider for SemanticClient {
         Self::set_suggestion_length(self, length);
     }
 
-    async fn propose(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-        allow_replacement: bool,
-    ) -> Result<Option<WritingProposal>, ProviderError> {
-        self.propose_outcome(
-            request,
-            cancellation,
-            allow_replacement,
-            RequestTrigger::Automatic,
-        )
-        .await
-        .map(|reply| reply.outcome.into_proposal())
-    }
-
     async fn propose_outcome(
         &self,
         request: ProviderRequest,
@@ -1456,21 +1439,6 @@ impl CompletionProvider for SemanticClient {
                 ClientError::Cancelled => ProviderError::Cancelled,
                 _ => ProviderError::Unavailable,
             })
-    }
-
-    async fn complete(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        self.complete_started(
-            request,
-            cancellation,
-            Instant::now(),
-            RequestTrigger::Automatic.writing_budget(),
-        )
-        .await
-        .map(|(text, _stats)| text.ok())
     }
 }
 
@@ -1640,9 +1608,7 @@ impl StreamAccumulator {
             generated,
         )
     }
-}
 
-impl StreamAccumulator {
     /// Every content token arrived with a probability, and together they
     /// cover the streamed content exactly.
     fn probabilities_known(&self) -> bool {
@@ -1657,8 +1623,8 @@ impl StreamAccumulator {
     /// Where the token that writes the last letter of the word `echo` left
     /// unfinished ends, when `shown` (the text after the echo) goes on with
     /// that word: ` autom` then `atically`. `None` when the echo does not end
-    /// inside a word, `shown` starts something else, or the probabilities do
-    /// not cover the stream.
+    /// inside a word, `shown` starts something else, the token also writes
+    /// letters of a later word, or the probabilities do not cover the stream.
     fn finished_word_end(&self, echo: &str, shown: &str) -> Option<usize> {
         if !echo.ends_with(char::is_alphabetic) || !self.probabilities_known() {
             return None;
@@ -1669,13 +1635,21 @@ impl StreamAccumulator {
         if letters == 0 {
             return None;
         }
-        let last_letter = echo.len() + letters - 1;
+        let word_end = echo.len() + letters;
+        let last_letter = word_end - 1;
         let mut end = 0;
-        self.token_logprobs.iter().find_map(|&(bytes, _)| {
+        for &(bytes, _) in &self.token_logprobs {
             let begin = end;
             end += bytes;
-            (begin <= last_letter && last_letter < end).then_some(end)
-        })
+            if begin <= last_letter && last_letter < end {
+                // A token's probability is joint over all of it. If this one
+                // also writes a later word, it is not solely finishing the
+                // healed word and must be counted.
+                let after_word = self.output.get(word_end..end)?;
+                return (!after_word.chars().any(char::is_alphabetic)).then_some(end);
+            }
+        }
+        None
     }
 
     /// Whether the first streamed token, once known, fails to begin with the

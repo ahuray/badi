@@ -22,6 +22,7 @@ const ALTERNATIVES = new Map([[' for your time', ' so much'], [' so much', ' aga
 // Suffix corrections, most specific suffix first.
 const CORRECTIONS = [
   ['slow adress ', { text: 'address ', before: 'adress ', grant: 'adress ', late: true }],
+  ['revoked adress ', { text: 'address ', before: 'adress ', grant: 'adress ', clear: true }],
   ['other adress ', { text: 'address ', before: 'adress ', grant: 'other ' }],
   [' adress ', { text: 'address ', before: 'adress ', grant: 'adress ' }],
 ];
@@ -29,12 +30,14 @@ let candidate = null;
 let replaceBefore = null;
 let grantReplaceBefore = null;
 let lateAccept = false;
+let clearBeforeGrant = false;
 let generation = 0;
 const clearCandidate = () => {
   candidate = null;
   replaceBefore = null;
   grantReplaceBefore = null;
   lateAccept = false;
+  clearBeforeGrant = false;
 };
 // The broker's policy as bridge.mjs reports it. FAKE_BRIDGE_POLICY 'refused'
 // or 'manual' starts so; 'silent' allows but reports only when asked.
@@ -63,29 +66,33 @@ for await (const line of createInterface({ input: process.stdin })) {
     replaceBefore = correction?.before ?? null;
     grantReplaceBefore = correction?.grant ?? null;
     lateAccept = correction?.late === true;
+    clearBeforeGrant = correction?.clear === true;
     send({ id: command.id, ok: true, text: candidate,
       word: replaceBefore ? candidate : candidate?.match(/^ ?\S+/u)?.[0],
       ...(replaceBefore ? { replace_before: replaceBefore } : {}) });
   } else if (command.op === 'alternative') {
     if (candidate === null) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); continue; }
-    if (candidate === ' for your time') { clearCandidate(); send({ id: command.id, ok: true, words: ['so', 'again'] }); continue; }
+    if (candidate === ' for your time') { clearCandidate(); await delay(400); send({ id: command.id, ok: true, words: ['so', 'again'] }); continue; }
     if (candidate === ' so much') { clearCandidate(); send({ id: command.id, ok: true, words: ['again'] }); continue; }
     candidate = ALTERNATIVES.get(candidate) ?? null;
     replaceBefore = null;
     grantReplaceBefore = null;
     lateAccept = false;
+    clearBeforeGrant = false;
     send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
   } else if (command.op === 'pick') {
     candidate = { so: ' so much', again: ' again', for: ' for your time' }[command.word] ?? null;
     replaceBefore = null;
     grantReplaceBefore = null;
     lateAccept = false;
+    clearBeforeGrant = false;
     send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
   } else if (command.op === 'accept') {
     const text = candidate === null ? null
       : replaceBefore ? candidate
       : command.acceptance === 'word' ? candidate.match(/^ ?\S+/u)[0] : candidate;
     const grant = grantReplaceBefore;
+    if (clearBeforeGrant) send({ event: 'clear' });
     if (candidate === ' arrives late' || lateAccept) await delay(400);
     send(text === null ? { id: command.id, ok: false, reason: 'expired_or_unavailable' }
       : { id: command.id, ok: true, text, ...(grant ? { replace_before: grant } : {}) });
