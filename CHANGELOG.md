@@ -8,6 +8,10 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Neovim now shows spelling corrections as `adress → address` and, on Tab
+  or Ctrl+Right, replaces exactly that suffix (including its typed space)
+  in one native undo step. The plugin negotiates `text_replacement`; a
+  grant for any other suffix replaces nothing.
 - Spelling corrections the model chooses now arrive inside the typing
   budget: both spelling prompts use the runtime's prompt cache (the RAM
   cache keeps their prefixes beside the writing window's, still one slot),

@@ -64,6 +64,71 @@ test('a pause shows inline grey text; Ctrl+Right inserts it all as one undo step
   assert.doesNotMatch(state.messages, /thank|Dear|your time/, 'No typed or suggested text reaches messages');
 });
 
+test('a correction replaces exactly the misspelled suffix including a typed space in one undo step', { skip }, async t => {
+  const editor = await fakeEditor(t);
+  await markdown(editor, 'iGrüße, die adress ');
+  let state = await editor.until(current => current.preview === ' adress → address', 'correction preview');
+  assert.deepEqual(state.chunks, [[' adress → address', 'BadiSuggestion']], 'A correction is drawn whole');
+  assert.deepEqual(state.lines, ['Grüße, die adress '], 'The correction preview is not buffer text');
+  assert.equal(state.screen, 'Grüße, die adress  adress → address');
+  await editor.send('<Tab>');
+  state = await editor.until(current => current.lines[0] === 'Grüße, die address ', 'correction acceptance');
+  assert.deepEqual(state.cursor, [1, Buffer.byteLength('Grüße, die address ')]);
+  assert.equal(state.preview, null);
+  assert.equal(state.status.status, 'applied');
+  await editor.send('today<Esc>');
+  await editor.until(current => current.lines[0] === 'Grüße, die address today', 'typing after correction');
+  await editor.send('u');
+  state = await editor.until(current => current.lines[0] === 'Grüße, die address ', 'typing after removed alone');
+  await editor.send('u');
+  state = await editor.until(current => current.lines[0] === 'Grüße, die adress ', 'correction undone');
+  const operations = await editor.operations();
+  assert.deepEqual(operations.filter(entry => entry.op === 'accept' || entry.op === 'result')
+    .map(entry => entry.acceptance ?? entry.status), ['word', 'applied']);
+  assert.doesNotMatch(state.messages, /adress|address/, 'No corrected text reaches messages');
+});
+
+test('Ctrl+Right accepts a correction mid-line without touching the text after the caret', { skip }, async t => {
+  const editor = await fakeEditor(t);
+  await markdown(editor, 'iPlease check the adress please');
+  await editor.send('<Left><Left><Left><Left><Left><Left>');
+  await editor.command('lua require("badi").request(true)');
+  const shown = await editor.until(current => current.preview === ' adress → address', 'mid-line correction preview');
+  assert.equal(shown.screen, 'Please check the adress  adress → addressplease');
+  await editor.send('<C-Right>');
+  const state = await editor.until(current => current.lines[0] === 'Please check the address please', 'mid-line acceptance');
+  assert.deepEqual(state.cursor, [1, Buffer.byteLength('Please check the address ')]);
+  assert.equal(state.status.status, 'applied');
+  const operations = await editor.operations();
+  assert.deepEqual(operations.filter(entry => entry.op === 'accept' || entry.op === 'result')
+    .map(entry => entry.acceptance ?? entry.status), ['all', 'applied']);
+});
+
+test('a different replacement grant is refused without changing the buffer', { skip }, async t => {
+  const editor = await fakeEditor(t);
+  await markdown(editor, 'iPlease check the other adress ');
+  await editor.until(current => current.preview === ' adress → address', 'correction preview');
+  await editor.send('<Tab>');
+  const state = await editor.until(current => current.preview === null && current.status.status === 'stale', 'stale grant');
+  assert.deepEqual(state.lines, ['Please check the other adress ']);
+  const operations = await editor.operations();
+  assert.deepEqual(operations.filter(entry => entry.op === 'result').map(entry => entry.status), ['stale']);
+});
+
+test('a stale correction grant inserts nothing', { skip }, async t => {
+  const editor = await fakeEditor(t);
+  await markdown(editor, 'iPlease check the slow adress ');
+  await editor.until(current => current.preview === ' adress → address', 'correction preview');
+  await editor.send('<Tab>');
+  await delay(50);
+  await editor.send('!');
+  await delay(600);
+  const state = await editor.state();
+  assert.deepEqual(state.lines, ['Please check the slow adress !']);
+  const operations = await editor.operations();
+  assert.deepEqual(operations.filter(entry => entry.op === 'result').map(entry => entry.status), ['stale']);
+});
+
 test('another window on the same buffer never shows the preview', { skip }, async t => {
   const editor = await fakeEditor(t);
   await editor.command('setfiletype markdown | split');

@@ -91,7 +91,7 @@ around the caret.
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
 | Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; Tab types a word, Ctrl+→ all of it, a correction shows as `teh → the` and Tab fixes the typo, and an automatic miss stays quiet ([how](docs/decisions/0009-terminals-use-the-typed-line.md)) | Ghostty 1.3.1 |
 | foot (Omarchy's default terminal) | `badi app foot on`; the line you type, as in Ghostty, including `teh → the` corrections | foot 1.28.0 |
-| Neovim | Badi plugin; prose buffers, inline preview, one-step undo; no spelling fixes yet. Live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5, 0.12.6 |
+| Neovim | Badi plugin; prose buffers, inline preview, exact spelling replacement, one-step undo. Live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5, 0.12.6 |
 | Discord | Composer; install with `--observed-app discord`, then relaunch Discord | 1.0.166 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 | Claude desktop | Ready, but its composer is untested; `badi app com.anthropic.claude on`, then relaunch it with the flag below | 2.42304 (Electron 44) |

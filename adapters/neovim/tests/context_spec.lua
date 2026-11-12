@@ -46,4 +46,17 @@ assert(context.insertable('Welt bleibt'))
 for _, value in ipairs({ '', 'a\nb', 'a\rb', 'a\tb', 'a\0b', 42, string.rep('a', 257) }) do
   assert(not context.insertable(value), vim.inspect(value))
 end
+
+-- A spelling replacement starts only at the exact byte suffix ending at
+-- the caret, including after multibyte text and with text after the caret.
+local line = 'Grüße, die adress bitte'
+local caret = #'Grüße, die adress '
+assert(context.replacement_start(line, caret, 'adress ', 'address ') == #'Grüße, die ')
+assert(context.replacement_start('adress', #'adress', 'adress', 'address') == 0)
+assert(context.replacement_start(line, caret, 'other ', 'address ') == nil)
+assert(context.replacement_start(line, caret, 'adress ', 'address') == nil)
+assert(context.replacement_start(line, caret, 'adress ', 'adress ') == nil)
+assert(context.replacement_start(line, caret, 'die adress ', 'the address ') == nil)
+assert(context.replacement_start(line, caret + 1, 'adress ', 'address ') == nil)
+assert(context.replacement_start(line, 2, 'adress ', 'address ') == nil)
 io.write('context helpers ok\n')
