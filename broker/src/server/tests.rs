@@ -44,14 +44,16 @@ impl CompletionProvider for DelayedPhrase {
         ProviderKind::PhraseV1
     }
 
-    async fn complete(
+    async fn propose_outcome(
         &self,
         request: ProviderRequest,
         cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
+        allow_replacement: bool,
+        trigger: crate::provider::RequestTrigger,
+    ) -> Result<crate::provider::ProviderReply, ProviderError> {
         sleep(self.0).await;
         DeterministicPhraseProvider::default()
-            .complete(request, cancellation)
+            .propose_outcome(request, cancellation, allow_replacement, trigger)
             .await
     }
 }

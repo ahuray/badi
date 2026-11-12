@@ -72,7 +72,7 @@ way while Fcitx is composing.
 ## Where it works
 
 Tested on the development workstation (Arch Linux, Hyprland 0.56, Fcitx
-5.1.23) with disposable text in October 2026. A listed version is not a claim
+5.1.23) with disposable text in October–November 2026. A listed version is not a claim
 about Linux in general. Badi needs Fcitx 5.1.23 or later on Hyprland:
 earlier versions stop Chromium-based apps sending the text
 around the caret.

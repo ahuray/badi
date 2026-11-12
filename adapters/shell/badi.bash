@@ -109,7 +109,7 @@ _badi_words() {
       fi
       if [[ $badi_text != "$BADI_PREVIEW" || $badi_replace != "${BADI_REPLACE:-}" ||
           ( -n $badi_replace && $READLINE_LINE != *"$badi_replace" ) ]]; then
-        _badi_exchange '{"operation":"result","applied":false}' || true
+        _badi_exchange '{"operation":"result","status":"stale"}' || true
         _badi_clear_preview
         return
       fi

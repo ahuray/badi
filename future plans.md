@@ -9,13 +9,14 @@ When an item is done, delete it and record what is now true in the
 keeps the history of what shipped. Evidence lives in the runbooks; this file
 links to it. A tested app version is not a claim about Linux in general.
 
-## Where Badi stands (2026-10-26)
+## Where Badi stands (2026-11-12)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
   and any website, Zen and Zen Twilight, Omarchy web apps in Chromium or Brave, Telegram, Discord,
   LibreOffice Writer
-  (spelling as you type, Alt+F7), Obsidian, Bash, Neovim (live under LazyVim
-  in foot and Ghostty) and, by an opt-in rule, the typed line in Ghostty and
+  (spelling as you type, Alt+F7), Obsidian, Bash, Neovim (including exact
+  spelling corrections; live under LazyVim in foot and Ghostty) and, by an
+  opt-in rule, the typed line in Ghostty and
   foot, Omarchy's default terminal
   ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)); the
   [app sweep](adapters/fcitx5/README.md#tested-with) of 2026-10-20 passed in
@@ -94,8 +95,10 @@ links to it. A tested app version is not a claim about Linux in general.
   the device and lets the user pick one.
 - **Code health:** a full review before the 0.2.0 fresh start (2026-10-24)
   fixed every correctness finding it confirmed, with regression tests, and
-  removed dormant paths and failed experiments; what it could not check live
-  is under [Engineering upkeep](#engineering-upkeep).
+  removed dormant paths and failed experiments; a second review on
+  2026-11-12 fixed the exactness, revocation and test-harness findings it
+  confirmed and collapsed the provider trait to one canonical outcome call.
+  What neither could check live is under [Engineering upkeep](#engineering-upkeep).
 
 Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer

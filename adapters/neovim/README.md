@@ -100,7 +100,10 @@ the comment colour in bold. Set either group to restyle it.
   `nvim_buf_set_text` at the snapshot caret and moves the cursor after it. For
   a correction, the grant must name the same `replace_before`, and that exact
   byte suffix ending at the caret (including its optional typed space) is the
-  only range replaced. It reports `applied` only after reading back exactly
+  only range replaced. The broker proposes corrections only when the request
+  has no text after the caret; Neovim sends the rest of the caret line there,
+  so live corrections are at a line end (later lines do not block one). It
+  reports `applied` only after reading back exactly
   the expected line and caret; anything else is `failed` or `stale`.
 - **Undo.** The edit breaks the undo sequence before and after itself
   (`undolevels`), so one `u` removes exactly an accepted insertion or restores

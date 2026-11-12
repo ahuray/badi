@@ -117,15 +117,17 @@ impl CompletionProvider for GatedProvider {
         ProviderKind::PhraseV1
     }
 
-    async fn complete(
+    async fn propose_outcome(
         &self,
         _request: ProviderRequest,
         _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         self.entered.notify_one();
         self.release.notified().await;
-        Ok(Some(" for your time".to_owned()))
+        Ok(ProviderOutcome::from_text(Some(" for your time".to_owned())).into())
     }
 }
 

@@ -198,7 +198,9 @@ test('Obsidian replaces exactly the misspelled suffix including a typed space in
   assert.deepEqual(client.reports, [{ text: 'address ', status: 'applied' }]);
 });
 
-test('Obsidian accepts a correction mid-note with text after the caret', async context => {
+// Editor-range coverage only: the real broker proposes corrections only
+// when the request has no text after the caret.
+test('Obsidian accepts a scripted correction without touching text after the caret', async context => {
   const { controller, view, client, state } = await harness(context);
   controller.invalidate();
   const text = 'Please check the adress please';
@@ -210,6 +212,21 @@ test('Obsidian accepts a correction mid-note with text after the caret', async c
   await controller.accept('word');
   assert.equal(view.state.doc.toString(), 'Please check the address please');
   assert.deepEqual(client.reports, [{ text: 'address ', status: 'applied' }]);
+});
+
+test('Obsidian drops a surrogate half split by its before-caret pre-slice', async context => {
+  const { controller, view, client, state } = await harness(context);
+  controller.invalidate();
+  const before = '😀' + 'a'.repeat(1023);
+  view.state = state(before + '😀' + 'b'.repeat(300), before.length);
+  await controller.request();
+  const request = client.requests.at(-1);
+  assert.ok(request);
+  assert.ok(!request.before.includes('😀'), 'the split emoji is outside the bounded context');
+  assert.ok([...request.before, ...request.after].every(character => {
+    const code = character.codePointAt(0);
+    return code < 0xd800 || code > 0xdfff;
+  }), 'no lone surrogate reaches the broker client');
 });
 
 test('Obsidian refuses a different replacement grant without changing the note', async context => {

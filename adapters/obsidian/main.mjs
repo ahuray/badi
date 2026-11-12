@@ -9,6 +9,12 @@ import { recordActivity } from '../shared/activity.mjs';
 import { writingLanguage } from '../shared/writing-language.mjs';
 import { validCorrection } from '../shared/text-safety.mjs';
 
+// CodeMirror positions are UTF-16 code units. A fixed-size pre-slice can
+// split an astral character; drop the orphan half before scalar bounding.
+const dropSplitSurrogate = (value, edge) => edge === 'start'
+  ? value.replace(/^[\uDC00-\uDFFF]/u, '')
+  : value.replace(/[\uD800-\uDBFF]$/u, '');
+
 class SuggestionWidget extends WidgetType {
   // `word` is what Tab takes, drawn a step brighter when more follows it.
   // A `list` widget shows numbered alternative words instead (ADR 0014).
@@ -148,8 +154,13 @@ class WritingView {
     const end = snapshot.selection.main.head;
     // Text after the caret lets the broker suggest only what fits before it.
     // UTF-16 slices of twice the scalar limits always hold enough scalars.
-    const { before, after } = boundedContext(snapshot.doc.sliceString(Math.max(0, end - 1024), end),
-      snapshot.doc.sliceString(end, end + 256));
+    const beforeStart = Math.max(0, end - 1024);
+    const afterEnd = end + 256;
+    const rawBefore = dropSplitSurrogate(
+      snapshot.doc.sliceString(beforeStart, end), beforeStart > 0 ? 'start' : '');
+    const rawAfter = dropSplitSurrogate(
+      snapshot.doc.sliceString(end, afterEnd), afterEnd < snapshot.doc.length ? 'end' : '');
+    const { before, after } = boundedContext(rawBefore, rawAfter);
     if (!before.trim()) return;
     this.pending = true;
     this.owner.session = this;
@@ -160,7 +171,10 @@ class WritingView {
       const text = await this.client.suggest(before, { explicit, language, after });
       if (generation !== this.generation || !this.matches(snapshot) || !text) return;
       const replaceBefore = this.client.replacementBefore;
-      if (replaceBefore !== undefined && !validCorrection(before, replaceBefore, text)) return;
+      if (replaceBefore !== undefined && !validCorrection(before, replaceBefore, text)) {
+        this.client.cancel();
+        return;
+      }
       this.snapshot = snapshot;
       this.text = text;
       this.replaceBefore = replaceBefore;

@@ -13,7 +13,8 @@ pub const AUTOMATIC_WRITING_BUDGET_MS: u64 = 550;
 /// request): the user asked and waits for one suggestion.
 pub const EXPLICIT_WRITING_BUDGET_MS: u64 = 1_200;
 /// A spelling-only field's check: no keystroke waits for it, and choosing
-/// between dictionary candidates needs an uncached model call.
+/// between dictionary candidates needs its own model call, whose changing
+/// context can still dominate its prefill.
 pub const SPELLING_WRITING_BUDGET_MS: u64 = 2_500;
 
 /// What asked for a suggestion. Only the time budget differs; policy,
@@ -147,49 +148,18 @@ pub trait CompletionProvider: Send + Sync + 'static {
         std::future::pending::<()>().await;
     }
 
-    async fn complete(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError>;
-
-    async fn propose(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-        _allow_replacement: bool,
-    ) -> Result<Option<WritingProposal>, ProviderError> {
-        self.complete(request, cancellation).await.map(|output| {
-            output.map(|text| WritingProposal {
-                text,
-                replace_before: None,
-            })
-        })
-    }
-
-    /// What the broker calls: like `propose`, and names the content-free
-    /// class of a missing proposal, with the call's counts when the provider
+    /// What the broker calls: one whole suggestion or the content-free class
+    /// of a missing proposal, with the call's counts when the provider
     /// measured them. Providers that cannot distinguish request and model
     /// abstention report the model class. A provider with a time budget
-    /// sizes it by `trigger`. The reply is one whole suggestion.
+    /// sizes it by `trigger`.
     async fn propose_outcome(
         &self,
         request: ProviderRequest,
         cancellation: CancellationToken,
         allow_replacement: bool,
-        _trigger: RequestTrigger,
-    ) -> Result<ProviderReply, ProviderError> {
-        self.propose(request, cancellation, allow_replacement)
-            .await
-            .map(|proposal| {
-                proposal
-                    .map_or(
-                        ProviderOutcome::NoSuggestion(NoSuggestionReason::ModelAbstained),
-                        ProviderOutcome::Proposal,
-                    )
-                    .into()
-            })
-    }
+        trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError>;
 
     /// For an explicit request for alternatives: the best continuation
     /// that `ask` allows. A provider without one abstains.
@@ -245,6 +215,21 @@ pub enum ProviderOutcome {
 }
 
 impl ProviderOutcome {
+    /// An append-only proposal from optional text; absence is a model
+    /// abstention.
+    #[must_use]
+    pub fn from_text(text: Option<String>) -> Self {
+        text.map_or(
+            Self::NoSuggestion(NoSuggestionReason::ModelAbstained),
+            |text| {
+                Self::Proposal(WritingProposal {
+                    text,
+                    replace_before: None,
+                })
+            },
+        )
+    }
+
     #[must_use]
     pub fn into_proposal(self) -> Option<WritingProposal> {
         match self {
@@ -309,17 +294,6 @@ impl DeterministicPhraseProvider {
 impl CompletionProvider for DeterministicPhraseProvider {
     fn kind(&self) -> ProviderKind {
         ProviderKind::PhraseV1
-    }
-
-    async fn complete(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        if cancellation.is_cancelled() {
-            return Err(ProviderError::Cancelled);
-        }
-        Ok(self.phrase(&request).ok())
     }
 
     async fn propose_outcome(

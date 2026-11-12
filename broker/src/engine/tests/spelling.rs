@@ -254,27 +254,22 @@ impl CompletionProvider for ReplacementAuthorityProbe {
     fn kind(&self) -> ProviderKind {
         ProviderKind::LocalModel
     }
-    async fn complete(
-        &self,
-        _request: ProviderRequest,
-        _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(None)
-    }
-    async fn propose(
+    async fn propose_outcome(
         &self,
         _request: ProviderRequest,
         _cancellation: CancellationToken,
         allow_replacement: bool,
-    ) -> Result<Option<crate::provider::WritingProposal>, ProviderError> {
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError> {
         self.0
             .store(allow_replacement, std::sync::atomic::Ordering::SeqCst);
         // Deliberately ignore the false flag to exercise the broker's
         // independent output gate as well as provider configuration.
-        Ok(Some(crate::provider::WritingProposal {
+        Ok(ProviderOutcome::Proposal(WritingProposal {
             text: "the ".to_owned(),
             replace_before: Some("teh ".to_owned()),
-        }))
+        })
+        .into())
     }
 }
 

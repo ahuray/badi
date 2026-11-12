@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::protocol::ProviderKind;
 use crate::provider::{
     AlternativeAsk, CompletionProvider, ProviderError, ProviderReply, ProviderRequest,
-    RequestTrigger, WritingProposal,
+    RequestTrigger,
 };
 
 use super::client::{
@@ -697,25 +697,6 @@ impl CompletionProvider for OwnedRuntime {
         while self.is_alive() {
             tokio::time::sleep(EXIT_POLL_FALLBACK_INTERVAL).await;
         }
-    }
-
-    async fn complete(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        self.client.complete(request, cancellation).await
-    }
-
-    async fn propose(
-        &self,
-        request: ProviderRequest,
-        cancellation: CancellationToken,
-        allow_replacement: bool,
-    ) -> Result<Option<WritingProposal>, ProviderError> {
-        self.client
-            .propose(request, cancellation, allow_replacement)
-            .await
     }
 
     async fn propose_outcome(

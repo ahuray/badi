@@ -24,7 +24,10 @@ use crate::protocol::{
     SessionId, SessionOpenPayload, SuggestRequestPayload, TargetDescriptor, TargetKind,
 };
 use crate::protocol::{ProbeOutcome, ProbeRequestPayload};
-use crate::provider::{CompletionProvider, ProviderError, ProviderRequest};
+use crate::provider::{
+    CompletionProvider, ProviderError, ProviderOutcome, ProviderReply, ProviderRequest,
+    RequestTrigger, WritingProposal,
+};
 use crate::settings::{
     BrowserAdapter, PermissionDecision, RetentionPermission, SETTINGS_SCHEMA, SettingsV2,
     StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
@@ -109,11 +112,13 @@ impl CompletionProvider for CountingProvider {
         ProviderKind::PhraseV1
     }
 
-    async fn complete(
+    async fn propose_outcome(
         &self,
         request: ProviderRequest,
         _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         self.languages
             .lock()
@@ -124,7 +129,7 @@ impl CompletionProvider for CountingProvider {
             Ordering::Relaxed,
         );
         sleep(self.delay).await;
-        Ok(Some(format!(" revision {}", request.before)))
+        Ok(ProviderOutcome::from_text(Some(format!(" revision {}", request.before))).into())
     }
 }
 
@@ -134,11 +139,13 @@ impl CompletionProvider for PendingProvider {
         ProviderKind::PhraseV1
     }
 
-    async fn complete(
+    async fn propose_outcome(
         &self,
         _request: ProviderRequest,
         cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         *self.token.lock().expect("provider token lock") = Some(cancellation);
         std::future::pending().await
@@ -151,14 +158,18 @@ impl CompletionProvider for ReadyThenPendingProvider {
         ProviderKind::PhraseV1
     }
 
-    async fn complete(
+    async fn propose_outcome(
         &self,
         request: ProviderRequest,
         cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
+        _allow_replacement: bool,
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError> {
         let call = self.calls.fetch_add(1, Ordering::Relaxed);
         if call == 0 {
-            return Ok(Some(format!(" revision {}", request.before)));
+            return Ok(
+                ProviderOutcome::from_text(Some(format!(" revision {}", request.before))).into(),
+            );
         }
         *self.token.lock().expect("provider token lock") = Some(cancellation.clone());
         cancellation.cancelled().await;
@@ -557,22 +568,17 @@ impl CompletionProvider for SpellingProvider {
     fn kind(&self) -> ProviderKind {
         ProviderKind::LocalModel
     }
-    async fn complete(
-        &self,
-        _request: ProviderRequest,
-        _cancellation: CancellationToken,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(None)
-    }
-    async fn propose(
+    async fn propose_outcome(
         &self,
         _request: ProviderRequest,
         _cancellation: CancellationToken,
         _allow_replacement: bool,
-    ) -> Result<Option<crate::provider::WritingProposal>, ProviderError> {
-        Ok(Some(crate::provider::WritingProposal {
+        _trigger: RequestTrigger,
+    ) -> Result<ProviderReply, ProviderError> {
+        Ok(ProviderOutcome::Proposal(WritingProposal {
             text: self.1.to_owned(),
             replace_before: Some(self.0.to_owned()),
-        }))
+        })
+        .into())
     }
 }

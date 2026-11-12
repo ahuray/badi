@@ -1093,15 +1093,16 @@ pub(super) fn checked_proposal(
         // A correction may preserve the single space typed after its word.
         // A continuation may keep one trailing space; the shape check allows
         // it only where it separates the insertion from the next word.
-        crate::protocol::valid_spelling_replacement(original, &raw.text)
-            .then_some((raw.text, raw.replace_before))?
+        if !crate::protocol::valid_spelling_replacement(original, &raw.text) {
+            return None;
+        }
+        (raw.text, raw.replace_before)
     } else {
         (sanitize_suggestion(&raw.text).ok()?, None)
     };
     let shape_valid = match replace_before.as_deref() {
         Some(original) => {
-            crate::protocol::valid_spelling_replacement(original, &text)
-                && before.ends_with(original)
+            before.ends_with(original)
                 && after.is_empty()
                 && before[..before.len() - original.len()]
                     .chars()

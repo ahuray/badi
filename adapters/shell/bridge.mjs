@@ -63,7 +63,9 @@ try {
         respond('INSERT', Buffer.from(grant.text).toString('base64') + (
           grant.replaceBefore ? ` ${Buffer.from(grant.replaceBefore).toString('base64')}` : ''));
       } else if (command.operation === 'result' && grant) {
-        client.report(grant, command.applied === true ? 'applied' : 'failed');
+        const status = ['applied', 'stale', 'failed'].includes(command.status)
+          ? command.status : command.applied === true ? 'applied' : 'failed';
+        client.report(grant, status);
         grant = null;
         respond('DONE');
       } else if (command.operation === 'cancel' || command.operation === 'dismiss') {

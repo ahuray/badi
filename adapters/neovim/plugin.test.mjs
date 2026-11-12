@@ -88,7 +88,9 @@ test('a correction replaces exactly the misspelled suffix including a typed spac
   assert.doesNotMatch(state.messages, /adress|address/, 'No corrected text reaches messages');
 });
 
-test('Ctrl+Right accepts a correction mid-line without touching the text after the caret', { skip }, async t => {
+// Editor-range coverage only: the real broker proposes corrections only
+// when the request has no text after the caret (for Neovim, the caret line).
+test('Ctrl+Right accepts a scripted correction without touching text after the caret', { skip }, async t => {
   const editor = await fakeEditor(t);
   await markdown(editor, 'iPlease check the adress please');
   await editor.send('<Left><Left><Left><Left><Left><Left>');
@@ -102,6 +104,30 @@ test('Ctrl+Right accepts a correction mid-line without touching the text after t
   const operations = await editor.operations();
   assert.deepEqual(operations.filter(entry => entry.op === 'accept' || entry.op === 'result')
     .map(entry => entry.acceptance ?? entry.status), ['all', 'applied']);
+});
+
+test('a correction revoked while its grant is in flight inserts nothing', { skip }, async t => {
+  const editor = await fakeEditor(t);
+  await markdown(editor, 'iPlease check the revoked adress ');
+  await editor.until(current => current.preview === ' adress → address', 'correction preview');
+  await editor.send('<Tab>');
+  const state = await editor.until(current => current.preview === null, 'revocation withdraws');
+  assert.deepEqual(state.lines, ['Please check the revoked adress ']);
+  const operations = await editor.operations();
+  assert.deepEqual(operations.filter(entry => entry.op === 'result').map(entry => entry.status), ['stale']);
+});
+
+test('Tab while an alternative is in flight keeps the preview and sends no acceptance', { skip }, async t => {
+  const editor = await fakeEditor(t);
+  await markdown(editor, 'ithank you');
+  await editor.until(current => current.preview === ' for your time', 'preview');
+  await editor.send('<C-S-Space>');
+  await delay(50);
+  await editor.send('<Tab>');
+  const state = await editor.until(current => current.preview === ' 1.so  2.again', 'alternative list after Tab');
+  assert.deepEqual(state.lines, ['thank you']);
+  const operations = await editor.operations();
+  assert.deepEqual(operations.filter(entry => entry.op === 'accept'), []);
 });
 
 test('a different replacement grant is refused without changing the buffer', { skip }, async t => {

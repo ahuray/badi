@@ -460,7 +460,7 @@ async fn exit_is_observed_by_event_and_by_the_polling_fallback() -> Result<(), B
 #[tokio::test]
 async fn warm_up_reports_completion_and_failure_without_failing_the_runtime()
 -> Result<(), Box<dyn Error>> {
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    use tokio::io::AsyncWriteExt as _;
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let runtime = owned_runtime_at(listener.local_addr()?)?;
@@ -468,30 +468,11 @@ async fn warm_up_reports_completion_and_failure_without_failing_the_runtime()
         // The warm-up completion and the spelling prime that follows it.
         for _ in 0..2 {
             let (mut socket, _) = listener.accept().await.expect("warm-up connection");
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 4096];
-            loop {
-                let read = socket.read(&mut buffer).await.expect("warm-up request");
-                assert_ne!(read, 0);
-                request.extend_from_slice(&buffer[..read]);
-                let text = String::from_utf8_lossy(&request);
-                let Some((headers, body)) = text.split_once("\r\n\r\n") else {
-                    continue;
-                };
-                let length: usize = headers
-                    .lines()
-                    .find_map(|line| line.strip_prefix("content-length: "))
-                    .expect("content length")
-                    .parse()
-                    .expect("length");
-                if body.len() >= length {
-                    break;
-                }
-            }
+            read_warm_up_request(&mut socket).await;
             socket
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
-            .await
-            .expect("warm-up reply");
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .expect("warm-up reply");
         }
         let (_stalled, _) = listener.accept().await.expect("stalled connection");
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -515,6 +496,31 @@ async fn warm_up_reports_completion_and_failure_without_failing_the_runtime()
     drop(runtime);
     assert!(!Path::new(&format!("/proc/{process_id}")).exists());
     Ok(())
+}
+
+async fn read_warm_up_request(socket: &mut tokio::net::TcpStream) {
+    use tokio::io::AsyncReadExt as _;
+
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = socket.read(&mut buffer).await.expect("warm-up request");
+        assert_ne!(read, 0);
+        request.extend_from_slice(&buffer[..read]);
+        let text = String::from_utf8_lossy(&request);
+        let Some((headers, body)) = text.split_once("\r\n\r\n") else {
+            continue;
+        };
+        let length: usize = headers
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length: "))
+            .expect("content length")
+            .parse()
+            .expect("length");
+        if body.len() >= length {
+            break;
+        }
+    }
 }
 
 fn verify_observed_file(path: &Path) -> Result<VerifiedFile, Box<dyn Error>> {

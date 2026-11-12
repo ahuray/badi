@@ -94,13 +94,30 @@ end
 
 local function one_word(value)
   local word = value:sub(-1) == ' ' and value:sub(1, -2) or value
-  return word ~= '' and not word:find('%s')
+  local characters = vim.fn.strchars(word)
+  return characters >= 2 and characters <= 32 and not word:find('[%d%p%s]')
+end
+
+local function preceding_character(line, start)
+  if start == 0 then return nil end
+  local first = start
+  while first > 1 and continuation(line:byte(first)) do first = first - 1 end
+  return line:sub(first, start)
+end
+
+local function is_whitespace(character)
+  local code = vim.fn.strgetchar(character, 0)
+  return code == 32 or (code >= 9 and code <= 13) or code == 0x85 or code == 0xa0
+      or code == 0x1680 or (code >= 0x2000 and code <= 0x200a)
+      or code == 0x2028 or code == 0x2029 or code == 0x202f
+      or code == 0x205f or code == 0x3000
 end
 
 --- The byte column where an exact spelling replacement starts, or nil when
---- the original is not exactly the suffix ending at the caret on this line.
---- The broker and shared client validate the correction's word shape; this
---- editor-side check is the range binding that keeps the edit exact.
+--- the original is not exactly the whole-word suffix ending at the caret on
+--- this line. The broker and shared client validate the correction's full
+--- Unicode word shape; this editor-side check additionally binds its length,
+--- word boundary and exact byte range.
 function M.replacement_start(line, col, original, replacement)
   if type(line) ~= 'string' or type(col) ~= 'number' or col < 0 or col > #line
       or not M.insertable(original) or not M.insertable(replacement)
@@ -110,6 +127,8 @@ function M.replacement_start(line, col, original, replacement)
   end
   local start = col - #original
   if start < 0 or line:sub(start + 1, col) ~= original then return nil end
+  local previous = preceding_character(line, start)
+  if previous ~= nil and not is_whitespace(previous) then return nil end
   return start
 end
 

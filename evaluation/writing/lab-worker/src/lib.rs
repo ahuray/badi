@@ -663,12 +663,19 @@ async fn baseline(
     let mut provider_request = request.provider_request();
     provider_request.vocabulary = vocabulary;
     let proposal = client
-        .propose(provider_request, cancellation, true)
+        .propose_outcome(
+            provider_request,
+            cancellation,
+            true,
+            badi_broker::provider::RequestTrigger::Automatic,
+        )
         .await
         .map_err(|error| match error {
             badi_broker::provider::ProviderError::Cancelled => LabError::Cancelled,
             badi_broker::provider::ProviderError::Unavailable => LabError::RuntimeUnavailable,
-        })?;
+        })?
+        .outcome
+        .into_proposal();
     result.model_requests = trace.requests().ok_or(LabError::RuntimeUnavailable)?;
     result.effective_prompt = result
         .model_requests
