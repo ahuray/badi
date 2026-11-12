@@ -175,6 +175,11 @@ publish need the user's go-ahead first; the rest can start at once.
    - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
      4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
      measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
+     Rechecked on this Iris Xe machine at the sustained 15 W limit
+     (2026-11-12, [runtime](broker/README.md#writing-model-runtime)):
+     Vulkan full offload made generation slower than CPU for both Gemma 4
+     E2B and Qwen3.5 4B, so this machine stays CPU-only; the item now waits
+     on a machine with a discrete GPU to measure.
 
    Badi already matches or beats it on:
    - a numbered list of alternative words in Fcitx apps, Obsidian and
@@ -515,8 +520,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Grok Bot composer trial in the signed-in app after a relaunch with
       `grok-bot-flags.conf`.
 - [ ] More native toolkits through measured integrations.
-- [ ] Neovim spelling replacement through `text_replacement`, with
-      stale-replacement and undo tests.
 - [ ] Extend shell support using
       [Zsh ZLE buffers and `POSTDISPLAY`](https://zsh.sourceforge.io/Doc/Release/Zsh-Line-Editor.html)
       and [Fish's command-line API](https://fishshell.com/docs/current/cmds/commandline.html).

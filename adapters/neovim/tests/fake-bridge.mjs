@@ -19,8 +19,23 @@ const RULES = [
 ];
 // What the request key on a shown suggestion offers next, in turn.
 const ALTERNATIVES = new Map([[' for your time', ' so much'], [' so much', ' again'], [' again', ' for your time']]);
+// Suffix corrections, most specific suffix first.
+const CORRECTIONS = [
+  ['slow adress ', { text: 'address ', before: 'adress ', grant: 'adress ', late: true }],
+  ['other adress ', { text: 'address ', before: 'adress ', grant: 'other ' }],
+  [' adress ', { text: 'address ', before: 'adress ', grant: 'adress ' }],
+];
 let candidate = null;
+let replaceBefore = null;
+let grantReplaceBefore = null;
+let lateAccept = false;
 let generation = 0;
+const clearCandidate = () => {
+  candidate = null;
+  replaceBefore = null;
+  grantReplaceBefore = null;
+  lateAccept = false;
+};
 // The broker's policy as bridge.mjs reports it. FAKE_BRIDGE_POLICY 'refused'
 // or 'manual' starts so; 'silent' allows but reports only when asked.
 const initial = process.env.FAKE_BRIDGE_POLICY || 'automatic';
@@ -38,43 +53,58 @@ for await (const line of createInterface({ input: process.stdin })) {
       continue;
     }
     const mine = ++generation;
-    candidate = null;
-    const rule = RULES.find(([end]) => command.before.endsWith(end));
+    clearCandidate();
+    const correction = CORRECTIONS.find(([end]) => command.before.endsWith(end))?.[1];
+    const rule = correction ? null : RULES.find(([end]) => command.before.endsWith(end));
     if (rule?.[0] === 'crash') process.exit(3);
     if (rule?.[0] === 'slow') await delay(400);
     if (mine !== generation) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); continue; }
-    candidate = rule ? rule[1] : null;
-    send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
+    candidate = correction?.text ?? (rule ? rule[1] : null);
+    replaceBefore = correction?.before ?? null;
+    grantReplaceBefore = correction?.grant ?? null;
+    lateAccept = correction?.late === true;
+    send({ id: command.id, ok: true, text: candidate,
+      word: replaceBefore ? candidate : candidate?.match(/^ ?\S+/u)?.[0],
+      ...(replaceBefore ? { replace_before: replaceBefore } : {}) });
   } else if (command.op === 'alternative') {
     if (candidate === null) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); continue; }
-    if (candidate === ' for your time') { candidate = null; send({ id: command.id, ok: true, words: ['so', 'again'] }); continue; }
-    if (candidate === ' so much') { candidate = null; send({ id: command.id, ok: true, words: ['again'] }); continue; }
+    if (candidate === ' for your time') { clearCandidate(); send({ id: command.id, ok: true, words: ['so', 'again'] }); continue; }
+    if (candidate === ' so much') { clearCandidate(); send({ id: command.id, ok: true, words: ['again'] }); continue; }
     candidate = ALTERNATIVES.get(candidate) ?? null;
+    replaceBefore = null;
+    grantReplaceBefore = null;
+    lateAccept = false;
     send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
   } else if (command.op === 'pick') {
     candidate = { so: ' so much', again: ' again', for: ' for your time' }[command.word] ?? null;
+    replaceBefore = null;
+    grantReplaceBefore = null;
+    lateAccept = false;
     send({ id: command.id, ok: true, text: candidate, word: candidate?.match(/^ ?\S+/u)?.[0] });
   } else if (command.op === 'accept') {
     const text = candidate === null ? null
+      : replaceBefore ? candidate
       : command.acceptance === 'word' ? candidate.match(/^ ?\S+/u)[0] : candidate;
-    if (candidate === ' arrives late') await delay(400);
-    send(text === null ? { id: command.id, ok: false, reason: 'expired_or_unavailable' } : { id: command.id, ok: true, text });
+    const grant = grantReplaceBefore;
+    if (candidate === ' arrives late' || lateAccept) await delay(400);
+    send(text === null ? { id: command.id, ok: false, reason: 'expired_or_unavailable' }
+      : { id: command.id, ok: true, text, ...(grant ? { replace_before: grant } : {}) });
   } else if (command.op === 'cancel' || command.op === 'dismiss') {
     generation++;
-    candidate = null;
+    clearCandidate();
     send({ ok: true });
   } else if (command.op === 'result') {
-    candidate = null;
+    clearCandidate();
     send({ id: command.id, ok: true });
   } else if (command.op === 'expire') {
-    candidate = null;
+    clearCandidate();
     send({ event: 'clear' });
   } else if (command.op === 'status') {
     send({ id: command.id, ok: true, ...policy });
   } else if (command.op === 'policy') {
     // A settings change, as the broker's new authority epoch reports it.
     policy = { connected: true, allowed: command.allowed === true, automatic: command.automatic === true };
-    candidate = null;
+    clearCandidate();
     report(policy.allowed ? 'ready' : 'paused');
   }
 }

@@ -124,6 +124,20 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   await editor.send('<Esc>ddA');
   await editor.until(current => current.preview === null && current.lines.length === 1, 'line removed');
 
+  // The phrase fixture's deterministic dictionary correction becomes an
+  // exact suffix replacement only because Neovim negotiated it.
+  await editor.send('Please check the adress ');
+  state = await editor.until(current => current.preview === ' adress → address', 'correction preview');
+  assert.equal(state.screen, 'thank you for your timePlease check the adress  adress → address');
+  await editor.send('<Tab>');
+  state = await editor.until(current =>
+    current.lines[0] === 'thank you for your timePlease check the address ', 'correction acceptance');
+  await committed(4);
+  await editor.send('<Esc>u');
+  await editor.until(current =>
+    current.lines[0] === 'thank you for your timePlease check the adress ', 'correction one-step undo');
+  await editor.send('A');
+
   // Pause withdraws the preview at once and refuses explicit requests.
   await editor.send('<CR>looking forward');
   await editor.until(current => current.preview === ' to hearing from you', 'preview before pause');
@@ -177,7 +191,7 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   const activity = await readFile(join(environment.XDG_RUNTIME_DIR, 'badi/debug-neovim.json'), 'utf8');
   assert.equal(JSON.parse(activity).app_id, 'nvim');
   const messages = (await editor.state()).messages;
-  for (const text of ['thank you', 'looking forward', 'your time', 'hearing']) {
+  for (const text of ['thank you', 'looking forward', 'your time', 'hearing', 'adress', 'address']) {
     assert.doesNotMatch(activity, new RegExp(text), 'Debug activity is content-free');
     assert.doesNotMatch(logs, new RegExp(text), 'The broker logs no text');
     assert.doesNotMatch(messages, new RegExp(text), 'Neovim shows no text in messages');

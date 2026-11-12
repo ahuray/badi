@@ -8,11 +8,11 @@ virtual text and makes the edit itself, so native undo applies. Needs Neovim
 | Key (Insert mode) | Action |
 | --- | --- |
 | Pause typing | A suggestion appears after 120 ms |
-| **Tab** | Accept the next word; the rest stays. Without a suggestion, Tab is yours: your mapping, another plugin's, or Neovim's |
-| **Ctrl+Right** | Accept it all |
+| **Tab** | Accept the next word; the rest stays. A correction (drawn `adress → address`) replaces exactly the suffix it names. Without a suggestion, Tab is yours: your mapping, another plugin's, or Neovim's |
+| **Ctrl+Right** | Accept it all; for a correction, the same exact replacement |
 | Keep typing | Typing its next letters keeps the rest |
 | **Escape** | Leaving Insert mode dismisses it |
-| **Ctrl+Shift+Space** | Ask for one (`:BadiRequest` from any mapping). On a shown one, list up to four other first words where it stood; a digit shows that word's continuation, and pressing again lists the rest |
+| **Ctrl+Shift+Space** | Ask for one (`:BadiRequest` from any mapping). On a shown continuation, list up to four other first words where it stood; a digit shows that word's continuation, and pressing again lists the rest. On a correction, it keeps the correction |
 | **1–9** | While a numbered list is drawn, show the continuation of the word it numbers; any other digit types normally |
 
 `badi app nvim on` allows Neovim; `badi app nvim off` blocks it. The grant is
@@ -88,19 +88,23 @@ the comment colour in bold. Set either group to restyle it.
   cancelled. Typing, caret moves, the completion menu, leaving the window or
   buffer, focus loss and leaving Insert mode withdraw a preview.
 - **Display.** One extmark at the caret with `virt_text_pos = 'inline'`; the
-  cursor stays before the grey text. It is drawn only in the requesting
-  window where Neovim supports per-window namespaces (`nvim__ns_set`).
+  cursor stays before the grey text. A spelling correction is drawn whole as
+  `original → corrected`, not as an appendable continuation. It is drawn only
+  in the requesting window where Neovim supports per-window namespaces
+  (`nvim__ns_set`).
 - **Acceptance.** While a preview is visible, Tab and Ctrl+Right are
   buffer-local mappings; a buffer-local mapping you had is restored when the
   preview goes. A key pressed when the preview is no longer current goes to
   your mapping or Neovim instead. Acceptance revalidates the snapshot, asks the
   broker for its one-shot grant, revalidates again, then calls
-  `nvim_buf_set_text` at the snapshot caret and moves the cursor after it. It
-  reports `applied` only after reading back exactly the expected line and
-  caret; anything else is `failed` or `stale`.
+  `nvim_buf_set_text` at the snapshot caret and moves the cursor after it. For
+  a correction, the grant must name the same `replace_before`, and that exact
+  byte suffix ending at the caret (including its optional typed space) is the
+  only range replaced. It reports `applied` only after reading back exactly
+  the expected line and caret; anything else is `failed` or `stale`.
 - **Undo.** The edit breaks the undo sequence before and after itself
-  (`undolevels`), so one `u` removes exactly the accepted text, typing before
-  it stays, and typing after it is a separate step.
+  (`undolevels`), so one `u` removes exactly an accepted insertion or restores
+  a replaced suffix; typing before it stays, and typing after it is separate.
 - **Terminal focus.** When the terminal reports focus (`FocusGained`), the
   plugin tells the broker it holds that terminal (`editor.focus`), and the
   input method's typed-line path stays out of it until `FocusLost`, Ctrl+Z
@@ -112,9 +116,6 @@ the comment colour in bold. Set either group to restyle it.
   The plugin's messages and `:BadiStatus` name reasons, never text; the bridge
   logs nothing, and Neovim discards its stderr. `badi debug on` records
   content-free counts in `debug-neovim.json`.
-
-Not yet: spelling replacement (the plugin does not negotiate
-`text_replacement`, so suggestions only append).
 
 ## Install
 
@@ -150,7 +151,8 @@ npm run editors:integration   # broker.test.mjs: plugin + bridge + real phrase b
 
 Both drive a headless Neovim through its RPC socket with `nvim --server`. The
 scripted lane covers inline display and cursor placement, Tab (one word) and
-Ctrl+Right (all of it),
+Ctrl+Right (all of it), exact spelling replacement (including a typed space,
+a mismatched grant and a stale grant),
 one-step undo with typing before and after, multibyte (German and Persian)
 byte offsets, a result or a grant arriving after an edit, fall-through to
 global, buffer-local and completion-menu Tab mappings, a second window on the
@@ -174,3 +176,4 @@ so they must run there.
 | 0.12.6 | Ghostty, LazyVim (2026-10-24) | real model | a markdown buffer suggested and Tab took a word; while `badi pause` held, typing sent no request and no text to the broker, and suggestions came back after `badi resume` |
 | 0.12.6 | foot, `nvim --clean` with this plugin and its bridge | real model | the word Tab takes drawn bold and brighter; Ctrl+Shift+Space on a shown suggestion gave three alternatives with new first words, then the first again; Tab took the shown word |
 | 0.12.6 | Ghostty 1.4.0, LazyVim and `nvim -u NORC` with the installed plugin (2026-11-11, installed `3454e2e`) | real model | The five half-typed stems each finished the intended word in a scratch markdown buffer; Tab landed `documents` and the saved file read back exact. Under LazyVim, the Enter between stems left snippet-shaped text (a callout, a date, a UUID) in the saved file after each suggestion had shown, so the `-u NORC` run is the file evidence; with `-u NONE` the plugin did not load and Ghostty's typed line finished the stems instead (`output/native-trials/2026-11-11-partial-words-surfaces/`) |
+| 0.12.6 | Ghostty 1.4.0, `nvim -u NORC` with the installed plugin (2026-11-12, installed broker `b6be55f`) | real model | Spelling replacements in a scratch markdown buffer: `adress → address` (dictionary, 0 ms), `recieve → receive` (49 ms) and `teh → the` (64 ms) each showed with their exact suffix, Tab replaced it and the saved file read back exact; typing after the correction and the correction itself undid as separate steps (`output/native-trials/2026-11-12-nvim-spelling/`) |

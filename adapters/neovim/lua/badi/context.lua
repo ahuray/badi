@@ -92,4 +92,25 @@ function M.insertable(text)
   return type(text) == 'string' and text ~= '' and #text <= 256 and not text:find('%c')
 end
 
+local function one_word(value)
+  local word = value:sub(-1) == ' ' and value:sub(1, -2) or value
+  return word ~= '' and not word:find('%s')
+end
+
+--- The byte column where an exact spelling replacement starts, or nil when
+--- the original is not exactly the suffix ending at the caret on this line.
+--- The broker and shared client validate the correction's word shape; this
+--- editor-side check is the range binding that keeps the edit exact.
+function M.replacement_start(line, col, original, replacement)
+  if type(line) ~= 'string' or type(col) ~= 'number' or col < 0 or col > #line
+      or not M.insertable(original) or not M.insertable(replacement)
+      or original == replacement or not one_word(original) or not one_word(replacement)
+      or (original:sub(-1) == ' ') ~= (replacement:sub(-1) == ' ') then
+    return nil
+  end
+  local start = col - #original
+  if start < 0 or line:sub(start + 1, col) ~= original then return nil end
+  return start
+end
+
 return M

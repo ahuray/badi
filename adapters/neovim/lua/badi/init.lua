@@ -36,7 +36,7 @@ local state = {
   scheduled = nil,
   -- The request in flight: { generation, snapshot }.
   pending = nil,
-  -- The preview: { snapshot, text, mark, saved }.
+  -- The preview: { snapshot, text, display, replace_before, mark, saved }.
   visible = nil,
   accepting = false,
   -- Text-only memory of the last preview, for type-through detection.
@@ -162,7 +162,8 @@ end
 --- the same extmark with it.
 local function extend(text, word)
   local visible = state.visible
-  if not visible or not visible.text or state.accepting or type(text) ~= 'string' or not matches(visible.snapshot)
+  if not visible or not visible.text or visible.replace_before ~= nil or state.accepting
+      or type(text) ~= 'string' or not matches(visible.snapshot)
       or not context.insertable(text) or text:sub(1, #visible.text) ~= visible.text then return end
   local s = visible.snapshot
   local ok = pcall(api.nvim_buf_set_extmark, s.buf, namespace, s.row, s.col, {
@@ -260,9 +261,15 @@ local function on_pick_key(index, lhs)
   api.nvim_feedkeys(api.nvim_replace_termcodes(lhs, true, false, true), 'mt', false)
 end
 
-local function show(s, text, word)
+local function show(s, text, word, replace_before)
+  local display = text
+  if replace_before ~= nil then
+    if context.replacement_start(s.line, s.col, replace_before, text) == nil then return false end
+    -- A correction is drawn whole: the original first, then the correction.
+    display = ' ' .. vim.trim(replace_before) .. ' → ' .. vim.trim(text)
+  end
   local ok, mark = pcall(api.nvim_buf_set_extmark, s.buf, namespace, s.row, s.col, {
-    virt_text = chunks(text, word),
+    virt_text = chunks(display, replace_before == nil and word or ''),
     virt_text_pos = 'inline',
     hl_mode = 'combine',
   })
@@ -270,9 +277,11 @@ local function show(s, text, word)
   -- Draw it only in the window it was requested for, not in other windows
   -- showing the same buffer (an experimental API; older builds draw in both).
   if api.nvim__ns_set then pcall(api.nvim__ns_set, namespace, { wins = { s.win } }) end
-  local visible = { snapshot = s, text = text, mark = mark, saved = {} }
+  local visible = { snapshot = s, text = text, display = display, replace_before = replace_before, mark = mark, saved = {} }
   state.visible = visible
-  state.shown = { buf = s.buf, row = s.row, line_before = s.line:sub(1, s.col), text = text }
+  -- Only appendable text can carry through typing (ADR 0004).
+  state.shown = replace_before == nil
+    and { buf = s.buf, row = s.row, line_before = s.line:sub(1, s.col), text = text } or nil
   for kind, lhs in pairs({ accept = state.config.keys.accept, accept_word = state.config.keys.accept_word }) do
     if lhs and lhs ~= '' then
       local previous = vim.fn.maparg(lhs, 'i', false, true)
@@ -385,6 +394,8 @@ function M.request(explicit)
   local visible = state.visible
   if explicit and visible and visible.text and not state.accepting and not state.pending and state.bridge
       and matches(visible.snapshot) then
+    -- A shown correction has no alternatives; asking again keeps it.
+    if visible.replace_before ~= nil then return end
     return alternative()
   end
   local reason = blocked_reason()
@@ -441,26 +452,32 @@ function M.request(explicit)
       if reply.text ~= nil then state.bridge:notify({ op = 'cancel' }) end
       return
     end
-    if not matches(s) or not show(s, reply.text, reply.word) then
+    if not matches(s) or not show(s, reply.text, reply.word, reply.replace_before) then
       set_status('stale')
       state.bridge:notify({ op = 'cancel' })
     end
   end)
 end
 
---- Inserts `text` at the snapshot's caret as its own undo step and reports
---- whether the buffer now holds exactly that.
-local function apply(s, text)
+--- Inserts `text` at the snapshot's caret (or replaces the exact suffix
+--- `replace_before` ending there) as its own undo step and reports whether
+--- the buffer now holds exactly that.
+local function apply(s, text, replace_before)
+  local start_col = s.col
+  if replace_before ~= nil then
+    start_col = context.replacement_start(s.line, s.col, replace_before, text)
+    if start_col == nil then return false end
+  end
   -- Close the undo block of the typing before, so one undo removes only this.
   vim.o.undolevels = vim.o.undolevels
-  if not pcall(api.nvim_buf_set_text, s.buf, s.row, s.col, s.row, s.col, { text }) then return false end
-  pcall(api.nvim_win_set_cursor, s.win, { s.row + 1, s.col + #text })
+  if not pcall(api.nvim_buf_set_text, s.buf, s.row, start_col, s.row, s.col, { text }) then return false end
+  pcall(api.nvim_win_set_cursor, s.win, { s.row + 1, start_col + #text })
   -- And keep typing after it out of this step.
   vim.o.undolevels = vim.o.undolevels
   local line = api.nvim_buf_get_lines(s.buf, s.row, s.row + 1, true)[1]
   local cursor = api.nvim_win_get_cursor(s.win)
-  return line == s.line:sub(1, s.col) .. text .. s.line:sub(s.col + 1)
-    and cursor[1] == s.row + 1 and cursor[2] == s.col + #text
+  return line == s.line:sub(1, start_col) .. text .. s.line:sub(s.col + 1)
+    and cursor[1] == s.row + 1 and cursor[2] == start_col + #text
 end
 
 accept = function(acceptance)
@@ -482,8 +499,17 @@ accept = function(acceptance)
       return
     end
     local text = reply.text
-    local expected = acceptance == 'all' and text == visible.text
-      or (acceptance == 'word' and context.insertable(text) and visible.text:sub(1, #text) == text)
+    local replace_before = visible.replace_before
+    local expected
+    if replace_before ~= nil then
+      -- Either acceptance takes the whole correction, and only for the exact
+      -- suffix shown; any other grant replaces nothing.
+      expected = text == visible.text and reply.replace_before == replace_before
+        and context.replacement_start(s.line, s.col, replace_before, text) ~= nil
+    else
+      expected = reply.replace_before == nil and (acceptance == 'all' and text == visible.text
+        or (acceptance == 'word' and context.insertable(text) and visible.text:sub(1, #text) == text))
+    end
     if not expected or not context.insertable(text) or not matches(s) then
       state.bridge:notify({ op = 'result', status = 'stale' })
       invalidate(nil)
@@ -492,7 +518,7 @@ accept = function(acceptance)
     end
     clear_preview()
     state.generation = state.generation + 1
-    local applied = apply(s, text)
+    local applied = apply(s, text, replace_before)
     state.bridge:notify({ op = 'result', status = applied and 'applied' or 'failed' })
     set_status(applied and 'applied' or 'failed')
   end)
@@ -616,7 +642,7 @@ end
 
 --- For tests only: the preview text currently shown, if any.
 function M._preview()
-  return state.visible and (state.visible.text or state.visible.list_text) or nil
+  return state.visible and (state.visible.display or state.visible.text or state.visible.list_text) or nil
 end
 
 --- The shown preview's virtual text chunks, for tests.

@@ -18,7 +18,7 @@ const LANGUAGE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/;
 const ACCEPTANCE = new Set(['all', 'word']);
 const RESULTS = new Set(['applied', 'stale', 'failed']);
 
-const client = new RecoveringBrokerClient('neovim');
+const client = new RecoveringBrokerClient('neovim', { textReplacement: true });
 let grant = null;
 // While Neovim holds its terminal's focus the bridge stays connected, since
 // the broker drops the focus report with the connection.
@@ -66,7 +66,9 @@ async function suggest(command) {
   recordActivity('neovim', 'context', command.explicit ? 'explicit_buffer' : 'automatic_buffer');
   grant = null;
   const text = await client.suggest(before, { language, explicit: command.explicit, after });
-  return text ? { ok: true, text, word: client.acceptWord } : { ok: true, text: null };
+  return text ? { ok: true, text, word: client.acceptWord,
+    ...(client.replacementBefore !== undefined ? { replace_before: client.replacementBefore } : {}) }
+    : { ok: true, text: null };
 }
 
 async function handle(command) {
@@ -90,7 +92,8 @@ async function handle(command) {
       grant = null;
       grant = await client.authorize(command.acceptance);
       recordActivity('neovim', 'commit', 'authorized');
-      return { ok: true, text: grant.text };
+      return { ok: true, text: grant.text,
+        ...(grant.replaceBefore !== undefined ? { replace_before: grant.replaceBefore } : {}) };
     }
     case 'result': {
       if (!RESULTS.has(command.status) || !grant) return { ok: false, reason: 'no_grant' };
