@@ -166,23 +166,163 @@ Open decisions, for the user:
 Each step ends with its completion test. Steps that install to the desktop or
 publish need the user's go-ahead first; the rest can start at once.
 
-1. **Close the Cotypist gaps that fit Badi.** Cotypist (0.22 researched
-   2026-10-20; its 2026.x releases and pricing page rechecked 2026-10-24) is
-   still Mac-only, defaults to Gemma 4 E2B, and offers these, which Badi does
-   not yet:
-   - global and per-app instructions, and personalized word choice (Badi's
-     style samples are stored but not yet read, step 5). Instructions wait
-     for the larger-model work below: paired Lab probes found neither the
-     raw-continuation prompt nor an instructed variant follows them on the
-     current models;
-   - larger models where the hardware allows (Gemma 4 E2B/E4B, Qwen3
-     4B–30B): a llama.cpp Vulkan or CUDA runtime for machines with a GPU,
-     measured with the [bench](evaluation/llm-bench/README.md) and the Lab.
-     Rechecked on this Iris Xe machine at the sustained 15 W limit
-     (2026-11-12, [runtime](broker/README.md#writing-model-runtime)):
-     Vulkan full offload made generation slower than CPU for both Gemma 4
-     E2B and Qwen3.5 4B, so this machine stays CPU-only; the item now waits
-     on a machine with a discrete GPU to measure.
+1. **Close the Cotypist gaps that fit Badi — the plan.** This is the next
+   session's work queue, in dependency order. Start from a clean,
+   up-to-date `main` with `badi doctor` naming its commit; take one lettered
+   item per branch, land it through its gate below, and delete it here when
+   it ships. Do not start 1b or 1c before their evidence gates say go.
+
+   What makes Cotypist special (Mac-only; pricing, personalization and tips
+   pages rechecked 2026-11-12: [pricing](https://cotypist.app/pricing),
+   [personalization](https://cotypist.app/help/personalization),
+   [tips](https://cotypist.app/help/tips)) is not the grey text — Badi has
+   that, with stricter editing authority. It is that its suggestions sound
+   like the person typing: it records accepted writing (opt-in, on-device),
+   turns it into a word-choice profile with a strength slider, accepts
+   global and per-app free-text instructions, reads the surrounding screen
+   and clipboard for context, and runs larger hardware-matched models
+   (Gemma 4 E2B default; E4B and Qwen3 4B mid-tier; Gemma 4 26B A4B,
+   Qwen3 30B-A3B and 8B on Pro) behind a settings app that makes all of it
+   discoverable in minutes. Badi deliberately cannot copy the screen and
+   clipboard reading (below), so its route to the same feel is narrower:
+   sealed style samples actually read, instructions only on a model proven
+   to follow them, structured accessibility context instead of screen
+   pixels, and larger models only where a real GPU qualifies them.
+
+   - **1a. Read the style samples (personalized word choice).** Today
+     `badi style on` seals a bounded set of sentences (16 per site, 64 in
+     all) and no prompt reads them
+     ([broker runbook](broker/README.md#style-learning-opt-in));
+     Cotypist's core feature is exactly this loop closed, with a six-stop
+     strength slider. Work: (i) in the Lab only, add a style arm to
+     `production_boundary` that puts a bounded number of sealed samples for
+     the request's subject and language in front of the current sentence
+     (charge them against the 512-token window and report the trade), at
+     three strengths that map to sample count and position; (ii) run the
+     paired comparison step 5 already specifies (same suites, settings and
+     seed, style off against on, the user's held-out drafts as the private
+     set, samples never leaving the machine or entering the checkout);
+     (iii) only if useful additions rise without harmful ones rising, wire
+     the winning shape into `broker/src/writing.rs` behind the existing
+     per-subject learning grant, add a strength setting (settings schema,
+     `badi style strength`, panel control) defaulting to the Lab's gentle
+     stop, and keep the style fact fence: samples may change word choice,
+     never introduce names, numbers or facts. *Gate:* the paired Lab
+     result recorded in the [Lab runbook](evaluation/writing/README.md),
+     broker and Lab tests for subject/language isolation and the fence,
+     and a live trial in one browser field and one editor showing a
+     personalized word taken and undone.
+   - **1b. Custom instructions, global then per app/site.** Cotypist
+     appends per-app/domain notes after a global free-text instruction
+     (role, audience, tone, terminology). Badi has per-subject permissions
+     and language overrides but no instruction text, and paired Lab probes
+     (2026-10-20) found neither the raw prompt nor an instructed variant
+     follows instructions on the current 1B base model — so this item is
+     evidence-gated, not settings-first. Work: (i) extend the Lab's
+     instructed-healed arms with an instruction-adherence suite (tone,
+     formality, terminology and language instructions with decidable
+     checks) over the current Gemma 3 1B, Qwen3 1.7B and any 1c candidate;
+     (ii) only for a model that follows them without a useful/harmful
+     regression, add bounded instruction fields to settings v2 (global,
+     then per-subject override appended after it), count their tokens
+     against the window in the prompt builder, and surface them in
+     `badi app`/`badi site` and the panel with the same compare-and-swap
+     settings flow as every other rule; (iii) instructions are context,
+     never authority: they must not change permissions, budgets or the
+     fact fence, and a test must prove an instruction cannot re-enable a
+     blocked app. *Gate:* the Lab adherence result recorded, settings
+     schema and broker tests, and a live trial showing one global and one
+     per-app instruction each changing a suggestion as written.
+   - **1c. Larger models where the hardware allows.** Cotypist's catalog
+     tiers models by machine and recommends the largest that runs smoothly;
+     Badi's catalog stops at screened 1–1.7B CPU artifacts. This Iris Xe
+     machine is settled: at the sustained 15 W limit (rechecked
+     2026-11-12, [runtime](broker/README.md#writing-model-runtime))
+     Vulkan full offload generated slower than CPU for Gemma 4 E2B
+     (4.4 against 5.4 tok/s) and Qwen3.5 4B (1.9 against 2.9), so it stays
+     CPU-only and is not evidence for or against a discrete GPU. Work,
+     when a discrete-GPU machine is available: (i) pin and verify a
+     Vulkan (then CUDA only if Vulkan data says so) llama.cpp artifact
+     beside the CPU one in `broker/src/semantic/pinned_runtime.rs`, with
+     device access added to the runtime sandbox as its own ADR — the
+     current sandbox deliberately has no GPU device; (ii) extend hardware
+     advice in `broker/src/model_selection.rs` with measured usable GPU
+     capacity (vendor strings never count as capacity), GPU memory in the
+     fit rules, and a CPU fallback that is automatic and silent-safe;
+     (iii) qualify Gemma 4 E4B and Qwen3 4B first (Cotypist's mid-tier),
+     then an 8B-class model, through every stage in
+     [model selection](docs/architecture/model-selection.md#stages-and-gates)
+     on that machine — the 60%-useful gate applies unchanged; (iv) only a
+     qualified model enters the catalog, with its backend recorded in the
+     artifact metadata and `badictl models` output. *Gate:* bench and Lab
+     evidence on the GPU machine itself, recorded in the runbooks; no
+     catalog entry from Iris Xe numbers.
+
+   - **1d. Structured same-window prompt context.** Cotypist's
+     screen-aware suggestions match the email thread, document or chat in
+     front of you; Badi's window words only finish a typed word and
+     prompt-text window context is Lab-only, because screen recording is
+     outside the [context firewall](VISION.md#context-firewall). The
+     Badi-shaped version reads structure, not pixels: subject line,
+     recipients, headings and the paragraphs around the field from the
+     accessibility tree the observer already walks, never another field's
+     text and never across windows. Work: (i) define the observer's
+     structured-context reply in [its contract](adapters/accessibility/README.md)
+     (bounded scalars, same identity binding as the snapshot, denied with
+     the field), behind the existing per-subject context consent;
+     (ii) charge it against the prompt window in the Lab's window-context
+     arms and run the paired comparison (context off against on, same
+     suites and seed, a wrong-context arm to prove it cannot override the
+     draft); (iii) ship only on a measured gain, with `badi context`
+     status naming what was read. *Gate:* paired Lab evidence, observer
+     contract tests for cross-field and cross-window denial, and a live
+     trial in a mail-shaped page where the subject visibly steers a
+     suggestion. Clipboard reading stays out, on purpose.
+   - **1e. Selection help in the editors.** Cotypist Labs offers synonyms
+     for a selected word; Badi's grammar/refine/synonym revision
+     ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md),
+     [ADR 0013](docs/decisions/0013-synonyms-for-one-short-selection.md))
+     exists only through the Fcitx addon. Work: admit Neovim and Obsidian
+     to `selection_revision` one adapter at a time — broker capability
+     admission first, then each editor's exact selection snapshot, marked
+     preview and one-undo replacement reusing the range binding Neovim
+     spelling just proved; Bash stays out (a shell line is not prose
+     revision). *Gate:* broker admission tests, scripted and real-broker
+     editor tests for stale selections and undo, and one live trial per
+     editor with disposable text.
+   - **1f. More writing languages.** Cotypist works across languages from
+     the model's own coverage; Badi writes in English, German, French,
+     Spanish and Portuguese (Persian opt-in) and only spells in Italian,
+     Dutch and Polish. Work per language, in that order: add Lab suites,
+     choose healing only from per-model evidence (the current rule), run
+     the European screen on the recommended model, then enable the
+     language in `WritingLanguage`, the panel list and the spelling
+     defaults together. *Gate:* the same useful/harmful bars as the
+     languages already on; a language that misses them stays spelling-only
+     and this line says so with its date.
+   - **1g. Make it feel finished.** Cotypist's advantage users feel first
+     is packaging: one download, a settings app, a statistics page, a
+     model picker that recommends by machine. Badi's equivalents exist as
+     CLI and an Omarchy panel that cannot pick a model or show trends.
+     Work, each independently shippable: (i) a model picker in the panel
+     and `badi model` output that names the recommended artifact and why
+     it fits (the advice already exists in
+     `broker/src/model_selection.rs`); (ii) a counts-only stats view in
+     the panel from the existing `badi stats` data (words saved per day
+     and per app/site, no new collection); (iii) a typo-suspected
+     suppression where no correction path exists, mirroring Cotypist's
+     free-tier indicator: when the spelling locate finds a typo but no
+     correction may be offered, withhold the continuation built on it and
+     count the reason. Publication itself stays step 6. *Gate:* panel
+     host/lifecycle lanes, a screenshot of each new panel surface, and
+     broker tests for the suppression reason.
+
+   First task for the next agent: 1a(i) — the Lab style arm. It is the
+   only item that needs no new hardware, no new settings and no user
+   decision, and its result decides whether 1a(iii) and the tone half of
+   1b are worth building at all. Everything else waits behind its gate:
+   1b behind instruction evidence, 1c behind a discrete-GPU machine, 1d
+   behind its paired Lab gain.
 
    Badi already matches or beats it on:
    - a numbered list of alternative words in Fcitx apps, Obsidian and
