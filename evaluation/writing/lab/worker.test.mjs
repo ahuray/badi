@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { LabWorker, parseProcessStat, processIdentity } from './worker.mjs';
+import { ObservedWorker } from './run.mjs';
 import { copyFile, mkdtemp, chmod, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -13,10 +14,13 @@ const fixture = `
 import { createInterface } from 'node:readline';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { writeFile } from 'node:fs/promises';
 const [mode, runtimePath, runtimeDigest] = process.argv.slice(1);
 const batchFlag = process.argv.indexOf('--prefill-batch');
 const batch = batchFlag < 0 ? 16 : Number(process.argv[batchFlag + 1]);
 const memoryFlag = process.argv.indexOf('--memory-map');
+const threadsFlag = process.argv.indexOf('--threads');
+const threads = threadsFlag < 0 ? 4 : Number(process.argv[threadsFlag + 1]);
 const emit = value => process.stdout.write(JSON.stringify(value) + '\\n');
 let runtime = null;
 let runtimeExit = null;
@@ -25,6 +29,8 @@ process.stdout.on('error', () => {});
 const shutdown = async () => {
   if (quitting) return;
   quitting = true;
+  // Force the parent's captured ownership path to reap an orphaned runtime.
+  if (mode === 'runtime-wrong-threads') process.exit(0);
   if (runtime) {
     runtime.kill('SIGTERM');
     await runtimeExit;
@@ -49,9 +55,11 @@ else {
     {detached:mode !== 'runtime-wrong-group', stdio:'ignore'});
   runtimeExit = once(runtime, 'exit');
   await once(runtime, 'spawn');
+  if (mode === 'runtime-wrong-threads') await writeFile(runtimePath + '.pid', String(runtime.pid));
   if (mode === 'runtime-dead') { runtime.kill('SIGTERM'); await runtimeExit; }
   const identity = {fixture:true, pid:process.pid, runtime_pid:runtime.pid,
     batch_size:mode === 'runtime-wrong-batch' ? 64 : batch, ubatch_size:batch,
+    threads:mode === 'runtime-wrong-threads' ? 2 : threads,
     ...(memoryFlag >= 0 ? {memory_map:mode === 'runtime-wrong-memory' || process.argv[memoryFlag + 1] !== 'false'} : {}),
     binary_sha256:mode === 'runtime-wrong-digest' ? '0'.repeat(64) : runtimeDigest};
   emit({type:'ready', schema:'badi.prediction-lab.worker.v1',
@@ -74,20 +82,30 @@ createInterface({input:process.stdin}).on('line', line => {
 `;
 
 async function makeWorker(t, mode = 'normal', options = {}) {
+  const { workerClass = LabWorker, ...workerOptions } = options;
   const directory = await mkdtemp(join(tmpdir(), 'badi-lab-worker-'));
   const runtimePath = join(directory, 'llama-server');
   await copyFile('/usr/bin/sleep', runtimePath);
   await chmod(runtimePath, 0o700);
   const runtimeDigest = createHash('sha256').update(await readFile(runtimePath)).digest('hex');
-  const worker = new LabWorker({ executable: process.execPath,
-    args: ['--input-type=module', '-e', fixture, mode, runtimePath, runtimeDigest], startupMs: 1000, ...options });
+  const worker = new workerClass({ executable: process.execPath,
+    args: ['--input-type=module', '-e', fixture, mode, runtimePath, runtimeDigest], startupMs: 1000, ...workerOptions });
+  worker.fixtureRuntimePidPath = runtimePath + '.pid';
   worker.fixtureArgs = kind => ['--input-type=module', '-e', fixture, kind, runtimePath, runtimeDigest];
   const uncertain = mode === 'startup-bad-ready' || mode.startsWith('runtime-');
   t.after(async () => {
     try {
       if (uncertain) await assert.rejects(worker.stop(), /ownership and cleanup/iu);
       else await worker.stop();
-    } finally { await rm(directory, {recursive:true, force:true}); }
+    } finally {
+      // Also clean up if the ownership regression itself fails.
+      if (mode === 'runtime-wrong-threads') {
+        const runtimePid = Number(await readFile(worker.fixtureRuntimePidPath, 'utf8'));
+        const owned = await processIdentity(runtimePid);
+        if (owned?.executable === runtimePath && owned.group === runtimePid) process.kill(-runtimePid, 'SIGKILL');
+      }
+      await rm(directory, {recursive:true, force:true});
+    }
   });
   return worker;
 }
@@ -272,9 +290,48 @@ test('runtime batch and memory loading choices must agree with readiness', async
   await assert.rejects(mismatch.stop(), /ownership and cleanup/u);
 });
 
+test('fixed thread selection survives cold restarts and records requested and actual counts', async t => {
+  for (const threads of [0, 5, 1.5, '4', null]) assert.throws(() => new LabWorker({ threads }));
+  for (const args of [['--threads', '4'], ['--threads=4']]) assert.throws(() => new LabWorker({ args }));
+  const worker = await makeWorker(t, 'normal', { threads: 3, workerClass: ObservedWorker });
+  assert.deepEqual(worker.args.slice(-2), ['--threads', '3']);
+  const first = await worker.start();
+  assert.equal(first.threads, 3);
+  await worker.stop(); reaped(first.pid); reaped(first.runtime_pid);
+  const second = await worker.start();
+  assert.equal(second.threads, 3); assert.notEqual(first.pid, second.pid);
+  await worker.stop(); reaped(second.pid); reaped(second.runtime_pid);
+  assert.equal(worker.executions.length, 2);
+  assert.ok(worker.executions.every(value => value.requested_threads === 3 && value.runtime_identity.threads === 3));
+  assert.equal(worker.cleanups.length, 2);
+  assert.ok(worker.cleanups.every(value => value.completed && value.requested_threads === 3 && value.actual_threads === 3));
+});
+
+test('a thread mismatch refuses readiness after retaining exact runtime ownership for cleanup', async t => {
+  const worker = await makeWorker(t, 'runtime-wrong-threads', { threads: 4, workerClass: ObservedWorker });
+  await assert.rejects(worker.start(), error => /ownership and cleanup/u.test(error.message)
+    && /4 requested, 2 actual/u.test(error.cause?.message));
+  await assert.rejects(worker.stop(), /ownership and cleanup/u);
+  const runtimePid = Number(await readFile(worker.fixtureRuntimePidPath, 'utf8'));
+  reaped(runtimePid);
+  assert.equal(worker.executions.length, 0);
+  assert.ok(worker.cleanups.some(value => !value.completed && value.requested_threads === 4 && value.actual_threads === 2));
+  await assert.rejects(worker.start(), /ownership and cleanup/u);
+});
+
+test('cancelling a fixed-thread request reaps its worker and runtime', async t => {
+  const worker = await makeWorker(t, 'hang', { threads: 4 });
+  const identity = await worker.start();
+  const controller = new AbortController();
+  const pending = worker.predict(request(), controller.signal);
+  controller.abort();
+  await assert.rejects(pending);
+  await worker.stop(); reaped(identity.pid); reaped(identity.runtime_pid);
+});
+
 test('the revision worker takes no launch option and bounds a request by the timeout it announces', async t => {
   assert.deepEqual(new LabWorker({ revision: true }).args, ['--revision-lab']);
-  for (const options of [{ revision: true, prefillBatch: 64 }, { revision: true, memoryMap: false }, { revision: 'yes' },
+  for (const options of [{ revision: true, prefillBatch: 64 }, { revision: true, memoryMap: false }, { revision: true, threads: 4 }, { revision: 'yes' },
     { args: ['--revision-lab'] }]) assert.throws(() => new LabWorker(options));
   const directory = await mkdtemp(join(tmpdir(), 'badi-lab-revision-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

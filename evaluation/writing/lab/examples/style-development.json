@@ -1,0 +1,210 @@
+{
+  "schema": "badi.prediction-suite.v1",
+  "name": "Synthetic style development: word choice, facts and empty controls; not private qualification",
+  "cases": [
+    {
+      "id": "en-word-choice",
+      "language": "en",
+      "prefix": "Please send me the",
+      "style": "I appreciate your thoughtful feedback.\n\nPlease send me the updated draft.\n\nI appreciate your thoughtful feedback.\n\nPlease send me the updated draft.",
+      "expected": [
+        " updated draft"
+      ]
+    },
+    {
+      "id": "en-phrasing",
+      "language": "en",
+      "prefix": "I appreciate your",
+      "style": "Please send me the updated draft.\n\nI appreciate your thoughtful feedback.\n\nPlease send me the updated draft.\n\nI appreciate your thoughtful feedback.",
+      "expected": [
+        " thoughtful feedback"
+      ]
+    },
+    {
+      "id": "en-fact-trap",
+      "language": "en",
+      "prefix": "We should meet on",
+      "style": "Meet Alice on Friday with forty copies.",
+      "expected": []
+    },
+    {
+      "id": "en-empty-control",
+      "language": "en",
+      "prefix": "Please send me the",
+      "style": "",
+      "expected": [
+        " updated draft"
+      ]
+    },
+    {
+      "id": "de-word-choice",
+      "language": "de",
+      "prefix": "Bitte schicke mir den",
+      "style": "Vielen Dank für die schnelle Antwort.\n\nBitte schicke mir den aktuellen Entwurf.\n\nVielen Dank für die schnelle Antwort.\n\nBitte schicke mir den aktuellen Entwurf.",
+      "expected": [
+        " aktuellen Entwurf"
+      ]
+    },
+    {
+      "id": "de-phrasing",
+      "language": "de",
+      "prefix": "Vielen Dank für die",
+      "style": "Bitte schicke mir den aktuellen Entwurf.\n\nVielen Dank für die schnelle Antwort.\n\nBitte schicke mir den aktuellen Entwurf.\n\nVielen Dank für die schnelle Antwort.",
+      "expected": [
+        " schnelle Antwort"
+      ]
+    },
+    {
+      "id": "de-fact-trap",
+      "language": "de",
+      "prefix": "Wir treffen uns am",
+      "style": "Anna kommt am Freitag zum Treffen.",
+      "expected": []
+    },
+    {
+      "id": "de-empty-control",
+      "language": "de",
+      "prefix": "Bitte schicke mir den",
+      "style": "",
+      "expected": [
+        " aktuellen Entwurf"
+      ]
+    },
+    {
+      "id": "fr-word-choice",
+      "language": "fr",
+      "prefix": "Merci pour votre",
+      "style": "Je vous envoie le document corrigé.\n\nMerci pour votre retour rapide.\n\nJe vous envoie le document corrigé.\n\nMerci pour votre retour rapide.",
+      "expected": [
+        " retour rapide"
+      ]
+    },
+    {
+      "id": "fr-phrasing",
+      "language": "fr",
+      "prefix": "Je vous envoie le",
+      "style": "Merci pour votre retour rapide.\n\nJe vous envoie le document corrigé.\n\nMerci pour votre retour rapide.\n\nJe vous envoie le document corrigé.",
+      "expected": [
+        " document corrigé"
+      ]
+    },
+    {
+      "id": "fr-fact-trap",
+      "language": "fr",
+      "prefix": "Nous nous retrouvons",
+      "style": "Alice arrive vendredi pour la réunion.",
+      "expected": []
+    },
+    {
+      "id": "fr-empty-control",
+      "language": "fr",
+      "prefix": "Merci pour votre",
+      "style": "",
+      "expected": [
+        " retour rapide"
+      ]
+    },
+    {
+      "id": "es-word-choice",
+      "language": "es",
+      "prefix": "Gracias por tu",
+      "style": "Te envío el borrador actualizado.\n\nGracias por tu respuesta rápida.\n\nTe envío el borrador actualizado.\n\nGracias por tu respuesta rápida.",
+      "expected": [
+        " respuesta rápida"
+      ]
+    },
+    {
+      "id": "es-phrasing",
+      "language": "es",
+      "prefix": "Te envío el",
+      "style": "Gracias por tu respuesta rápida.\n\nTe envío el borrador actualizado.\n\nGracias por tu respuesta rápida.\n\nTe envío el borrador actualizado.",
+      "expected": [
+        " borrador actualizado"
+      ]
+    },
+    {
+      "id": "es-fact-trap",
+      "language": "es",
+      "prefix": "Nos reunimos el",
+      "style": "Alicia viene el viernes a la reunión.",
+      "expected": []
+    },
+    {
+      "id": "es-empty-control",
+      "language": "es",
+      "prefix": "Gracias por tu",
+      "style": "",
+      "expected": [
+        " respuesta rápida"
+      ]
+    },
+    {
+      "id": "pt-word-choice",
+      "language": "pt",
+      "prefix": "Obrigado pela sua",
+      "style": "Envio o documento atualizado.\n\nObrigado pela sua resposta rápida.\n\nEnvio o documento atualizado.\n\nObrigado pela sua resposta rápida.",
+      "expected": [
+        " resposta rápida"
+      ]
+    },
+    {
+      "id": "pt-phrasing",
+      "language": "pt",
+      "prefix": "Envio o",
+      "style": "Obrigado pela sua resposta rápida.\n\nEnvio o documento atualizado.\n\nObrigado pela sua resposta rápida.\n\nEnvio o documento atualizado.",
+      "expected": [
+        " documento atualizado"
+      ]
+    },
+    {
+      "id": "pt-fact-trap",
+      "language": "pt",
+      "prefix": "Vamos nos encontrar",
+      "style": "Alice chega na sexta-feira para a reunião.",
+      "expected": []
+    },
+    {
+      "id": "pt-empty-control",
+      "language": "pt",
+      "prefix": "Obrigado pela sua",
+      "style": "",
+      "expected": [
+        " resposta rápida"
+      ]
+    },
+    {
+      "id": "fa-word-choice",
+      "language": "fa",
+      "prefix": "از پاسخ",
+      "style": "لطفاً نسخه جدید را بفرستید.\n\nاز پاسخ سریع شما سپاسگزارم.\n\nلطفاً نسخه جدید را بفرستید.\n\nاز پاسخ سریع شما سپاسگزارم.",
+      "expected": [
+        " سریع شما"
+      ]
+    },
+    {
+      "id": "fa-phrasing",
+      "language": "fa",
+      "prefix": "لطفاً نسخه",
+      "style": "از پاسخ سریع شما سپاسگزارم.\n\nلطفاً نسخه جدید را بفرستید.\n\nاز پاسخ سریع شما سپاسگزارم.\n\nلطفاً نسخه جدید را بفرستید.",
+      "expected": [
+        " جدید را"
+      ]
+    },
+    {
+      "id": "fa-fact-trap",
+      "language": "fa",
+      "prefix": "قرار ما در روز",
+      "style": "قرار ملاقات در روز جمعه برگزار شد.",
+      "expected": []
+    },
+    {
+      "id": "fa-empty-control",
+      "language": "fa",
+      "prefix": "از پاسخ",
+      "style": "",
+      "expected": [
+        " سریع شما"
+      ]
+    }
+  ]
+}

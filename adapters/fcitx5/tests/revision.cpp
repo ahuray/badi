@@ -113,6 +113,12 @@ void noticesNameWhatTheUserCanDo() {
     check(revisionClearNotice("no_change") == std::optional<std::string_view>("Badi found nothing to change"),
           "nothing to change");
     check(revisionClearNotice("unsupported_language").has_value(), "a language Badi does not revise");
+    check(revisionClearNotice("revision_unavailable") ==
+              std::optional<std::string_view>("Badi revisions unavailable — run badi revise"),
+          "revision setup checks assets without assuming a missing model");
+    check(revisionClearNotice("provider_error") ==
+              std::optional<std::string_view>("Badi revision failed — check badi doctor"),
+          "runtime errors remain distinct from revision setup");
     check(!revisionClearNotice("dismissed") && !revisionClearNotice("superseded") && !revisionClearNotice("expired"),
           "the user's own retirement says nothing");
     check(revisionHelp("grammar", "i has went to the shop") ==

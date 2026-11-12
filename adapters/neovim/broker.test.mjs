@@ -152,6 +152,66 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   await editor.until(current => current.preview === ' to hearing from you', 'explicit request after resume');
   assert.equal(typeof refused, 'string');
 
+  // Selection revisions use the real fixture reviser and the same exact
+  // editor grant/readback boundary. They never count as saved words.
+  const savingsBeforeRevision = (await control(['status'])).metrics.word_savings;
+  await editor.send('<Esc>');
+  await editor.command('call setline(1, "Before I has went. After")');
+  await editor.send('gg0wvt.<C-S-Space>');
+  state = await editor.until(current => current.preview && current.status.status === 'revision', 'real grammar revision');
+  assert.match(state.preview, /\[-has /);
+  assert.equal(state.lines[0], 'Before I has went. After');
+  await editor.send('<Tab>');
+  await editor.until(current => current.lines[0] === 'Before I went. After', 'real selection replacement');
+  await editor.send('u');
+  await editor.until(current => current.lines[0] === 'Before I has went. After', 'real revision undo');
+  await committed(5);
+  assert.deepEqual((await control(['status'])).metrics.word_savings, savingsBeforeRevision);
+
+  await editor.command('call setline(1, "A big house")');
+  await editor.send('0wve<C-S-Space>');
+  await editor.until(current => current.status.status === 'no_change', 'unchanged grammar');
+  await editor.send('<C-S-Space>');
+  await editor.until(current => !current.status.pending && current.status.status === 'no_change', 'unchanged refinement');
+  await editor.send('<C-S-Space>');
+  state = await editor.until(current => current.preview && current.status.status === 'revision', 'first synonym');
+  assert.match(state.preview, /\[\+large\]/);
+  await editor.send('<C-S-Space>');
+  state = await editor.until(current => current.preview && current.status.status === 'revision', 'another synonym');
+  assert.match(state.preview, /\[\+huge\]/, 'The same session remembers its earlier synonym');
+  await editor.send('<Tab>');
+  await editor.until(current => current.lines[0] === 'A huge house', 'synonym replacement');
+  await editor.send('u');
+  await editor.until(current => current.lines[0] === 'A big house', 'synonym native undo');
+
+  // A real revision.clear refusal must not be treated as unchanged output
+  // or advance the chord to another mode.
+  await editor.command('call setline(1, "I has went to school.")');
+  await editor.send('0v$');
+  await editor.command("lua require('badi').revise('synonyms')");
+  state = await editor.until(current => !current.status.pending && current.status.status === 'invalid_output',
+    'long synonym selection refused');
+  assert.equal(state.preview, null);
+  assert.equal(state.lines[0], 'I has went to school.');
+  await editor.send('<C-S-Space>');
+  state = await editor.until(current => current.preview && current.status.status === 'revision', 'grammar after real refusal');
+  assert.match(state.preview, /^Badi grammar:/);
+  await editor.send('<Esc>');
+  await editor.command('call setline(1, "A big house")');
+
+  await editor.send('0wve<C-S-Space>');
+  await editor.until(current => current.status.status === 'no_change', 'grammar before pause');
+  await control(['pause', 'on']);
+  await editor.until(current => current.status.policy === 'refused', 'selection authority withdrawn');
+  await editor.send('<Tab>');
+  assert.equal((await editor.state()).lines[0], 'A big house', 'No stale replacement after pause');
+  await control(['pause', 'off']);
+  await editor.until(current => current.status.policy === 'automatic', 'selection policy restored');
+  await editor.send('<Esc>G');
+  await editor.command('call setline(line("."), "looking forward")');
+  await editor.send('A<C-S-Space>');
+  await editor.until(current => current.preview === ' to hearing from you', 'continuation after revision');
+
   // A broker restart withdraws everything; recovery replays no text.
   await stopBroker();
   await editor.until(current => current.preview === null, 'disconnect withdraws');
@@ -191,7 +251,7 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   const activity = await readFile(join(environment.XDG_RUNTIME_DIR, 'badi/debug-neovim.json'), 'utf8');
   assert.equal(JSON.parse(activity).app_id, 'nvim');
   const messages = (await editor.state()).messages;
-  for (const text of ['thank you', 'looking forward', 'your time', 'hearing', 'adress', 'address']) {
+  for (const text of ['thank you', 'looking forward', 'your time', 'hearing', 'adress', 'address', 'has went', 'A big house']) {
     assert.doesNotMatch(activity, new RegExp(text), 'Debug activity is content-free');
     assert.doesNotMatch(logs, new RegExp(text), 'The broker logs no text');
     assert.doesNotMatch(messages, new RegExp(text), 'Neovim shows no text in messages');

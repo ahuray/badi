@@ -10,6 +10,7 @@ pub mod artifact;
 pub mod context_lookup;
 pub mod qualification;
 pub mod revision;
+mod style;
 mod transport;
 
 use std::collections::BTreeSet;
@@ -99,11 +100,40 @@ impl PrefillBatch {
     }
 }
 
+/// A fixed prediction-Lab launch choice. Omission keeps automatic selection;
+/// production and revision launch policy never read this option.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InferenceThreads(usize);
+
+impl InferenceThreads {
+    pub fn parse(value: &std::ffi::OsStr) -> Result<Self, &'static str> {
+        match value.to_str() {
+            Some("1") => Ok(Self(1)),
+            Some("2") => Ok(Self(2)),
+            Some("3") => Ok(Self(3)),
+            Some("4") => Ok(Self(4)),
+            _ => Err("invalid_arguments"),
+        }
+    }
+
+    #[must_use]
+    pub const fn count(self) -> usize {
+        self.0
+    }
+}
+
+fn selected_threads(automatic: usize, selected: Option<InferenceThreads>) -> usize {
+    selected.map_or(automatic, InferenceThreads::count)
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     /// The installed provider, exactly as production runs it.
     ProductionBoundary,
+    StyleGentle,
+    StyleBalanced,
+    StyleStrong,
     Context,
     ContextConfidence,
     Instructed,
@@ -215,6 +245,8 @@ pub struct ResultRecord {
     pub terminal_received: Option<bool>,
     pub used_context: bool,
     pub used_style: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_budget: Option<style::StyleBudget>,
     pub warnings: Vec<&'static str>,
 }
 
@@ -226,7 +258,7 @@ pub async fn activate_with_artifact(
     directory: PathBuf,
     artifact: Option<artifact::ModelArtifactOverride>,
 ) -> Result<OwnedRuntime, LabError> {
-    activate_with_options(directory, artifact, PrefillBatch::default(), true).await
+    activate_with_options(directory, artifact, PrefillBatch::default(), true, None).await
 }
 
 pub async fn activate_with_options(
@@ -234,11 +266,12 @@ pub async fn activate_with_options(
     artifact: Option<artifact::ModelArtifactOverride>,
     prefill_batch: PrefillBatch,
     memory_map: bool,
+    threads: Option<InferenceThreads>,
 ) -> Result<OwnedRuntime, LabError> {
     let explicit_artifact = artifact.is_some();
     let launch = match artifact {
-        Some(artifact) => artifact_launch(directory, artifact).await,
-        None => installed_launch(directory).await,
+        Some(artifact) => artifact_launch(directory, artifact, threads).await,
+        None => installed_launch(directory, threads).await,
     }
     .map_err(|_| LabError::RuntimeUnavailable)?;
     let runtime = configure_launch(launch, prefill_batch, explicit_artifact, memory_map)
@@ -276,20 +309,25 @@ pub fn healed_languages(identity: &StableRuntimeIdentity) -> Vec<WritingLanguage
 
 /// The installed model's launch. Unlike the broker, the Lab reports a host
 /// that is short of memory right now instead of waiting for it.
-async fn installed_launch(directory: PathBuf) -> Result<LlamaCppLaunch, WritingError> {
-    let (model, threads) = writing::installed_model(&directory, None)?;
+async fn installed_launch(
+    directory: PathBuf,
+    selected: Option<InferenceThreads>,
+) -> Result<LlamaCppLaunch, WritingError> {
+    let (model, automatic) = writing::installed_model(&directory, None)?;
     if !writing::memory_fits(model, current_memory().available_mib) {
         return Err(WritingError::NoFit);
     }
-    writing::verify_launch(directory, model, threads).await
+    writing::verify_launch(directory, model, selected_threads(automatic, selected)).await
 }
 
 /// An explicitly selected model artifact on the pinned runtime.
 async fn artifact_launch(
     directory: PathBuf,
     artifact: artifact::ModelArtifactOverride,
+    selected: Option<InferenceThreads>,
 ) -> Result<LlamaCppLaunch, WritingError> {
-    let threads = writing::writing_threads()?;
+    // Keep the production hardware-support check even for an explicit count.
+    let threads = selected_threads(writing::writing_threads()?, selected);
     tokio::task::spawn_blocking(move || {
         let weights = verify_file(&artifact.weights)?;
         writing::pinned_runtime_launch(&directory, weights, &artifact.alias, threads)
@@ -364,7 +402,17 @@ impl Request {
         if !supported_language(&self.language) {
             return Err(LabError::UnsupportedLanguage);
         }
-        if config.mode == Mode::ProductionBoundary && self.before.chars().count() > 512 {
+        if (config.mode == Mode::ProductionBoundary || style::sample_limit(config.mode).is_some())
+            && self.before.chars().count() > 512
+        {
+            return Err(LabError::InvalidRequest);
+        }
+        if style::sample_limit(config.mode).is_some()
+            && self
+                .style_examples
+                .iter()
+                .any(|sample| sample.chars().count() > badi_broker::style::MAX_SAMPLE_CHARS)
+        {
             return Err(LabError::InvalidRequest);
         }
         if config.mode != Mode::ProductionBoundary && !config.length.is_normal() {
@@ -419,6 +467,7 @@ impl Request {
             terminal_received: None,
             used_context: false,
             used_style: false,
+            style_budget: None,
             warnings,
         }
     }
@@ -524,7 +573,11 @@ pub async fn run(
     let started = Instant::now();
     if matches!(
         request.config.mode,
-        Mode::ProductionBoundary | Mode::Vocabulary
+        Mode::ProductionBoundary
+            | Mode::Vocabulary
+            | Mode::StyleGentle
+            | Mode::StyleBalanced
+            | Mode::StyleStrong
     ) {
         return baseline(runtime, &request, cancellation, started).await;
     }
@@ -638,7 +691,11 @@ async fn baseline(
     let vocabulary = (request.config.mode == Mode::Vocabulary).then(|| {
         badi_broker::vocabulary::Vocabulary::from_texts(&request.context, &request.style_examples)
     });
-    if vocabulary.is_none() && (!request.context.is_empty() || !request.style_examples.is_empty()) {
+    let selected = style::selected_examples(request);
+    if vocabulary.is_none()
+        && selected.is_none()
+        && (!request.context.is_empty() || !request.style_examples.is_empty())
+    {
         result
             .warnings
             .push("context_and_style_ignored_by_production");
@@ -654,10 +711,15 @@ async fn baseline(
         })
     });
     let trace = Arc::new(RequestTrace::default());
-    let client = runtime
+    let mut client = runtime
         .client()
         .clone()
         .with_request_observer(Arc::clone(&trace) as _);
+    if let Some(examples) = &selected {
+        client = client
+            .with_completion_prefix(style::prefix(examples))
+            .map_err(|_| LabError::InvalidRequest)?;
+    }
     // Clones share the length, and each request sets its own.
     client.set_suggestion_length(request.config.length);
     let mut provider_request = request.provider_request();
@@ -676,29 +738,40 @@ async fn baseline(
         })?
         .outcome
         .into_proposal();
-    result.model_requests = trace.requests().ok_or(LabError::RuntimeUnavailable)?;
-    result.effective_prompt = result
-        .model_requests
-        .last()
-        .and_then(|payload| payload["prompt"].as_str())
-        .map(str::to_owned);
-    if let Some(tokens) = result
-        .model_requests
-        .last()
-        .and_then(|payload| payload["n_predict"].as_u64())
-    {
-        result.config.max_tokens =
-            u16::try_from(tokens).map_err(|_| LabError::RuntimeUnavailable)?;
-    }
+    record_production_requests(
+        &mut result,
+        trace.requests().ok_or(LabError::RuntimeUnavailable)?,
+    )?;
     result.latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+    record_production_proposal(
+        &mut result,
+        proposal,
+        finished_word
+            .as_ref()
+            .map(|completion| completion.suffix.as_str()),
+    );
+    if let Some(examples) = &selected {
+        style::finish(
+            &mut result,
+            request,
+            examples,
+            trace.budgets().ok_or(LabError::RuntimeUnavailable)?,
+        );
+    }
+    result.within_production_budget = result.latency_ms <= 550.0;
+    Ok(result)
+}
+
+fn record_production_proposal(
+    result: &mut ResultRecord,
+    proposal: Option<badi_broker::provider::WritingProposal>,
+    vocabulary_suffix: Option<&str>,
+) {
     if let Some(proposal) = proposal {
         result.outcome = "suggestion";
         result.reason = if proposal.replace_before.is_some() {
             "production_correction"
-        } else if finished_word
-            .as_ref()
-            .is_some_and(|completion| completion.suffix == proposal.text)
-        {
+        } else if vocabulary_suffix.is_some_and(|suffix| suffix == proposal.text) {
             "vocabulary_completion"
         } else {
             "production_continuation"
@@ -710,8 +783,31 @@ async fn baseline(
     } else {
         result.reason = "production_abstention_or_budget";
     }
-    result.within_production_budget = result.latency_ms <= 550.0;
-    Ok(result)
+}
+
+fn record_production_requests(
+    result: &mut ResultRecord,
+    requests: Vec<Value>,
+) -> Result<(), LabError> {
+    result.model_requests = requests;
+    result.effective_prompt = result
+        .model_requests
+        .iter()
+        .rev()
+        .find(|payload| payload.get("prompt").is_some())
+        .and_then(|payload| payload["prompt"].as_str())
+        .map(str::to_owned);
+    if let Some(tokens) = result
+        .model_requests
+        .iter()
+        .rev()
+        .find(|payload| payload.get("prompt").is_some())
+        .and_then(|payload| payload["n_predict"].as_u64())
+    {
+        result.config.max_tokens =
+            u16::try_from(tokens).map_err(|_| LabError::RuntimeUnavailable)?;
+    }
+    Ok(())
 }
 
 fn apply_observation(

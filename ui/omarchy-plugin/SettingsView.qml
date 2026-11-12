@@ -466,7 +466,8 @@ Item {
               }
               Text {
                 width: parent.width
-                elide: Text.ElideRight
+                elide: rowItem.modelData.key === "model" ? Text.ElideNone : Text.ElideRight
+                wrapMode: rowItem.modelData.key === "model" ? Text.WordWrap : Text.NoWrap
                 textFormat: Text.PlainText
                 text: (rowItem.hasCursor ? "h/l · " : "") + rowItem.modelData.detail
                 color: view.dim
@@ -628,7 +629,8 @@ Item {
               }
               Text {
                 width: parent.width
-                elide: Text.ElideRight
+                wrapMode: rowItem.modelData.wrapDetail === true ? Text.WordWrap : Text.NoWrap
+                elide: rowItem.modelData.wrapDetail === true ? Text.ElideNone : Text.ElideRight
                 textFormat: Text.PlainText
                 text: rowItem.modelData.detail
                 color: view.dim

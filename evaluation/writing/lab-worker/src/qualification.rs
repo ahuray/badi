@@ -58,6 +58,20 @@ pub enum StateRequirements {
         embedding_length: u64,
         convolution_cache_length: u64,
     },
+    /// Dense Qwen3.5 under b11840: full-attention KV plus two float32
+    /// `GatedDeltaNet` tensors per recurrent layer; normal-context trunk only.
+    Qwen35 {
+        attention_layers: u64,
+        recurrent_layers: u64,
+        kv_heads: u64,
+        key_length: u64,
+        value_length: u64,
+        convolution_kernel: u64,
+        ssm_inner_size: u64,
+        ssm_state_size: u64,
+        ssm_group_count: u64,
+        ssm_time_step_rank: u64,
+    },
     /// Hybrid/recurrent cache layouts vary with runtime checkpoint policy. A
     /// generic KV formula must not make such a model appear to fit.
     Recurrent,
@@ -478,6 +492,7 @@ fn estimate_resources(input: &AssessmentInput) -> ResourceEstimate {
             "Entire artifact is charged to host RAM, even with mmap; no GPU capacity is added.".to_owned(),
             "Standard attention state uses layers * padded context * KV heads * (key+value dimensions) * cache bytes * sequences.".to_owned(),
             "LFM2 additionally uses float32 hidden*(conv_cache-1) rows for convolution layers and explicit recurrent/checkpoint settings; only reviewed b10726 layout is accepted.".to_owned(),
+            "Qwen35 b11840 counts full-attention KV and float32 GatedDeltaNet convolution/recurrent tensors, excluding MTP layers; only zero recurrent snapshots and context checkpoints are admitted.".to_owned(),
             "Other recurrent/hybrid or unknown state is not guessed. Runtime workspace allowance is max(512 MiB, weights/4) + batch MiB; runtime overhead is 256 MiB.".to_owned(),
             "Normal-use reserve is max(2 GiB, 20% total RAM); a fresh download needs artifact size + 64 MiB free disk, even when an already cached artifact may avoid that cost.".to_owned(),
         ],
@@ -513,6 +528,72 @@ fn attention_state(
         settings.cache_element_bytes,
         settings.parallel_sequences,
     ])
+}
+
+fn qwen35_state(state: &StateRequirements, settings: &QualificationSettings) -> Option<u64> {
+    let StateRequirements::Qwen35 {
+        attention_layers,
+        recurrent_layers,
+        kv_heads,
+        key_length,
+        value_length,
+        convolution_kernel,
+        ssm_inner_size,
+        ssm_state_size,
+        ssm_group_count,
+        ssm_time_step_rank,
+    } = *state
+    else {
+        return None;
+    };
+    if settings.runtime_version != "b11840"
+        || settings.backend != "cpu"
+        || settings.recurrent_snapshots != 0
+        || settings.context_checkpoints != 0
+        || key_length != value_length
+        || !(1..=256).contains(&attention_layers)
+        || !(1..=256).contains(&recurrent_layers)
+        || attention_layers.checked_add(recurrent_layers)? > 256
+        || !(2..=4096).contains(&convolution_kernel)
+        || !(1..=65_536).contains(&ssm_inner_size)
+        || !(1..=65_536).contains(&ssm_state_size)
+        || !(1..=512).contains(&ssm_group_count)
+        || !(1..=512).contains(&ssm_time_step_rank)
+        || ssm_time_step_rank % ssm_group_count != 0
+        || ssm_state_size.checked_mul(ssm_time_step_rank)? != ssm_inner_size
+    {
+        return None;
+    }
+    let attention = attention_state(
+        attention_layers,
+        kv_heads,
+        key_length,
+        value_length,
+        settings,
+    )?;
+    // Reviewed llama.cpp 36e36e63 (b11840): llama-hparams.cpp
+    // n_embd_r/n_embd_s return uint32_t, not an unbounded element count.
+    let convolution =
+        (convolution_kernel - 1).checked_mul(ssm_inner_size.checked_add(product(&[
+            2,
+            ssm_group_count,
+            ssm_state_size,
+        ])?)?)?;
+    let state = ssm_state_size.checked_mul(ssm_inner_size)?;
+    if convolution > u64::from(u32::MAX) || state > u64::from(u32::MAX) {
+        return None;
+    }
+    // The normal CPU context uses F32 for BOTH tensors regardless of
+    // attention cache precision. 4 KiB each covers its 32-byte alignment.
+    // Nonzero snapshot/checkpoint policies are outside this launch slice.
+    let recurrent = product(&[
+        recurrent_layers,
+        convolution.checked_add(state)?,
+        4,
+        settings.parallel_sequences,
+    ])?
+    .checked_add(recurrent_layers.checked_mul(2 * 4096)?)?;
+    attention.checked_add(recurrent)
 }
 
 fn estimate_state(candidate: &CandidateMetadata, settings: &QualificationSettings) -> Option<u64> {
@@ -578,6 +659,12 @@ fn estimate_state(candidate: &CandidateMetadata, settings: &QualificationSetting
             ])?
             .checked_add(convolution_layers.checked_mul(4096)?)?;
             attention.checked_add(recurrent)?
+        }
+        StateRequirements::Qwen35 { .. } => {
+            if architecture != "qwen35" {
+                return None;
+            }
+            qwen35_state(&candidate.state, settings)?
         }
         StateRequirements::Recurrent | StateRequirements::Unknown => return None,
     };

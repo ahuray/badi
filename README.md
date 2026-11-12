@@ -35,12 +35,20 @@ three words in that app or site, until you ask for it there and take it;
 Badi keeps only hashes of those spots, in memory, until it restarts.
 
 A revision works on one line of up to 600 characters in English, German,
-French, Spanish or Portuguese, wherever Badi may suggest (not in terminals).
-It shows your text with the removed words struck through and the new ones
-bold, and changes nothing until you press Tab. Its model, Qwen3 1.7B
+French, Spanish or Portuguese, in supported Fcitx fields, Obsidian notes and
+Neovim prose buffers. In Neovim, select text with characterwise Visual mode (`v`), then
+press Ctrl+Shift+Space; a marked preview appears beside the selection and Tab
+replaces the selection in one undo step. Linewise, blockwise and multiline
+selections are refused. In Obsidian, select text on one line and use the same
+chord, or the grammar, refinement and synonym commands in the command palette;
+Tab applies the whole revision in one undo step. Bash does not offer selection revision.
+The preview marks removed and added text, and changes nothing until you
+press Tab. Its model, Qwen3 1.7B
 (1.3 GB, Apache-2.0), starts on the first request, which takes a few
 seconds, and stops after ten idle minutes; `badi revise` says whether it is
-installed and `badi revise install` downloads it. A grammar check keeps your
+present and `badi revise install` verifies or repairs it, downloading it when
+needed. The panel's **Revisions** row offers the same setup and recovery.
+File presence alone does not prove that the model can run. A grammar check keeps your
 wording and changes at most half of the words; neither mode may drop a
 number, address or name, or answer in another language. In Chromium-based
 apps it works in plain text fields, not yet in rich editors.
@@ -87,11 +95,11 @@ around the caret.
 | Telegram | Composer (Qt Widgets): grey preview and Tab; as in Omawrite, no typo replacement with fcitx5-qt 5.1.16 | 7.3.2 |
 | Omawrite | With fcitx5-qt 5.1.16 (here from 2026-10-18), Qt's input module withdraws the text around the caret after every key; Badi keeps suggesting in Qt fields it observes, but cannot replace a typo there ([details](adapters/fcitx5/README.md#tested-with)) | 0.5.0, 0.7.0 |
 | Xournal++ text tool | Tab requests, exact native undo | 1.3.7, 1.3.8 |
-| Obsidian | Badi plugin; inline preview, Tab, Ctrl+→, one-step undo and recovery after a broker restart (live runner, real model) | 1.13.7, 1.14.4 |
+| Obsidian | Badi plugin; inline preview, Tab, Ctrl+→, one-step undo and recovery after a broker restart (live runner, real model); explicit selection revision with marked changes and native undo (visible Wayland trial, isolated vault and real model; [limits](adapters/shared/README.md#obsidian-selection-revision)) | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes | Bash 5.3.15 in Ghostty 1.3.1 |
 | Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; Tab types a word, Ctrl+→ all of it, a correction shows as `teh → the` and Tab fixes the typo, and an automatic miss stays quiet ([how](docs/decisions/0009-terminals-use-the-typed-line.md)) | Ghostty 1.3.1 |
 | foot (Omarchy's default terminal) | `badi app foot on`; the line you type, as in Ghostty, including `teh → the` corrections | foot 1.28.0 |
-| Neovim | Badi plugin; prose buffers, inline preview, exact spelling replacement, one-step undo. Live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5, 0.12.6 |
+| Neovim | Badi plugin; prose buffers, inline preview, exact spelling replacement, one-step undo. Installed characterwise selection revision is live-tested in foot with a clean startup, real model and synthesized terminal keys ([limits](adapters/neovim/README.md#tested-with)). Continuations/spelling are live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5, 0.12.6 |
 | Discord | Composer; install with `--observed-app discord`, then relaunch Discord | 1.0.166 |
 | Grok Bot | Ready, but its composer is untested | 0.35 |
 | Claude desktop | Ready, but its composer is untested; `badi app com.anthropic.claude on`, then relaunch it with the flag below | 2.42304 (Electron 44) |
@@ -122,7 +130,9 @@ fields such as Omawrite, Telegram and Xournal++. English is built in;
 from that language's Hunspell dictionary (`badi spelling` lists them and names
 the package to install). A single dictionary candidate is offered at once;
 when several fit, the local model picks one from the sentence, and text
-confidently in a language that is not turned on is never corrected. In LibreOffice Writer the
+confidently in a language that is not turned on is never corrected. If spelling
+finds a possible typo but cannot offer a correction, Badi withholds the
+continuation until you resolve that word. In LibreOffice Writer the
 [Badi extension](adapters/libreoffice/README.md) shows a correction after you
 finish a misspelled word, or on Alt+F7 for the word at the caret, and replaces
 it through Writer's own text and undo APIs; one Ctrl+Z restores the typo. In
@@ -219,7 +229,7 @@ before it starts.
 ## Choose the writing model
 
 ```sh
-badi model                          # the model in use, the one recommended for this device, every choice
+badi model                          # current model, recommendation and its reasons, every choice
 badi model use gemma-3-1b           # download (pinned, hash-checked), switch and restart
 badi model auto                     # follow the device recommendation again
 ```
@@ -361,8 +371,9 @@ badi style status | export | forget
 
 When on, each accepted suggestion on a learning site keeps the sentence you
 wrote before it, sealed with a key in your desktop keyring; sentences with
-digits, email addresses or links are skipped. No suggestion uses the samples
-yet: they are for measuring, in the Lab, whether your own style helps.
+digits, email addresses or links are skipped. Desktop suggestions do not use
+the samples yet: the Lab offers [three style strengths](evaluation/writing/README.md#style-comparison)
+for comparing explicitly supplied examples against style off.
 `badi style forget` deletes them and the key. Apps other than websites cannot
 learn ([details](broker/README.md#style-learning-opt-in)).
 
@@ -419,6 +430,7 @@ what you typed:
 | `stale`, `timeout`, `provider_error` | The text changed first, or the model was late or failed. |
 | `low_confidence` | A word of the suggestion was too unlikely for the model to be sure, so it was withheld ([confidence gate](broker/README.md#suggestion-limits)). |
 | `repeated` | You turned down that next word at the same spot in this app or site before: Escape once, or typing other letters twice ([turned-down words](broker/README.md#suggestion-limits)). |
+| `typo_suspected` | Spelling found a possible typo, but this field cannot replace it or no correction was found. Badi withholds the continuation until you resolve the word. |
 
 Debug mode expires after 15 minutes. A crashed model service restarts with
 backoff; a missing or oversized model stops it for `badi doctor` to explain.

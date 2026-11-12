@@ -155,6 +155,56 @@ fn answers_that_change_language_facts_shape_or_too_much_are_not_shown() {
 }
 
 #[test]
+fn a_revision_cannot_introduce_markup_missing_from_the_selection() {
+    for mode in [
+        RevisionMode::Grammar,
+        RevisionMode::Refine,
+        RevisionMode::Synonyms,
+    ] {
+        for output in ["**large**", "*large*", "_large_", "`large`", "<b>large</b>"] {
+            assert_eq!(
+                accept(mode, english(), "", "big", "", output),
+                Err(RevisionAbstain::Shape),
+                "{mode:?}: {output}"
+            );
+        }
+    }
+    // The installed editor exposed this exact model answer. Its markup
+    // must be refused before a marked preview can authorize the added noun.
+    assert_eq!(
+        accept(
+            RevisionMode::Grammar,
+            english(),
+            "The ",
+            "big",
+            " house",
+            "The big **cat**"
+        ),
+        Err(RevisionAbstain::Shape)
+    );
+    // One existing delimiter cannot authorize an unrelated kind of markup.
+    assert_eq!(
+        accept(
+            RevisionMode::Grammar,
+            english(),
+            "",
+            "`has went`",
+            "",
+            "<b>has gone</b>"
+        ),
+        Err(RevisionAbstain::Shape)
+    );
+    for marker in ["*", "_", "`"] {
+        let selected = format!("has {marker}went{marker}");
+        let output = format!("has {marker}gone{marker}");
+        assert_eq!(
+            accept(RevisionMode::Grammar, english(), "", &selected, "", &output),
+            Ok(output)
+        );
+    }
+}
+
+#[test]
 fn a_refinement_may_reword_but_keeps_language_and_facts() {
     let refine =
         |selected, output| accept(RevisionMode::Refine, english(), "", selected, "", output);

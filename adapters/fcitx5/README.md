@@ -156,6 +156,11 @@ While the request runs, the panel says Badi is checking, and no inspection
 runs; an edit, a changed selection, a focus change or an observer
 invalidation retires the request.
 
+If revisions are unavailable, the notice points to `badi revise` for model
+setup and verification. A missing or damaged model can be repaired with
+`badi revise install`; an unavailable result can also mean insufficient
+memory or a runtime problem. Other refusals keep their own messages.
+
 The revision shows as Badi's candidate list: lines of up to 64 characters,
 removed words struck through, added ones bold in the highlight colour, and a
 help line (`Grammar · Tab apply · Esc dismiss · Ctrl+Shift+Space refine`;

@@ -1,6 +1,6 @@
 use super::*;
 
-fn request(mode: Mode) -> Request {
+pub(crate) fn request(mode: Mode) -> Request {
     Request {
         schema: REQUEST_SCHEMA.to_owned(),
         id: "case-1".to_owned(),
@@ -21,7 +21,7 @@ fn request(mode: Mode) -> Request {
     }
 }
 
-fn fixture_identity() -> StableRuntimeIdentity {
+pub(crate) fn fixture_identity() -> StableRuntimeIdentity {
     StableRuntimeIdentity {
         launch_contract_id: "fixture-no-runtime",
         binary_sha256: "0".repeat(64),
@@ -717,6 +717,18 @@ fn baseline_accepts_identical_cases_but_keeps_the_production_bound() {
     value.validate().expect("same context/style case");
     value.before = "a".repeat(513);
     assert!(value.validate().is_err());
+}
+
+#[test]
+fn explicit_threads_stay_fixed_when_automatic_selection_changes() {
+    for automatic in [1, 2, 4] {
+        assert_eq!(selected_threads(automatic, None), automatic);
+        for count in 1..=4 {
+            let fixed = InferenceThreads::parse(std::ffi::OsStr::new(&count.to_string()))
+                .expect("bounded thread option");
+            assert_eq!(selected_threads(automatic, Some(fixed)), count);
+        }
+    }
 }
 
 /// The Lab's launch settings bind its runtime identity, which every

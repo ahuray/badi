@@ -155,6 +155,25 @@ test('pinned upstream config is data-only estimation with explicit conversion un
   assert.ok(fixture.calls.some(call => call.url.includes(`/resolve/${'b'.repeat(40)}/config.json`)));
 });
 
+test('Qwen3.5 config inspection preserves only its text layout and never repairs it from stale Hub dimensions', async t => {
+  const raw = model(); raw.gguf.architecture = 'qwen35'; raw.cardData.base_model = 'source/upstream';
+  raw.config = { model_type: 'qwen3_5_text', head_dim: 256, num_hidden_layers: 24 };
+  const fixture = await setup(t, { model: raw, fetch: async url => {
+    if (url.includes('/api/models?')) return json([raw]);
+    if (url === 'https://huggingface.co/api/models/source/upstream') return json({ id: 'source/upstream', sha: 'b'.repeat(40) });
+    if (url.endsWith('/config.json')) return json({ model_type: 'qwen3_5', text_config: {
+      model_type: 'qwen3_5_text', num_hidden_layers: 24, head_dim: 0, layer_types: ['linear_attention', 1],
+      full_attention_interval: 4, auto_map: { AutoModel: 'untrusted.py' } }, vision_config: { hidden_size: 768 } });
+    return json(raw);
+  } });
+  assert.deepEqual(fixture.candidate.config, { model_type: 'qwen3_5', text_config: {
+    model_type: 'qwen3_5_text', num_hidden_layers: 24, head_dim: 0, full_attention_interval: 4, layer_types: null } });
+  assert.equal(fixture.candidate.provenance.upstream_revision, null);
+  assert.equal(fixture.candidate.config_source.relation, 'named_upstream_current_revision_for_estimation_only');
+  const other = summarizeHubModel({ id: 'publisher/other', config: { model_type: 'unknown', text_config: { model_type: 'qwen3_5_text', head_dim: 256 } } });
+  assert.equal(other.config.text_config, undefined, 'Nested data is not a generic architecture escape hatch.');
+});
+
 test('changed revision, missing hash, oversized metadata and unsafe redirects cannot reach download', async t => {
   const { service, candidate } = await setup(t);
   service.fetch = async () => json({ ...model(), sha: 'c'.repeat(40) });

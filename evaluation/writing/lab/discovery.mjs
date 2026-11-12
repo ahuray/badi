@@ -23,11 +23,34 @@ const cancelled = signal => { if (signal?.aborted) throw fail('discovery_cancell
 const idFor = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const hold = (map, key, value, max = 512) => { if (!map.has(key) && map.size >= max) map.delete(map.keys().next().value); map.set(key, value); return value; };
 const safeFile = value => bounded(value, 512) && value.split('/').every(part => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/u.test(part) && part !== '..');
-const configFields = config => ({ ...Object.fromEntries(['model_type', 'hidden_size', 'num_hidden_layers', 'num_attention_heads', 'num_key_value_heads', 'head_dim', 'max_position_embeddings', 'vocab_size', 'torch_dtype', 'conv_L_cache', 'num_local_experts']
+const qwen35Numbers = ['hidden_size', 'num_hidden_layers', 'num_attention_heads', 'num_key_value_heads', 'head_dim',
+  'max_position_embeddings', 'full_attention_interval', 'linear_conv_kernel_dim', 'linear_key_head_dim',
+  'linear_value_head_dim', 'linear_num_key_heads', 'linear_num_value_heads'];
+function qwen35TextConfig(config) {
+  if (!config || config.model_type !== 'qwen3_5_text') return null;
+  // Preserve invalid declarations as null: dropping a malformed mask must not
+  // make an interval fallback appear to be complete metadata.
+  return { model_type: config.model_type, ...Object.fromEntries(qwen35Numbers.filter(key => Object.hasOwn(config, key))
+    .map(key => [key, Number.isSafeInteger(config[key]) ? config[key] : null])),
+  ...(Object.hasOwn(config, 'layer_types') ? { layer_types: Array.isArray(config.layer_types) && config.layer_types.length <= 256
+    && config.layer_types.every(value => bounded(value, 64)) ? config.layer_types : null } : {}) };
+}
+function configFields(config) {
+  if (config?.model_type === 'qwen3_5_text') return qwen35TextConfig(config);
+  if (config?.model_type === 'qwen3_5') {
+    const text = qwen35TextConfig(config.text_config);
+    // Only this evidenced wrapper owns a nested text configuration. Never mix
+    // the vision model or contradictory flattened dimensions into its state.
+    const conflict = text && [...qwen35Numbers, 'layer_types'].some(key => Object.hasOwn(config, key)
+      && JSON.stringify(config[key]) !== JSON.stringify(text[key]));
+    return { model_type: config.model_type, text_config: conflict ? null : text };
+  }
+  return { ...Object.fromEntries(['model_type', 'hidden_size', 'num_hidden_layers', 'num_attention_heads', 'num_key_value_heads', 'head_dim', 'max_position_embeddings', 'vocab_size', 'torch_dtype', 'conv_L_cache', 'num_local_experts']
   .filter(key => bounded(config?.[key]) || positive(config?.[key]) || ['num_local_experts', 'head_dim'].includes(key) && Number.isSafeInteger(config?.[key])).map(key => [key, config[key]])),
 ...(Array.isArray(config?.layer_types) && config.layer_types.length <= 256 && config.layer_types.every(value => bounded(value, 64)) ? { layer_types: config.layer_types } : {}),
 ...(Array.isArray(config?.full_attn_idxs) && config.full_attn_idxs.length <= 256 && config.full_attn_idxs.every(value => Number.isSafeInteger(value) && value >= 0 && value < 256) ? { full_attn_idxs: config.full_attn_idxs } : {}),
-...(typeof config?.tie_word_embeddings === 'boolean' ? { tie_word_embeddings: config.tie_word_embeddings } : {}) });
+...(typeof config?.tie_word_embeddings === 'boolean' ? { tie_word_embeddings: config.tie_word_embeddings } : {}) };
+}
 
 export function summarizeHubModel(raw) {
   if (!raw || !REPO.test(raw.id ?? raw.modelId ?? '')) throw fail('discovery_invalid_metadata', 'The Hub returned invalid model metadata.');
@@ -243,7 +266,10 @@ export class DiscoveryService {
       if (ownConfig || sourceRepo !== model.repo) {
         const config = await this.metadata(`${HUB}/${sourceRepo}/resolve/${sourceRevision}/config.json`, signal);
         if (!config.value || typeof config.value !== 'object' || Array.isArray(config.value)) throw fail('discovery_invalid_metadata');
-        pinned.config = { ...pinned.config, ...configFields(config.value) };
+        const fields = configFields(config.value);
+        // A Qwen3.5 config is one complete text-layout claim, not a patch over
+        // stale dimensions from the repository summary.
+        pinned.config = ['qwen3_5', 'qwen3_5_text'].includes(fields.model_type) ? fields : { ...pinned.config, ...fields };
         configSource = { repo: sourceRepo, revision: sourceRevision, file: 'config.json', cache_state: config.cache_state,
           relation: ownConfig ? 'same_artifact_repository' : 'named_upstream_current_revision_for_estimation_only',
           sha256: config.bytes_sha256, hash_scope: 'Exact downloaded config.json response bytes' };

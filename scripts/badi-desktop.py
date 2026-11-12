@@ -2,15 +2,18 @@
 """Control the persistent desktop broker, its settings and its diagnostics."""
 
 import datetime
+import hashlib
 import importlib.util
 import json
 import os
 import re
 from pathlib import Path
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -116,7 +119,7 @@ HELP = """Badi — local writing controls
                                and press Ctrl+Shift+Space for grammar, again
                                for a refined wording, Tab to apply; shows
                                whether its model is installed
-  badi revise install          Download that model (Qwen3 1.7B, 1.3 GB,
+  badi revise install          Verify or download that model (Qwen3 1.7B, 1.3 GB,
                                Apache-2.0, pinned and hash-checked)
   badi languages [LANG...]     The languages you write in (en de fr es pt it
                                nl pl): suggestions and typo fixes in each that
@@ -230,6 +233,7 @@ NO_SUGGESTION = {
     "provider_error": "the local model runtime failed or answered malformed",
     "low_confidence": "a word of the suggestion was too unlikely for the model to be sure, so it was withheld",
     "repeated": "you turned down that next word at the same spot before (Escape, or typing other letters twice), so it was withheld",
+    "typo_suspected": "spelling found a possible typo but could not offer a correction here, so the continuation was withheld",
 }
 
 
@@ -964,6 +968,10 @@ def print_models(report):
     best = next((model for model in report["models"] if model["recommended"]), None)
     if best:
         print(f"Recommended for this device: {best['name']}.")
+    else:
+        print("No model is recommended for this device.")
+    for reason in report["rationale"]:
+        print(f"  {reason}")
     for model in report["models"]:
         mark = "●" if model["active"] else "★" if model["recommended"] else "·"
         state = ("in use" if model["active"] else "installed" if model["installed"]
@@ -979,36 +987,76 @@ def print_models(report):
 REVISION_MODEL = "qwen3-1.7b"
 
 
-def revision_report():
-    """Whether the revision model is installed, from the broker's catalog."""
-    model = next((entry for entry in model_advice()["catalog"] if entry["id"] == REVISION_MODEL), None)
+def revision_report(advice=None):
+    """Cheap file/size status, not runtime readiness or a hash verification."""
+    advice = model_advice() if advice is None else advice
+    model = next((entry for entry in advice.get("catalog", []) if entry["id"] == REVISION_MODEL), None)
     if model is None:
         raise RuntimeError("This Badi build has no revision model in its catalog.")
+    try:
+        metadata = (MODEL_DIRECTORY / model["filename"]).lstat()
+        state = ("present" if stat.S_ISREG(metadata.st_mode) and metadata.st_size == model["download_bytes"]
+                 else "invalid")
+    except FileNotFoundError:
+        state = "missing"
+    except OSError:
+        state = "unreadable"
     return {"schema": "badi.revision.v1", "model": model["id"], "name": model["name"],
             "bytes": model["download_bytes"], "license": model["license"], "fits": model["fits"],
-            "installed": (MODEL_DIRECTORY / model["filename"]).is_file()}, model
+            "installed": state == "present", "file_state": state}, model
 
 
 def print_revision(report):
     print("Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar. Press it again "
           "for a refined wording; Tab applies what it shows, Esc keeps your text.")
-    if report["installed"]:
-        print(f"{report['name']} is installed; it starts on first use and stops after ten idle minutes.")
-    elif not report["fits"]:
+    if not report["fits"]:
         print(f"{report['name']} does not fit this device's memory, so revisions are unavailable.")
+    elif report["installed"]:
+        print(f"{report['name']}'s model file is present. Run badi revise install to verify or repair it. "
+              "The broker verifies it before use; it stops after ten idle minutes.")
+    elif report["file_state"] in ("invalid", "unreadable"):
+        print(f"{report['name']}'s model file needs repair. Run badi revise install.")
     else:
         print(f"{report['name']} ({report['bytes'] / 1e9:.1f} GB, {report['license']}) is not installed. "
               "Install it with: badi revise install")
 
 
+def verified_revision_model(model, directory=None):
+    """Hash only on an explicit install/repair; never follow a substituted link."""
+    directory = MODEL_DIRECTORY if directory is None else directory
+    try:
+        descriptor = os.open(directory / model["filename"], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size != model["download_bytes"]:
+                return False
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            after = os.fstat(stream.fileno())
+            current = (directory / model["filename"]).lstat()
+            identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+            return (digest == model["sha256"] and identity(before) == identity(after) == identity(current)
+                    and stat.S_ISREG(current.st_mode))
+    except OSError:
+        return False
+
+
 def install_revision_model():
     report, model = revision_report()
-    if report["installed"]:
-        return report, False
     if not report["fits"]:
         raise RuntimeError(f"{report['name']} does not fit this device's memory with Badi's safety reserve.")
-    badi_install.download_model(model, MODEL_DIRECTORY)
-    return {**report, "installed": True}, True
+    if report["installed"] and verified_revision_model(model):
+        return report, False
+    # The shared downloader uses a .part name. A private staging directory
+    # prevents concurrent repairs sharing it, and leaves the old file intact
+    # on download, verification or cancellation failure.
+    MODEL_DIRECTORY.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.TemporaryDirectory(prefix=".revision-", dir=MODEL_DIRECTORY) as temporary:
+        staged = Path(temporary)
+        badi_install.download_model(model, staged)
+        if not verified_revision_model(model, staged):
+            raise RuntimeError("The revision model did not match its pinned bytes; the existing file was kept.")
+        (staged / model["filename"]).replace(MODEL_DIRECTORY / model["filename"])
+    return {**report, "installed": True, "file_state": "present"}, True
 
 
 def use_model(model_id, accept_license):
@@ -2022,9 +2070,15 @@ def revise_command(arguments):
         else:
             print_revision(report)
     elif arguments == ["install"]:
-        report, downloaded = install_revision_model()
-        print(f"{report['name']} is " + ("installed. Select text and press Ctrl+Shift+Space." if downloaded
-                                         else "already installed."))
+        def cancel(_signum, _frame):
+            raise KeyboardInterrupt
+        previous = signal.signal(signal.SIGTERM, cancel)
+        try:
+            report, downloaded = install_revision_model()
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+        print(f"{report['name']} " + ("downloaded and verified." if downloaded else "verified.")
+              + " Select text and press Ctrl+Shift+Space.")
     else:
         raise unknown_command()
 
@@ -2221,6 +2275,13 @@ def ctl_command(arguments):
         # Counts per day and app or site; None from a broker without them.
         "stats": usage_stats(endpoint),
     }
+    # Reuse this overview's catalog. Polling checks metadata only; the user's
+    # explicit install action and the runtime verify the actual model bytes.
+    try:
+        overview["desktop"]["revision"], _model = revision_report(
+            overview.get("models", {}).get("writing", {}).get("advice", {}))
+    except RuntimeError:
+        pass  # Older catalogs cannot report revision setup; the panel says so.
     print(json.dumps(overview))
 
 

@@ -124,15 +124,39 @@ closed on missing, invalid or overflowing dimensions:
 | Weights | Exact artifact bytes |
 | Attention state | `layers × context (rounded up to 256) × KV_heads × (key_length + value_length) × cache_element_bytes × sequences` |
 | LFM2 state | Attention layers as above, plus float32 short-convolution state reviewed against llama.cpp `b10726` |
+| Qwen3.5 state | Full-attention layers as above, plus two float32 GatedDeltaNet state tensors per recurrent layer, reviewed against `b11840`; MTP layers excluded |
 | Workspace | `max(512 MiB, weights / 4) + batch_tokens × 1 MiB` |
 | Runtime overhead | 256 MiB |
 | Host reserve | `max(2 GiB, 20% of total RAM)`, subtracted from available RAM |
 | Download disk | Artifact bytes plus 64 MiB |
 
 The sum must fit within available RAM minus the host reserve, and the Lab loads
-at most 8 GiB. Other recurrent or hybrid architectures stay unestimated. These
+at most 8 GiB. Qwen3.5 support is limited to dense `qwen35`, CPU, at most 256
+trunk layers, and the Lab's zero recurrent-snapshot and zero context-checkpoint
+policy. Other recurrent or hybrid architectures stay unestimated. These
 are estimates; real peak memory, startup and sustained pressure still need
 measurement.
+
+For Qwen3.5, the bounded `qwen3_5.text_config` or `qwen3_5_text` configuration
+is an upstream estimate only. Downloaded GGUF metadata must independently
+describe its layout and dimensions; missing or conflicting fields never borrow
+upstream values. Explicit attention head dimensions are required. The normal
+context excludes `nextn_predict_layers` from `block_count`; an absent nextn key
+means zero. The recurrent layer mask and an explicit full-attention interval
+must agree when both are present. At least one complete layout is required.
+No repository code or vision configuration is used.
+
+The pinned [state dimensions](https://github.com/ggml-org/llama.cpp/blob/36e36e63a54fc8f85b95e9c499a022b597e478dd/src/llama-hparams.cpp)
+are `(conv_kernel−1) × (inner + 2 × groups × state_dim)` and
+`state_dim × inner` elements per recurrent layer. The
+[normal-context allocation](https://github.com/ggml-org/llama.cpp/blob/36e36e63a54fc8f85b95e9c499a022b597e478dd/src/llama-model.cpp)
+uses float32 for both, multiplied by parallel sequences; the estimate adds
+4 KiB per tensor for alignment. Element products must fit the runtime's
+`uint32_t` arithmetic, and byte totals use checked arithmetic. For the official
+0.8B layout (six attention and eighteen recurrent layers), 2048 tokens, one
+sequence and float16 KV, the state estimate is 45,514,752 bytes including
+alignment allowances. This neither measures runtime allocation nor qualifies
+the model's writing quality.
 
 ## Stages and gates
 

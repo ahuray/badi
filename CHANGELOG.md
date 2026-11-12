@@ -8,6 +8,49 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- The Prediction Lab estimates dense Qwen3.5 memory from its attention and
+  recurrent state under the pinned CPU runtime. Downloaded metadata must
+  independently pass the same checks; missing or conflicting dimensions
+  still prevent loading, and memory fit alone never qualifies writing quality.
+
+- The settings panel now shows the separate revision model and offers install,
+  verification and repair. Repair verifies pinned bytes before replacing an
+  existing file; failed or cancelled downloads keep it. Unavailable revisions
+  point to `badi revise`, and Neovim restarts with grammar after a refusal.
+
+- Synthetic Lab screens rejected bounded heading/paragraph prompt context
+  and Italian writing on the current model; the failed prototypes were removed.
+
+- Selection revisions refuse introduced Markdown emphasis and check each
+  markup delimiter separately; existing literal delimiters remain usable.
+  A live Neovim trial exposed the unrequested `big **cat**` model answer.
+
+- Neovim and Obsidian can revise one explicitly selected line: grammar,
+  refinement and repeated synonyms, a complete marked preview, exact
+  one-shot replacement and one native undo. Selection changes, stale
+  grants, expiry and clipped previews prevent acceptance.
+
+- The Prediction Lab has a synthetic instruction-adherence suite with
+  matched controls, full-addition lexical checks and explicit unpaired
+  runtime results. CLI comparisons can pin one to four inference threads
+  and refuse mismatched launches. The native-template arm explicitly requests
+  non-thinking output before prefilling a draft. Current model probes do not
+  qualify instruction settings.
+
+- The model picker now explains the recommendation's memory fit; `badi model`
+  prints all selection reasons. Panel lifecycle checks cover model choices,
+  license confirmation, failed downloads and usage history.
+- Continuations now stay quiet when spelling locates a possible typo but
+  cannot offer a correction, including fields without replacement authority.
+  Status and diagnostics count the content-free `typo_suspected` reason.
+
+- The Prediction Lab can compare the production completion path with one,
+  two or four explicit writing examples. It reports their share of the
+  512-token prompt budget, keeps the 550 ms deadline and production output
+  checks, and withholds recognized copied names, weekdays and numbers.
+  Desktop predictions still ignore style samples pending private held-out
+  evidence.
+
 - A code-review pass tightened three exactness edges: a model token that
   also writes the next word now counts in the confidence gate instead of
   riding the finished-word exemption; a Neovim acceptance revoked or

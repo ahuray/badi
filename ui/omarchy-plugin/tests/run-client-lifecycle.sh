@@ -12,8 +12,10 @@ test_root=$(mktemp -d "${TMPDIR:-/tmp}/badi-client-lifecycle.XXXXXX")
 harness_dir="$test_root/harness"
 panel_dir="$test_root/panel"
 settings_extra="$test_root/settings-extra.json"
+overview_extra="$test_root/overview-extra.json"
 runtime_dir="$test_root/runtime"
 call_log="$test_root/badictl.calls"
+action_log="$test_root/desktop-actions.calls"
 pid_log="$test_root/badictl.pids"
 shell_log="$test_root/quickshell.log"
 shell_pid=""
@@ -78,6 +80,10 @@ runtime_env=(
   "BADI_FAKE_HOLD_MUTATION=$test_root/hold-mutation"
   "BADI_FAKE_FAIL_OVERVIEW=$test_root/fail-overview"
   "BADI_FAKE_SETTINGS=$settings_extra"
+  "BADI_FAKE_OVERVIEW=$overview_extra"
+  "BADI_FAKE_ACTION_LOG=$action_log"
+  "BADI_FAKE_FAIL_ACTION=$test_root/fail-action"
+  "BADI_FAKE_HOLD_ACTION=$test_root/hold-action"
   "QT_QPA_PLATFORM=offscreen"
   "NO_COLOR=1"
 )
@@ -561,6 +567,171 @@ jq -e '
   fail "the places write did not succeed: $(ipc state)"
 rm -- "$settings_extra"
 
+# The existing model picker and usage history consume the desktop overview.
+# Every value here is synthetic; no model is downloaded and no service runs.
+printf '%s\n' '{"languages_chosen": true, "places_chosen": true}' >"$settings_extra"
+cp -- "$tests_dir/model-stats.json" "$overview_extra"
+ipc refresh >/dev/null
+wait_for_call_count 18
+wait_until_idle
+rows=$(ipc rows)
+jq -e '
+  any(.[]; .key == "model" and .value == "qwen3-0.6b"
+    and (.detail | contains("Qwen3 0.6B, Apache-2.0 · Recommended: Qwen3 1.7B"))
+    and (.detail | contains("1800 MiB artifact plus 1024 MiB"))
+    and (.options | map(.value) == ["qwen3-0.6b", "qwen3-1.7b", "gemma-3-1b", "llama-3.2-1b"])
+    and any(.options[]; .value == "qwen3-1.7b" and .label == "Qwen3 1.7B ★"))
+' <<<"$rows" >/dev/null || fail "model fit, active model or recommendation is wrong: $rows"
+state=$(ipc state)
+jq -e '.statsReported and .statsAvailable
+  and .statsToday == {shown: 3, accepted: 2, words: 5}
+  and (.statsWeek | map(.words)) == [0, 0, 0, 0, 7, 0, 5]
+  and .statsWeek[0].day == "2026-02-24"
+  and (.statsLeaders | map(.label)) == ["example.com", "Ghostty"]
+' <<<"$state" >/dev/null || fail "panel history differs from the overview: $state"
+
+# Selecting the active model or one that does not fit dispatches nothing.
+ipc chooseRow model qwen3-0.6b >/dev/null
+ipc chooseRow model qwen3-8b >/dev/null
+[[ ! -f $action_log ]] || fail "an unchanged or non-fitting model dispatched an action"
+ipc chooseRow model qwen3-1.7b >/dev/null
+wait_for_call_count 19
+wait_until_idle
+[[ $(cat "$action_log") == 'model use qwen3-1.7b' ]] || fail "unexpected model action"
+[[ $(jq -r '.actionMessage' <<<"$(ipc state)") == 'Model switched' ]] || fail "model success is missing"
+
+# Both non-Apache licences require their separate terms action. Choosing
+# the active model again cancels pending terms without downloading anything.
+ipc chooseRow model gemma-3-1b >/dev/null
+rows=$(ipc rows)
+jq -e 'any(.[]; .key == "model-terms" and (.label | contains("Gemma Terms of Use"))
+  and (.detail | contains("ai.google.dev/gemma/terms")))' <<<"$rows" >/dev/null || fail "Gemma terms are missing"
+[[ $(wc -l <"$action_log") == 1 ]] || fail "Gemma downloaded before terms acceptance"
+ipc chooseRow model qwen3-0.6b >/dev/null
+[[ $(jq 'map(select(.key == "model-terms")) | length' <<<"$(ipc rows)") == 0 ]] || fail "terms were not canceled"
+ipc chooseRow model gemma-3-1b >/dev/null
+ipc activateRow model-terms >/dev/null
+wait_for_call_count 20
+wait_until_idle
+[[ $(tail -n 1 "$action_log") == 'model use gemma-3-1b --accept-license' ]] || fail "Gemma terms were not explicit"
+ipc chooseRow model llama-3.2-1b >/dev/null
+rows=$(ipc rows)
+jq -e 'any(.[]; .key == "model-terms" and (.label | contains("Llama 3.2 Community License"))
+  and (.detail | contains("llama.com/llama3_2/license")))' <<<"$rows" >/dev/null || fail "Llama terms are missing"
+[[ $(wc -l <"$action_log") == 2 ]] || fail "Llama downloaded before terms acceptance"
+ipc activateRow model-terms >/dev/null
+wait_for_call_count 21
+wait_until_idle
+[[ $(tail -n 1 "$action_log") == 'model use llama-3.2-1b --accept-license' ]] || fail "Llama terms were not explicit"
+
+touch "$test_root/fail-action"
+ipc chooseRow model qwen3-1.7b >/dev/null
+wait_for_call_count 22
+wait_until_idle
+[[ $(jq -r '.actionMessage' <<<"$(ipc state)") == 'Model download failed; the current model is unchanged' ]] ||
+  fail "a failed model download reported success"
+rm -- "$test_root/fail-action"
+
+# Forget is also explicit: Cancel dispatches nothing; accepting dispatches
+# exactly once. An unavailable or older stats source does not invent counts.
+ipc activateRow stats_forget >/dev/null
+[[ $(jq '.confirming' <<<"$(ipc state)") == true ]] || fail "forget skipped confirmation"
+ipc confirm false >/dev/null
+[[ $(wc -l <"$action_log") == 4 ]] || fail "canceling forget dispatched an action"
+ipc activateRow stats_forget >/dev/null
+ipc confirm true >/dev/null
+wait_for_call_count 23
+wait_until_idle
+[[ $(tail -n 1 "$action_log") == 'stats forget' ]] || fail "forget command differs"
+jq '.desktop.stats = {available: false}' "$tests_dir/model-stats.json" >"$overview_extra"
+ipc refresh >/dev/null
+wait_for_call_count 24
+wait_until_idle
+jq -e '.statsReported and (.statsAvailable | not) and .statsWeek == []' <<<"$(ipc state)" >/dev/null ||
+  fail "unavailable statistics remained visible"
+rm -- "$overview_extra"
+ipc refresh >/dev/null
+wait_for_call_count 25
+wait_until_idle
+jq -e '(.statsReported or .statsAvailable | not) and .statsWeek == []' <<<"$(ipc state)" >/dev/null ||
+  fail "an old overview invented statistics"
+jq -e 'all(.[]; .key != "model" and .key != "stats_forget")' <<<"$(ipc rows)" >/dev/null ||
+  fail "an old overview retained model or stats controls"
+
+# Revision setup is metadata in the same overview, never a separate model
+# probe. Install, failed repair, retry and poll refresh use the existing
+# action lifecycle; stale/older data must not claim a ready model.
+jq -e 'any(.[]; .key == "revision" and (.enabled | not)
+  and (.detail | contains("Status unavailable")))' <<<"$(ipc rows)" >/dev/null || fail "old helper invented revision readiness"
+cp -- "$tests_dir/model-stats.json" "$overview_extra"
+ipc refresh >/dev/null
+wait_for_call_count 26
+wait_until_idle
+jq -e 'any(.[]; .key == "revision" and .enabled and .label == "Install revision model"
+  and (.detail | contains("1.3 GB · Apache-2.0")) and (.detail | contains("Not installed")))'   <<<"$(ipc rows)" >/dev/null || fail "missing revision setup is not discoverable"
+ipc activateRow revision >/dev/null
+wait_for_call_count 27
+wait_until_idle
+[[ $(tail -n 1 "$action_log") == 'revise install' ]] || fail "revision install argv differs"
+jq -e 'any(.[]; .key == "revision" and .enabled and .label == "Verify or repair revision model"
+  and (.detail | contains("Model file present; verified before use")))' <<<"$(ipc rows)" >/dev/null ||
+  fail "installed revision metadata did not refresh"
+[[ $(jq -r '.actionMessage' <<<"$(ipc state)") == 'Revision model verified · select text and press Ctrl+Shift+Space' ]] ||
+  fail "revision success missing"
+jq '.desktop.revision.file_state = "invalid" | .desktop.revision.installed = false'   "$tests_dir/model-stats.json" >"$overview_extra"
+ipc refresh >/dev/null
+wait_for_call_count 28
+wait_until_idle
+jq -e 'any(.[]; .key == "revision" and .enabled and .label == "Repair revision model")'   <<<"$(ipc rows)" >/dev/null || fail "damaged model has no repair action"
+touch "$test_root/fail-action"
+ipc activateRow revision >/dev/null
+wait_for_call_count 29
+wait_until_idle
+[[ $(jq -r '.actionMessage' <<<"$(ipc state)") == 'Revision model download failed; the existing file was kept' ]] ||
+  fail "failed revision repair reported success"
+jq -e 'any(.[]; .key == "revision" and .label == "Repair revision model")' <<<"$(ipc rows)" >/dev/null ||
+  fail "failed repair claimed installed"
+rm -- "$test_root/fail-action"
+ipc activateRow revision >/dev/null
+wait_for_call_count 30
+wait_until_idle
+jq -e 'any(.[]; .key == "revision" and .label == "Verify or repair revision model")' <<<"$(ipc rows)" >/dev/null ||
+  fail "revision retry did not recover"
+jq '.desktop.revision.fits = false' "$tests_dir/model-stats.json" >"$overview_extra"
+ipc refresh >/dev/null
+wait_for_call_count 31
+wait_until_idle
+jq -e 'any(.[]; .key == "revision" and (.enabled | not)
+  and (.detail | contains("Does not fit")))' <<<"$(ipc rows)" >/dev/null || fail "nonfitting model can install"
+previous_actions=$(wc -l <"$action_log")
+ipc activateRow revision >/dev/null
+[[ $(wc -l <"$action_log") == "$previous_actions" ]] || fail "disabled revision row dispatched"
+# Inconsistent or forward-version status is unavailable, not assumed safe.
+jq '.desktop.revision.installed = true' "$tests_dir/model-stats.json" >"$overview_extra"
+ipc refresh >/dev/null
+wait_for_call_count 32
+wait_until_idle
+jq -e 'any(.[]; .key == "revision" and (.enabled | not)
+  and (.detail | contains("Status unavailable")))' <<<"$(ipc rows)" >/dev/null || fail "incoherent revision state admitted"
+
+# An in-flight revision setup disables repeat activation. Closing this
+# isolated shell reaps even a helper that ignores TERM; no late install runs.
+cp -- "$tests_dir/model-stats.json" "$overview_extra"
+ipc refresh >/dev/null
+wait_for_call_count 33
+wait_until_idle
+touch "$test_root/hold-action"
+previous_actions=$(wc -l <"$action_log")
+ipc activateRow revision >/dev/null
+for _ in $(seq 1 80); do
+  [[ $(wc -l <"$action_log") == $((previous_actions + 1)) ]] && break
+  sleep 0.05
+done
+jq -e '.busy' <<<"$(ipc state)" >/dev/null || fail "revision setup did not stay busy"
+ipc activateRow revision >/dev/null
+[[ $(wc -l <"$action_log") == $((previous_actions + 1)) ]] || fail "duplicate revision setup dispatched"
+held_revision_pid=$(tail -n 1 "$pid_log")
+
 if grep -En 'TypeError|ReferenceError|Cannot assign|failed to load' "$shell_log"; then
   cat "$shell_log" >&2
   echo "client lifecycle check: QML runtime error in the panel" >&2
@@ -569,4 +740,6 @@ fi
 
 badi_stop_private_process_group "$shell_pid" "$test_root"
 shell_pid=""
+wait_for_pid_exit "$held_revision_pid"
+[[ $(jq -r '.desktop.revision.file_state' "$overview_extra") == missing ]] || fail "closed setup reported installed"
 echo "Badi Omarchy client mutation lifecycle check passed"

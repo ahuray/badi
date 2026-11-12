@@ -82,7 +82,10 @@ function Bridge:request(message, callback)
     finish({ ok = false, reason = 'model_offline' })
     return
   end
-  vim.defer_fn(function() finish({ ok = false, reason = 'timeout' }) end, REPLY_TIMEOUT_MS)
+  -- The broker bounds a cold revision call at 40 seconds. Its transport
+  -- client allows 45; give that result time to reach the editor as well.
+  vim.defer_fn(function() finish({ ok = false, reason = 'timeout' }) end,
+    message.op == 'revise' and 47000 or REPLY_TIMEOUT_MS)
 end
 
 function Bridge:_receive(data)

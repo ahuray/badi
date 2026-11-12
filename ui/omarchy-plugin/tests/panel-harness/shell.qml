@@ -28,7 +28,8 @@ ShellRoot {
       panel.showAll = true
       return JSON.stringify(panel.rows().map(function(row) {
         return {key: row.key, label: row.label, detail: row.detail,
-          value: row.value === undefined ? null : row.value, checked: row.checked === true}
+          value: row.value === undefined ? null : row.value, checked: row.checked === true,
+          options: row.options || [], enabled: row.enabled === true}
       }))
     }
 
@@ -38,15 +39,25 @@ ShellRoot {
     }
 
     function activateRow(key: string): void {
-      panel.rows().find(function(row) { return row.key === key }).activate()
+      var row = panel.rows().find(function(row) { return row.key === key })
+      if (row.enabled) row.activate()
     }
+
+    function confirm(accepted: bool): void { panel.resolveConfirmation(accepted) }
 
     function state(): string {
       return JSON.stringify({
-        busy: panel.client.busy,
+        busy: panel.controlsBusy,
         canChange: panel.canChange,
         settingsDocumentValid: panel.client.settingsDocumentValid,
         message: panel.client.message,
+        actionMessage: panel.actionMessage,
+        confirming: panel.confirming,
+        statsReported: panel.statsReported,
+        statsAvailable: panel.statsAvailable,
+        statsWeek: panel.statsWeek(),
+        statsToday: panel.statsTotals("today"),
+        statsLeaders: panel.statsLeaders(3),
         chosenLanguages: panel.chosenLanguages()
       })
     }

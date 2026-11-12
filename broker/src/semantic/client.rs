@@ -418,6 +418,33 @@ impl ClientError {
 /// experiments that must record the requests production makes.
 pub trait RequestObserver: fmt::Debug + Send + Sync {
     fn observe(&self, body: &[u8]);
+
+    fn prompt_budget(&self, _budget: PromptBudget) {}
+}
+
+/// Tokenizer measurements for an explicitly supplied completion prefix.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct PromptBudget {
+    pub draft_tokens: usize,
+    pub prompt_tokens: usize,
+    pub generation_tokens: u16,
+    pub context_tokens: usize,
+}
+
+#[derive(Clone)]
+struct CompletionPrefix(Arc<str>);
+
+impl fmt::Debug for CompletionPrefix {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CompletionPrefix([redacted])")
+    }
+}
+
+impl PromptBudget {
+    #[must_use]
+    pub fn fits(self) -> bool {
+        self.prompt_tokens + usize::from(self.generation_tokens) < self.context_tokens
+    }
 }
 
 /// The loopback runtime's client. Each request uses its own connection:
@@ -426,6 +453,8 @@ pub trait RequestObserver: fmt::Debug + Send + Sync {
 pub struct SemanticClient {
     config: SemanticClientConfig,
     request_observer: Option<Arc<dyn RequestObserver>>,
+    /// Explicit, clone-local experiments only; never populated by the broker.
+    completion_prefix: Option<CompletionPrefix>,
     /// The languages whose trailing space is healed for the loaded model.
     healing: Vec<crate::writing::WritingLanguage>,
     /// The person's language choices, shared by this client's clones.
@@ -440,6 +469,7 @@ impl SemanticClient {
         Ok(Self {
             config,
             request_observer: None,
+            completion_prefix: None,
             healing: crate::writing::TRAILING_SPACE_HEALING.to_vec(),
             preferences: Arc::default(),
             length: Arc::default(),
@@ -485,6 +515,24 @@ impl SemanticClient {
     pub fn with_request_observer(mut self, observer: Arc<dyn RequestObserver>) -> Self {
         self.request_observer = Some(observer);
         self
+    }
+
+    /// Prefix continuation prompts without changing the acquired draft,
+    /// spelling requests, output guards or editing authority. Each actual
+    /// prompt is tokenized inside the writing deadline and must fit the
+    /// production 512-token window, including generation and one spare token.
+    /// The broker never calls this: callers explicitly supply local examples.
+    pub fn with_completion_prefix(mut self, prefix: String) -> Result<Self, ClientError> {
+        if prefix.chars().count() > 4096
+            || prefix.contains("<|")
+            || prefix
+                .chars()
+                .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\t'))
+        {
+            return Err(ClientError::InvalidRequest);
+        }
+        self.completion_prefix = (!prefix.is_empty()).then(|| CompletionPrefix(Arc::from(prefix)));
+        Ok(self)
     }
 
     /// Posts one authenticated JSON `body` to `path` on the owned runtime and
@@ -625,7 +673,10 @@ impl SemanticClient {
         let mut observed = run(plan).await?;
         // A healed lexicon word whose answer began with a shorter token is
         // taken as finished, within the same budget.
-        if let Some(finished) = plan.finished_word(observed.first_token()) {
+        if let Some(finished) = plan
+            .finished_word(observed.first_token())
+            .filter(|_| observed.disposition != CompletionDisposition::LanguageAbstained)
+        {
             observed = run(finished).await?;
         }
         if observed.output.as_deref().is_some_and(|output| {
@@ -656,7 +707,40 @@ impl SemanticClient {
         budget: Duration,
         shape: StreamShape<'_>,
     ) -> Result<ObservedCompletion, ClientError> {
+        if started.elapsed() >= budget {
+            return Ok(ObservedCompletion::writing_budget_abstention(started, 0));
+        }
         let mut payload = plan.payload();
+        if let Some(prefix) = &self.completion_prefix {
+            let prompt = format!("{}{}", prefix.0, plan.prompt);
+            let prepare = async {
+                let draft_tokens = self.count_prompt_tokens(plan.prompt).await?;
+                let prompt_tokens = self.count_prompt_tokens(&prompt).await?;
+                Ok::<_, ClientError>(PromptBudget {
+                    draft_tokens,
+                    prompt_tokens,
+                    generation_tokens: plan.max_tokens,
+                    context_tokens: 512,
+                })
+            };
+            let measured = tokio::select! {
+                biased;
+                () = cancellation.cancelled() => return Err(ClientError::Cancelled),
+                value = tokio::time::timeout_at((started + budget).into(), prepare) => {
+                    match value {
+                        Ok(value) => value?,
+                        Err(_) => return Ok(ObservedCompletion::writing_budget_abstention(started, 0)),
+                    }
+                }
+            };
+            if let Some(observer) = &self.request_observer {
+                observer.prompt_budget(measured);
+            }
+            if !measured.fits() {
+                return Ok(ObservedCompletion::language_abstention());
+            }
+            payload["prompt"] = serde_json::json!(prompt);
+        }
         // The confidence gate needs each token's probability before sampling.
         payload["n_probs"] = serde_json::json!(1);
         payload["post_sampling_probs"] = serde_json::json!(false);
@@ -1096,16 +1180,12 @@ impl SemanticClient {
     async fn correction(
         &self,
         request: &ProviderRequest,
-        explicit: bool,
+        located: Located<'_>,
         cancellation: &CancellationToken,
         started: Instant,
         budget: Duration,
     ) -> Result<Option<WritingProposal>, ProviderError> {
         let spelling = crate::spelling::global();
-        let Some(located) = spelling.locate(&request.before, request.language.as_deref(), explicit)
-        else {
-            return Ok(None);
-        };
         let (target, corrected) = match located {
             Located::English(target) => {
                 let unambiguous = crate::writing::unambiguous_correction(target.word);
@@ -1285,6 +1365,25 @@ impl SemanticClient {
         }
         Ok(())
     }
+
+    async fn count_prompt_tokens(&self, prompt: &str) -> Result<usize, ClientError> {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "content": prompt, "add_special": true, "parse_special": true,
+        }))
+        .map_err(|_| ClientError::InvalidRequest)?;
+        let response = self.post_runtime("/tokenize", body, None).await?;
+        if response.status() != StatusCode::OK {
+            return Err(ClientError::UnexpectedStatus(response.status()));
+        }
+        ensure_content_type(&response, "application/json")?;
+        let bytes = read_bounded_body(response, MAX_RESPONSE_BYTES).await?;
+        let response: TokenizeResponse =
+            serde_json::from_slice(&bytes).map_err(|_| ClientError::MalformedStream)?;
+        if response.tokens.is_empty() {
+            return Err(ClientError::MalformedStream);
+        }
+        Ok(response.tokens.len())
+    }
 }
 
 #[async_trait]
@@ -1318,21 +1417,35 @@ impl CompletionProvider for SemanticClient {
         if let Some(proposal) = self.vocabulary_completion(&request, started) {
             return Ok(ProviderOutcome::Proposal(proposal).into());
         }
-        // A correction replaces the last word of the field; mid-text it stays
-        // editor-owned. It needs a well-formed request, not a language the
-        // model continues in: spelling has its own languages.
-        if allow_replacement
-            && request.after.is_empty()
-            && !request.before.is_empty()
+        // Locate before checking replacement authority: an append-only field
+        // must not continue a suspected typo merely because it cannot fix it.
+        // Spelling keeps its own enabled languages and partial-word guards.
+        if !request.before.is_empty()
+            && !crate::writing::caret_inside_word(&request.before, &request.after)
             && validate_request(&request).is_ok()
         {
             // A spelling-only field's own check counts as asked for.
             let explicit = !matches!(trigger, RequestTrigger::Automatic);
-            if let Some(proposal) = self
-                .correction(&request, explicit, &cancellation, started, budget)
-                .await?
-            {
-                return Ok(ProviderOutcome::Proposal(proposal).into());
+            if let Some(located) = crate::spelling::global().locate(
+                &request.before,
+                request.language.as_deref(),
+                explicit,
+            ) {
+                // A correction replaces the field's last word; mid-text
+                // replacement remains editor-owned. A failed correction also
+                // leaves the typo unresolved, so never fall through to prose.
+                if allow_replacement && request.after.is_empty() {
+                    if let Some(proposal) = self
+                        .correction(&request, located, &cancellation, started, budget)
+                        .await?
+                    {
+                        return Ok(ProviderOutcome::Proposal(proposal).into());
+                    }
+                }
+                if cancellation.is_cancelled() {
+                    return Err(ProviderError::Cancelled);
+                }
+                return Ok(ProviderOutcome::NoSuggestion(NoSuggestionReason::TypoSuspected).into());
             }
         }
         let before = request.before.clone();

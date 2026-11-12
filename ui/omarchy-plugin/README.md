@@ -67,11 +67,15 @@ top:
   `badi-writing` IPC `state()` reports it as `snoozed`. Resuming from the
   switch, `p` or a right-click runs `badi resume`, which ends it too.
 - **Rows** with All settings, in sections: Languages (the chips), Model (the writing model: a chip for each model
-  that fits this device, ★ on the recommendation; picking an Apache-2.0
+  that fits this device, ★ on the recommendation and its memory-fit reason
+  beneath the chips; `badi model` prints every selection reason, including
+  power and compatibility limits; picking an Apache-2.0
   model runs `badi model use`, which downloads it and restarts the model,
   while a Gemma or Llama model first adds a row naming its terms and their
   address, and only Enter or a click on that row accepts them and downloads
-  it), Context ([ADR 0010](../../docs/decisions/0010-context-finishes-words.md):
+  it), Revisions (Qwen3 1.7B's file status, 1.3 GB download and Apache-2.0
+  licence; Install, Repair, or Verify or repair runs `badi revise install`
+  only when activated), Context ([ADR 0010](../../docs/decisions/0010-context-finishes-words.md):
   until you choose, one question, "Finish words from what you see?", with
   Turn on and Not now; afterwards a switch, and while it is on a row per
   allowed app and Forget learned words, each running `badi context`, which
@@ -165,6 +169,19 @@ popout's polls, which otherwise keep the last result. Deactivation terminates
 every child (SIGTERM, then SIGKILL), stale exit handlers change nothing, and a
 reactivation during teardown queues exactly one fresh read.
 
+The Revisions row uses metadata added to the same overview by the desktop
+helper. Polls check only file type and size: **Model file present** does not
+mean its hash was checked or a revision runtime is ready. Explicit
+`badi revise install` verifies existing bytes, or downloads to a private
+staging directory, verifies the pinned size and hash, then replaces the model
+file atomically. A failed download or verification preserves the previous
+file; ordinary cancellation removes only its own stage. The command refuses
+a model that does not fit the device. The broker still verifies its runtime
+and current memory when a selection is revised. This action changes no
+writing-model choice, permission, or document. Missing or inconsistent status
+disables the action and points to `badi revise`; failed repair remains
+retryable. The row is searchable and appears under All settings.
+
 ## Statistics
 
 The popout reports counters since model start, without storing prose:
@@ -225,7 +242,17 @@ bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
   then loads the real `DesktopPanel.qml` through a fake `badi-desktop` and
   checks the written documents for the language chips, the screen-share
   choice and the places question, whose apps come from fake desktop entries
-  (an editor plugin's app and an unsupported app are never offered).
+  (an editor plugin's app and an unsupported app are never offered). The
+  synthetic `tests/model-stats.json` overview also covers the running model
+  versus the recommendation, fit filtering and explanation, both licence
+  confirmation paths, cancellation, command arguments and failed downloads.
+  History checks compare daily counts and app/site labels, exercise Forget's
+  confirmation, and cover unavailable statistics and older overviews.
+  Revision setup checks missing, present, damaged, unavailable and no-fit
+  states, exact install arguments, failure and retry, duplicate activation
+  denial and cleanup during a held action. Controller tests cover same-size
+  corruption, concurrent private staging, symlink refusal, failed repairs,
+  SIGTERM cleanup and metadata-only polling.
 - **`tests/check-host.sh`** is CI's strict lane. It runs against an exact
   Omarchy checkout (`BADI_OMARCHY_ROOT`) with the official validator, host-file
   hashes, `qmllint` and the lifecycle.
@@ -237,6 +264,11 @@ scaling or multi-monitor behavior, which need a real Omarchy session.
 
 | Omarchy | Quickshell, Qt declarative | Lane | Result |
 | --- | --- | --- | --- |
+| 4.5.0-3 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | installed panel and controller, `bab1b04` dirty, 2026-11-12 | `wtype` search found Revisions, Enter verified the existing pinned model, and the full success footer was inspected at 2× scale. Installed doctor passed. Missing/corrupt/download-failure cases remain fixture evidence. Receipts and captures: `output/revision-setup/installed/` |
+| 4.5.0-3 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | isolated controller/lifecycle and offscreen `SettingsView.qml`, 2026-11-12 | Revisions missing, present, damaged and failed-repair states are legible; install/retry, no-fit denial and held-action cleanup pass with synthetic files and commands. No model downloaded or installed desktop changed. Renders, commands and hashes: `output/revision-setup/` |
+| 4.5.0-3 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | installed source at `bab1b04` plus uncommitted changes, 2026-11-12 | authorised desktop/Neovim/panel installation and `badi doctor` passed; the live popout's keyboard search shows the current/recommended model, wrapped memory-fit reason and real seven-day usage. No model or policy changed. Cropped capture, source hashes, healthy doctor report and rollback paths: `output/native-trials/2026-11-12-cotypist-install/` |
+| `ac2690c` (`v4.5.0`) | 0.3.2-1, 6.12.0-1 | exact CI Arch image and 2026-10-18 package snapshot, readonly source mount | full `check-host.sh` passed, including validator, hashes, lint and expanded lifecycle; `output/panel-model-rationale/pinned-host.log` and `pinned-host-sources.json`. Node models passed separately on the workstation; no installed-desktop claim |
+| 4.5.0-3 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | isolated offscreen `SettingsView.qml` with the host components and synthetic `model-stats.json` | `output/panel-model-rationale/model.png` and `model-terms.png`: fit explanation wraps within the 420 px view; fixture rendering, not installed desktop proof |
 | 4.5.0-3 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | `omarchy:check` and the strict `check-source.sh` against the `v4.5.0` checkout and the installed host (qmllint, validator, host hashes, lifecycle) | pass; `check-host.sh` not run, it pins quickshell 0.3.2-1 and qt6-declarative 6.12.0-1 |
 | 4.5.0rc3-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | `omarchy:check` and the strict `check-source.sh` against the `v4.5.0-rc3` checkout (qmllint, validator, host hashes, lifecycle) | pass; `check-host.sh` not run, it pins quickshell 0.3.2-1 and qt6-declarative 6.12.0-1 |
 | 4.5.0rc1-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | `omarchy:check` and the strict `check-source.sh` (qmllint, validator, host hashes, lifecycle) | pass; `check-host.sh` not run, it pins quickshell 0.3.2-1 and qt6-declarative 6.12.0-1 |

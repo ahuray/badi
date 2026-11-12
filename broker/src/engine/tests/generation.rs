@@ -3,6 +3,66 @@
 use super::*;
 
 #[tokio::test]
+async fn unresolved_typo_clears_and_counts_without_an_inference_request() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("listener");
+    let provider = crate::semantic::client::SemanticClient::new(
+        crate::semantic::client::SemanticClientConfig::new(
+            listener.local_addr().expect("address"),
+            "typo-fixture",
+            "public-fixture-token",
+        )
+        .expect("config"),
+    )
+    .expect("client");
+    // This adapter does not negotiate replacement authority.
+    let (broker, id, mut events) =
+        setup(std::sync::Arc::new(provider), BrokerConfig::default()).await;
+    let mut update = context(1, FieldPurpose::Normal);
+    update.before = "The shipping adress ".to_owned();
+    update.selection.anchor = 20;
+    update.selection.head = 20;
+    broker
+        .update_context(coordinates(id, 1), update.clone())
+        .await
+        .expect("context");
+    broker
+        .request_suggestion(
+            coordinates(id, 1),
+            SuggestRequestPayload {
+                fingerprint: update.fingerprint,
+                explicit: false,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    let BrokerEvent::SuggestionClear { payload, .. } =
+        timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("deadline")
+            .expect("event")
+    else {
+        panic!("expected no-suggestion clear");
+    };
+    assert_eq!(payload.reason, ReasonCode::NoSuggestion);
+    let metrics = broker.metrics().snapshot();
+    assert_eq!(metrics.provider_calls, 1);
+    assert_eq!(metrics.provider_errors, 0);
+    assert_eq!(metrics.suggestions_shown, 0);
+    let counts = metrics.no_suggestion.expect("breakdown");
+    assert_eq!(counts.typo_suspected, 1);
+    assert_eq!(counts.total(), 1);
+    assert_eq!(counts.last, Some(NoSuggestionReason::TypoSuspected));
+    assert!(
+        timeout(Duration::from_millis(10), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn normal_provider_abstention_clears_without_recording_a_failure() {
     let (broker, id, mut events) = setup(
         std::sync::Arc::new(crate::provider::DeterministicPhraseProvider::default()),

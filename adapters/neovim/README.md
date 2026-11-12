@@ -37,6 +37,53 @@ than plain Insert also keep Badi quiet. Badi cannot tell a secret from its
 words: put `vim.b.badi_disable = true` in an autocommand for anything else
 sensitive.
 
+## Selection revision
+
+In an eligible prose buffer, select 1–600 characters on one line with
+characterwise Visual mode (`v`) and press Ctrl+Shift+Space. The first request
+checks grammar, the next refines wording; for a word or short phrase, later
+presses offer a synonym, then another synonym. A `no_change` answer also
+allows the next mode; a refusal retires the cycle, so the next chord starts
+with grammar. It uses the broker's separate
+[revision model and output gate](../../broker/README.md#selection-revision).
+Nothing is revised automatically.
+
+The original selection stays intact. A nonfocusable preview near the selection marks removed
+text as `[-text]` and added text as `[+text]`, using `BadiRevisionRemoved`
+and `BadiRevisionAdded` (linked to `DiffDelete` and `DiffAdd`). Tab replaces
+the entire selection in one native undo step. Escape, another key, an edit,
+selection or mode change, window/buffer/focus loss, pause, expiry or a failed
+connection withdraws it. The complete preview stays inside the requesting
+window, moving above the selection when necessary. It must fit within half the window's height;
+otherwise `preview_unavailable` refuses acceptance. Existing Visual Tab maps
+return when the preview ends.
+
+Linewise, blockwise, multiline, virtual-space and unsupported selections are
+refused. Forward/reverse and inclusive/exclusive selections use Neovim's
+`getregion()` and `getregionpos()`; a build without those functions refuses
+the feature. Native byte ranges and broker Unicode-scalar ranges are both
+bound to the exact window, buffer, changedtick, selection endpoints and text.
+A broker grant for another range or text changes nothing.
+
+A direct synonym mapping can skip the grammar/refine steps:
+
+```lua
+vim.keymap.set('x', '<leader>bs', function() require('badi').revise('synonyms') end)
+```
+
+`require('badi').revise('grammar')` and `revise('refine')` work the same way.
+Map these functions in Visual mode; an Ex command that leaves Visual mode
+does not reuse old selection marks. The bridge gives a revision request
+45 seconds (the broker bounds inference at 40), and Neovim allows 47 seconds
+for the reply. Shown revisions expire after 60 seconds. Repeated synonyms
+keep one session with newer revisions; edits and cancellation discard it.
+
+An unavailable revision shows `run badi revise`; `:BadiStatus` keeps the raw
+reason and the same recovery hint. That command distinguishes model setup
+from other availability limits; `badi revise install` verifies or repairs
+the model. Timeouts, unsupported languages and invalid output retain their
+own reasons and never mean that the model needs downloading.
+
 ## Configuration
 
 The plugin sets itself up from `vim.g.badi` when Neovim starts. Calling
@@ -153,7 +200,51 @@ npm run editors:integration   # broker.test.mjs: plugin + bridge + real phrase b
 ```
 
 Both drive a headless Neovim through its RPC socket with `nvim --server`. The
-scripted lane covers inline display and cursor placement, Tab (one word) and
+selection lane covers marked previews, forward/reverse and exclusive Unicode
+ranges, native undo, policy-before-acquisition, changed selections, late and
+mismatched grants, cancellation, and repeated synonyms against the real
+broker's deterministic reviser. Neovim 0.12.6's actual rendered screen grid
+also captures the complete preview at the viewport bottom, acceptance, undo,
+two synonyms and dismissal (`output/neovim-selection-revision/fixture-grid.json`, local evidence).
+This is the source plugin with a private phrase broker. A separate private
+real-model RPC trial captured the marked grammar edit, exact selected-range
+replacement, one native undo and pending cancellation. Its first synonym
+request for `big` was refused as `invalid_output`; the original failed receipt
+is retained in `output/neovim-selection-revision/real-model-rpc/`.
+The follow-up proved that refusal leaves the selection and document unchanged,
+then applied and undid `look after → take care of`. That positive phrase was
+selected from a development comparison, not held-out quality evidence. A
+repeated request returned `no_change`, so two distinct real-model synonyms are
+not proven (`output/neovim-selection-revision/real-model-rpc-follow-up/`).
+These trials used Qwen3 1.7B through the real revision runtime and the source
+plugin, with keys injected over Neovim RPC. The desktop was locked during
+those runs and was left untouched.
+
+After authorized installation and normal unlock, foot 1.28.0 with Neovim
+0.12.6 (`-u NORC`, installed start package and bridge, persistent broker)
+showed the complete grammar, refine and synonym previews. Ctrl+Shift+Space,
+Tab, native `u` and Escape passed through the compositor and terminal using
+`wtype`; RPC only prepared disposable text and read state. Grammar and the
+development-selected `look after → take care of` each replaced only the
+selection and undid once; dismissal and in-flight cancellation left text
+unchanged. `big` synonyms abstained (`invalid_output` in the completed run,
+`no_change` in the retained earlier attempt). Captures, trace, installed
+file hashes and doctor receipt are in
+`output/native-trials/2026-11-12-installed-neovim-selection/`.
+These are synthesized keys, not physical keyboard presses, and this clean
+startup does not test the user's LazyVim configuration. A separate recorded
+grammar probe exposed the model's `big **cat**` offer; it was visibly marked
+and dismissed without acceptance
+(`output/native-trials/2026-11-12-installed-neovim-selection-markup/`).
+After the markup guard was installed (broker SHA-256 `03dbe4b200e6…`),
+the exact `The |big| house` grammar request returned `invalid_output` with
+trace outcome `shape`, no preview and no edit. An ordinary `I has went →
+I have gone` preview, Tab replacement and single native undo still passed
+through the same installed plugin and `wtype` route; inspected captures and
+the new doctor receipt are in
+`output/native-trials/2026-11-12-installed-neovim-selection-markup-fixed/`.
+
+The scripted lane covers inline display and cursor placement, Tab (one word) and
 Ctrl+Right (all of it), exact spelling replacement (including a typed space,
 a mismatched grant and a stale grant),
 one-step undo with typing before and after, multibyte (German and Persian)
@@ -170,9 +261,17 @@ so they must run there.
 
 ## Tested with
 
+The installed recovery trial's [marked preview](../../docs/evidence/neovim-revision-preview.png)
+and [field after Tab](../../docs/evidence/neovim-revision-applied.png) are
+scoped Hyprland captures of the disposable draft described below.
+
 | Neovim | Where | Provider | Result |
 | --- | --- | --- | --- |
-| 0.12.5, 0.12.6 | headless, both lanes above | phrase fixture | pass |
+| 0.12.6 | headless, both lanes above, including selection revision | phrase fixture | pass |
+| 0.12.6 | headless source plugin, private broker, RPC keys | real revision model (Qwen3 1.7B) | marked grammar and development-selected synonym preview, exact replacement, one undo, cancellation and safe `big` refusal; repeated positive synonym returns `no_change`; evidence and limits above |
+| 0.12.6 | foot 1.28.0, `-u NORC`, installed start package and bridge, `wtype` keys (2026-11-12, `bab1b04` dirty; broker SHA-256 `7b7d423219da…`) | persistent real revision model (Qwen3 1.7B) | complete grammar/refine/synonym previews inspected; Tab replacement, one native undo, Escape and pending cancellation; exact source hashes, receipts and model limits above |
+| 0.12.6 | same installed foot/plugin route after the markup guard (broker SHA-256 `03dbe4b200e6…`) | persistent real revision model (Qwen3 1.7B) | exact `big` grammar request refused with `shape`/`invalid_output`, no preview or edit; ordinary marked grammar preview, Tab and one native undo passed |
+| 0.12.6 | installed recovery update, foot 1.28.0, `-u NORC`, `wtype` keys; same broker hash (2026-11-12) | persistent real revision model (Qwen3 1.7B) | two refused `big` requests both stayed grammar; marked `I has went` → `I have gone`, Tab and one native undo passed. Owned-window captures, exact installed hashes and clean shutdown: `output/revision-recovery/installed-live/trial-lBOV2P/`. Unavailable-model notices remain fixture evidence; desktop model files were kept intact |
 | 0.12.5 | foot, `nvim -u NONE` with the installed start package | real model | pause preview, Tab word by word, Ctrl+→, Insert-mode exit dismisses, streamed growth in the trace |
 | 0.12.5 | foot, this workstation's LazyVim through the installer's lazy.nvim spec | real model | as above, plus Ctrl+Shift+Space as an explicit request; no `output_rejected` in the trace |
 | 0.12.6 | Ghostty, the same LazyVim setup | real model | Tab, Ctrl+→ and Ctrl+Shift+Space |

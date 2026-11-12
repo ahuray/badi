@@ -8,8 +8,9 @@ vim.api.nvim_create_user_command('BadiReconnect', function() require('badi').rec
   { desc = 'Badi: restart the broker bridge with fresh policy' })
 vim.api.nvim_create_user_command('BadiStatus', function()
   local status = require('badi').status()
-  vim.api.nvim_echo({ { string.format('Badi: %s · bridge %s · %s', status.status,
-    status.bridge and 'running' or 'stopped', status.blocked and status.blocked:gsub('_', ' ') or 'eligible') } },
+  local action = status.status == 'revision_unavailable' and ' · run badi revise' or ''
+  vim.api.nvim_echo({ { string.format('Badi: %s · bridge %s · %s%s', status.status,
+    status.bridge and 'running' or 'stopped', status.blocked and status.blocked:gsub('_', ' ') or 'eligible', action) } },
     false, {})
 end, { desc = 'Badi: content-free status' })
 

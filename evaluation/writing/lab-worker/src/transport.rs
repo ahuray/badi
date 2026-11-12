@@ -134,12 +134,21 @@ impl LabObservation<'_> {
 /// Records the body of each request the production client sends, so a
 /// record can show exactly what production asked the runtime.
 #[derive(Debug, Default)]
-pub(crate) struct RequestTrace(Mutex<Vec<Option<Value>>>);
+pub(crate) struct RequestTrace {
+    requests: Mutex<Vec<Option<Value>>>,
+    budgets: Mutex<Vec<badi_broker::semantic::client::PromptBudget>>,
+}
 
 impl RequestObserver for RequestTrace {
     fn observe(&self, body: &[u8]) {
-        if let Ok(mut requests) = self.0.lock() {
+        if let Ok(mut requests) = self.requests.lock() {
             requests.push(serde_json::from_slice(body).ok());
+        }
+    }
+
+    fn prompt_budget(&self, budget: badi_broker::semantic::client::PromptBudget) {
+        if let Ok(mut budgets) = self.budgets.lock() {
+            budgets.push(budget);
         }
     }
 }
@@ -147,7 +156,11 @@ impl RequestObserver for RequestTrace {
 impl RequestTrace {
     /// The recorded JSON bodies, or `None` if any body was not JSON.
     pub(crate) fn requests(&self) -> Option<Vec<Value>> {
-        self.0.lock().ok()?.iter().cloned().collect()
+        self.requests.lock().ok()?.iter().cloned().collect()
+    }
+
+    pub(crate) fn budgets(&self) -> Option<Vec<badi_broker::semantic::client::PromptBudget>> {
+        Some(self.budgets.lock().ok()?.clone())
     }
 }
 
@@ -160,8 +173,11 @@ pub(crate) async fn apply_template(
     cancellation: CancellationToken,
 ) -> Result<String, ClientError> {
     let operation = async {
-        let body = serde_json::to_vec(&json!({"messages":messages}))
-            .map_err(|_| ClientError::InvalidRequest)?;
+        // A continuation prefills the final answer, never a reasoning turn.
+        // b11840 reads this nested boolean; a top-level flag is ignored.
+        let body = serde_json::to_vec(&json!({"messages":messages,
+            "chat_template_kwargs":{"enable_thinking":false}}))
+        .map_err(|_| ClientError::InvalidRequest)?;
         let response = client
             .post_runtime(
                 "/apply-template",

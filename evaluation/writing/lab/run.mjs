@@ -5,7 +5,7 @@ import { resolve, relative, join, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { createLabServer, validateConfigs, FIXED_MODES, LENGTHS } from './server.mjs';
-import { LabWorker } from './worker.mjs';
+import { LabWorker, assertRuntimeThreads } from './worker.mjs';
 import { validateSuite, planComparison, warmSchedule, summarizeResults } from './cases.mjs';
 import { REVISION_MODES, validateRevisionSuite, planRevision, revisionRequest, validateRevisionResult, scoreRevision,
   summarizeRevision } from './revision.mjs';
@@ -26,6 +26,9 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const jsonBytes = value => JSON.stringify(value, null, 2) + '\n';
 
 export function parseOptions(args, cwd = process.cwd()) {
+  if (args.filter(arg => arg === '--threads' || arg.startsWith('--threads=')).length > 1) {
+    throw new Error('Supply --threads only once.');
+  }
   const { values } = parseArgs({ args, strict: true, options: {
     suite: { type: 'string' }, output: { type: 'string' },
     modes: { type: 'string', default: 'production_boundary,context' },
@@ -33,7 +36,7 @@ export function parseOptions(args, cwd = process.cwd()) {
     seed: { type: 'string', default: '42' }, 'cache-prompt': { type: 'string' },
     'warm-prefix': { type: 'string' },
     'model-artifact': { type: 'string' }, 'prefill-batch': { type: 'string' },
-    'memory-map': { type: 'string' }, lengths: { type: 'string' },
+    'memory-map': { type: 'string' }, threads: { type: 'string' }, lengths: { type: 'string' },
   } });
   if (!values.suite || !values.output) throw new Error('Supply --suite PATH and --output NEWDIR under output/writing.');
   const integer = (name, min, max) => {
@@ -48,7 +51,7 @@ export function parseOptions(args, cwd = process.cwd()) {
     if (!modes.every(mode => Object.hasOwn(REVISION_MODES, mode)) || new Set(modes).size !== modes.length) {
       throw new Error(`Run the revision modes (${Object.keys(REVISION_MODES).join(', ')}) apart from prediction modes, each once.`);
     }
-    const fixed = ['budget-ms', 'max-tokens', 'cache-prompt', 'warm-prefix', 'model-artifact', 'prefill-batch', 'memory-map', 'lengths'];
+    const fixed = ['budget-ms', 'max-tokens', 'cache-prompt', 'warm-prefix', 'model-artifact', 'prefill-batch', 'memory-map', 'threads', 'lengths'];
     if (fixed.some(name => values[name] !== undefined)) throw new Error('The revision modes use the broker revision settings; drop the prediction options.');
     return { revision: true, suitePath: resolve(cwd, values.suite), outputPath: resolve(cwd, values.output),
       modes: modes.map(mode => REVISION_MODES[mode]), seed: integer('seed', 0, 2147483647) };
@@ -60,6 +63,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   if (!['true', 'false'].includes(values['cache-prompt'])) throw new Error('--cache-prompt must be true or false.');
   if (values['prefill-batch'] !== undefined && !['16', '64'].includes(values['prefill-batch'])) throw new Error('Use --prefill-batch 16 or 64.');
   if (values['memory-map'] !== undefined && !['true', 'false'].includes(values['memory-map'])) throw new Error('Use --memory-map true or false.');
+  if (values.threads !== undefined && !['1', '2', '3', '4'].includes(values.threads)) throw new Error('--threads must be an integer from 1 to 4.');
   if (values['warm-prefix'] !== undefined && values['warm-prefix'] !== 'true') throw new Error('--warm-prefix must be true when present.');
   const warmPrefix = values['warm-prefix'] === 'true';
   // Each suggestion length is its own production_boundary configuration;
@@ -81,6 +85,7 @@ export function parseOptions(args, cwd = process.cwd()) {
   return { suitePath: resolve(cwd, values.suite), outputPath: resolve(cwd, values.output), configs, seed, warmPrefix,
     ...(values['prefill-batch'] !== undefined ? { prefillBatch: Number(values['prefill-batch']) } : {}),
     ...(values['memory-map'] !== undefined ? { memoryMap: values['memory-map'] === 'true' } : {}),
+    ...(values.threads !== undefined ? { threads: Number(values.threads) } : {}),
     ...(values['model-artifact'] !== undefined ? { modelArtifactPath: modelArtifactPath(values['model-artifact']) } : {}) };
 }
 
@@ -200,7 +205,8 @@ export class ObservedWorker extends LabWorker {
       if (pid && !this.executions.some(value => value.pid === pid)) {
         const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
         const start = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
-        this.executions.push({ pid, start_ticks: start, executable: await fileIdentity(`/proc/${pid}/exe`, this.fileCache), runtime_identity: identity });
+        this.executions.push({ pid, start_ticks: start, executable: await fileIdentity(`/proc/${pid}/exe`, this.fileCache), runtime_identity: identity,
+          ...(this.threads !== undefined ? { requested_threads: this.threads } : {}) });
       }
       // super.start has already captured runtime ownership for awaited cleanup.
       assertModelArtifactIdentity(identity, this.artifact);
@@ -212,12 +218,15 @@ export class ObservedWorker extends LabWorker {
   }
   async stop() {
     const pid = this.session?.child.pid;
+    const threads = this.threads === undefined ? {} : {
+      requested_threads: this.threads, actual_threads: this.session?.runtimeThreads ?? null,
+    };
     try {
       const receipt = await super.stop();
-      if (pid) this.cleanups.push({ worker_pid: pid, completed: true, runtime_receipt: receipt ?? null });
+      if (pid) this.cleanups.push({ worker_pid: pid, completed: true, runtime_receipt: receipt ?? null, ...threads });
       return receipt;
     } catch (error) {
-      if (pid) this.cleanups.push({ worker_pid: pid, completed: false, error: error.message });
+      if (pid) this.cleanups.push({ worker_pid: pid, completed: false, error: error.message, ...threads });
       throw error;
     }
   }
@@ -270,7 +279,8 @@ export async function runSuite(options, { worker: suppliedWorker, outputRoot = O
     finally { await file.close(); }
   });
   const beforeSources = await sourceHashes();
-  const worker = suppliedWorker ?? new ObservedWorker({ artifact, prefillBatch: options.prefillBatch ?? 16, memoryMap: options.memoryMap ?? true });
+  const worker = suppliedWorker ?? new ObservedWorker({ artifact, prefillBatch: options.prefillBatch ?? 16, memoryMap: options.memoryMap ?? true,
+    ...(options.threads !== undefined ? { threads: options.threads } : {}) });
   const declaredWorker = suppliedWorker ? null : await fileIdentity(WORKER_BINARY);
   const started = new Date().toISOString();
   const initial = { schema: 'badi.prediction-lab.cli-run.v1', started_at: started,
@@ -279,6 +289,7 @@ export async function runSuite(options, { worker: suppliedWorker, outputRoot = O
     provenance: { execution_kind: suppliedWorker ? 'injected_fixture' : 'local_model_worker', node: process.version,
       ...(options.prefillBatch !== undefined ? { requested_prefill_batch: options.prefillBatch } : {}),
       ...(options.memoryMap !== undefined ? { requested_memory_map: options.memoryMap } : {}),
+      ...(options.threads !== undefined ? { requested_threads: options.threads } : {}),
       declared_worker: declaredWorker, source_sha256: beforeSources, model_artifact: modelArtifactProvenance(artifact) },
     evidence: 'Explicit development inputs; expected outputs are scoring-only append strings. This run does not qualify applications, human usefulness or Cotypist parity.' };
   await save('suite-input.json', suiteBytes);
@@ -312,6 +323,7 @@ export async function runSuite(options, { worker: suppliedWorker, outputRoot = O
           || JSON.stringify(record.config) !== JSON.stringify(configs.find(value => value.id === item.config_id))) throw new Error('The lab result differs from its scheduled case or configuration.');
         await assertModelArtifactUnchanged(artifact);
         assertModelArtifactIdentity(record.result?.identity, artifact);
+        assertRuntimeThreads(record.result?.identity, options.threads);
         session.records.push(record);
         onProgress({ completed: session.records.length, total: plan.length, case_id: item.case_id, config_id: item.config_id });
       } else if (event.type === 'cleanup') {

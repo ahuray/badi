@@ -38,9 +38,11 @@ end
 --- Why `buf` in `win` cannot be read now, or nil when it can.
 --- `facts` carries editor state that is not a buffer option, so this stays
 --- testable: { mode, pumvisible, executing, focused }.
-function M.blocked_reason(buf, config, facts)
+function M.blocked_reason(buf, config, facts, selection)
   if vim.g.badi_disable == true or vim.b[buf].badi_disable == true then return 'disabled' end
-  if facts.mode ~= 'i' then return 'not_insert_mode' end
+  if selection then
+    if facts.mode ~= 'v' then return 'characterwise_selection_required' end
+  elseif facts.mode ~= 'i' then return 'not_insert_mode' end
   if facts.pumvisible then return 'completion_menu' end
   if facts.executing then return 'macro_running' end
   if not facts.focused then return 'editor_not_focused' end

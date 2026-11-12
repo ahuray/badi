@@ -9,6 +9,12 @@ import { assertModelArtifactIdentity, assertModelArtifactUnchanged, modelArtifac
 
 const binary = fileURLToPath(new URL('../../../target/release/badi-writing-lab', import.meta.url));
 
+export function assertRuntimeThreads(identity, threads) {
+  if (threads !== undefined && identity?.threads !== threads) {
+    throw new Error(`The model runtime does not match the selected thread count (${threads} requested, ${identity?.threads ?? 'missing'} actual).`);
+  }
+}
+
 export function parseProcessStat(pid, value) {
   if (!Number.isSafeInteger(pid) || pid <= 1 || pid > 0xffffffff) throw new Error('Invalid model process PID.');
   const end = typeof value === 'string' ? value.lastIndexOf(')') : -1;
@@ -101,20 +107,22 @@ async function cleanupRuntime(identity) {
 export class LabWorker {
   // `revision` starts the revision lane's worker, whose runtime launch the
   // broker fixes, so it takes no batch or loading option.
-  constructor({ executable = binary, args = [], startupMs = 30000, prefillBatch = 16, memoryMap = true, revision = false } = {}) {
+  constructor({ executable = binary, args = [], startupMs = 30000, prefillBatch = 16, memoryMap = true, threads, revision = false } = {}) {
     if (![16, 64].includes(prefillBatch) || typeof memoryMap !== 'boolean' || !Array.isArray(args)
-      || typeof revision !== 'boolean' || (revision && (prefillBatch !== 16 || !memoryMap))
-      || args.some(arg => typeof arg !== 'string' || ['--prefill-batch', '--memory-map', '--revision-lab']
+      || (threads !== undefined && ![1, 2, 3, 4].includes(threads))
+      || typeof revision !== 'boolean' || (revision && (prefillBatch !== 16 || !memoryMap || threads !== undefined))
+      || args.some(arg => typeof arg !== 'string' || ['--prefill-batch', '--memory-map', '--threads', '--revision-lab']
         .some(flag => arg === flag || arg.startsWith(flag + '=')))) {
-      throw new Error('Select prefillBatch 16 or 64 and a boolean memoryMap through worker options, not raw arguments.');
+      throw new Error('Select prefillBatch 16 or 64, a boolean memoryMap, and optional threads 1–4 through prediction worker options, not raw arguments.');
     }
     this.executable = resolve(executable);
     this.revision = revision;
     this.args = revision ? ['--revision-lab', ...args] : [...args, ...(prefillBatch === 64 ? ['--prefill-batch', '64'] : []),
-      ...(!memoryMap ? ['--memory-map', 'false'] : [])];
+      ...(!memoryMap ? ['--memory-map', 'false'] : []), ...(threads !== undefined ? ['--threads', String(threads)] : [])];
     this.originalArgs = [...this.args];
     this.prefillBatch = prefillBatch;
     this.memoryMap = memoryMap;
+    this.threads = threads;
     this.startupMs = startupMs;
     this.session = null;
     this.runtimeExecutableCache = new Map();
@@ -184,6 +192,10 @@ export class LabWorker {
             try {
               session.runtime = await verifyRuntime(message, child.pid, this.runtimeExecutableCache,
                 this.revision ? null : { prefillBatch: this.prefillBatch, memoryMap: this.memoryMap });
+              // Capture ownership before rejecting a launch mismatch, so stop
+              // still reaps this exact runtime even if the worker crashes.
+              session.runtimeThreads = message.identity.threads;
+              assertRuntimeThreads(message.identity, this.threads);
               assertModelArtifactIdentity(message.identity, this.modelArtifact);
               if (session.closed || session.stopping) return;
               session.identity = message.identity;

@@ -202,6 +202,38 @@ class DesktopTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(RuntimeError):
                 desktop.main(invalid)
 
+    def test_model_command_explains_recommendation_and_no_fit_in_text_and_json(self):
+        model = {'id': 'qwen3-1.7b', 'name': 'Qwen3 1.7B', 'filename': 'model.gguf',
+                 'download_bytes': 1800000000, 'license': 'Apache-2.0', 'languages': ['en'],
+                 'screen_useful': 70, 'fits': True}
+        fit = 'The 1800 MiB artifact plus 1024 MiB conservative runtime headroom fits within 4096 MiB usable host memory.'
+        power = 'Power state is unknown, so the candidate is capped below quality.'
+        for recommendation, reasons in ((model, [fit, power]),
+                                        (None, ['No pinned writing model fits the available memory.'])):
+            with self.subTest(recommended=recommendation is not None):
+                advice = {'recommended': recommendation, 'hardware': {'memory': 8192},
+                          'rationale': reasons, 'catalog': [dict(model, fits=recommendation is not None)]}
+                with patch.object(desktop, 'model_advice', return_value=advice), \
+                     patch.object(desktop, 'active_model_file', return_value=None), \
+                     patch.object(desktop, 'control', return_value='{}') as control, \
+                     contextlib.redirect_stdout(io.StringIO()) as output:
+                    desktop.main(['model'])
+                text = output.getvalue()
+                self.assertEqual(control.call_args.args[0], ['settings', 'show', '--json'])
+                self.assertIn('Recommended for this device: Qwen3 1.7B.' if recommendation
+                              else 'No model is recommended for this device.', text)
+                for reason in reasons:
+                    self.assertIn(reason, text)
+                self.assertIn('not a qualification', text)
+                with patch.object(desktop, 'model_advice', return_value=advice), \
+                     patch.object(desktop, 'active_model_file', return_value=None), \
+                     patch.object(desktop, 'control', return_value='{}'), \
+                     contextlib.redirect_stdout(io.StringIO()) as output:
+                    desktop.main(['model', '--json'])
+                report = json.loads(output.getvalue())
+                self.assertEqual(report['rationale'], reasons)
+                self.assertEqual(report['recommended'], model['id'] if recommendation else None)
+
     def test_an_unknown_form_of_any_command_changes_nothing(self):
         untouched = AssertionError('an unknown form must not reach the broker, settings or systemd')
 
@@ -1377,24 +1409,170 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual((sent['revision'], sent['writing_languages'], sent['spelling_languages'], sent['languages_chosen']),
                          (4, ['de', 'fr'], ['de', 'fr'], True))
 
-    def test_revise_reports_and_installs_only_the_missing_revision_model(self):
-        catalog = {"catalog": [{"id": "qwen3-1.7b", "name": "Qwen3 1.7B", "filename": "Qwen3-1.7B-Q4_K_M.gguf",
-                                "download_bytes": 1_282_439_264, "license": "Apache-2.0", "fits": True}]}
+    def revision_catalog(self, weights=b"verified synthetic weights"):
+        return {"catalog": [{"id": "qwen3-1.7b", "name": "Qwen3 1.7B", "filename": "revision.gguf",
+                             "download_bytes": len(weights), "sha256": hashlib.sha256(weights).hexdigest(),
+                             "repository": "fixture/model", "revision": "pinned", "license": "Apache-2.0", "fits": True}]}
+
+    def test_revision_status_uses_metadata_without_hashing_or_extra_advice(self):
+        catalog = self.revision_catalog()
+        target = self.directory / "revision.gguf"
+        with patch.object(desktop, "MODEL_DIRECTORY", self.directory), \
+             patch.object(desktop, "model_advice", side_effect=AssertionError("reuse overview catalog")), \
+             patch.object(desktop, "verified_revision_model", side_effect=AssertionError("no polling hash")):
+            for content, state in [(None, "missing"), (b"broken", "invalid"),
+                                   (b"verified synthetic weights", "present")]:
+                if content is not None:
+                    target.write_bytes(content)
+                report, _model = desktop.revision_report(catalog)
+                self.assertEqual(report["file_state"], state)
+                self.assertEqual(report["installed"], state == "present")
+            target.unlink()
+            target.symlink_to(self.directory / "missing-target")
+            self.assertEqual(desktop.revision_report(catalog)[0]["file_state"], "invalid")
+            target.unlink()
+            target.mkdir()
+            self.assertEqual(desktop.revision_report(catalog)[0]["file_state"], "invalid")
+            with patch.object(Path, "lstat", side_effect=PermissionError("private")):
+                self.assertEqual(desktop.revision_report(catalog)[0]["file_state"], "unreadable")
+
+    def test_revision_install_repairs_size_and_same_size_hash_then_verifies_without_download(self):
+        weights = b"verified synthetic weights"
+        catalog = self.revision_catalog(weights)
+        target = self.directory / "revision.gguf"
         with patch.object(desktop, "model_advice", return_value=catalog), \
              patch.object(desktop, "MODEL_DIRECTORY", self.directory), \
-             patch.object(desktop.badi_install, "download_model") as download:
-            report, _model = desktop.revision_report()
-            self.assertEqual((report["model"], report["installed"]), ("qwen3-1.7b", False))
-            installed, downloaded = desktop.install_revision_model()
-            self.assertTrue(downloaded and installed["installed"])
-            download.assert_called_once()
-            (self.directory / "Qwen3-1.7B-Q4_K_M.gguf").write_bytes(b"weights")
-            self.assertEqual(desktop.install_revision_model()[1], False, "nothing downloads twice")
-            download.assert_called_once()
+             patch("urllib.request.urlopen", side_effect=lambda *_a, **_k: io.BytesIO(weights)) as download, \
+             contextlib.redirect_stdout(io.StringIO()):
+            for old in [None, b"broken", b"x" * len(weights)]:
+                if old is not None:
+                    target.write_bytes(old)
+                report, changed = desktop.install_revision_model()
+                self.assertTrue(changed and report["installed"])
+                self.assertEqual(target.read_bytes(), weights)
+                self.assertEqual(list(self.directory.glob(".revision-*")), [])
+            self.assertEqual(download.call_count, 3)
+            report, changed = desktop.install_revision_model()
+            self.assertFalse(changed)
+            self.assertEqual(download.call_count, 3)
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                desktop.main(["revise", "install"])
+            self.assertIn("verified", output.getvalue())
+            self.assertNotIn("already installed", output.getvalue())
             catalog["catalog"][0]["fits"] = False
-            (self.directory / "Qwen3-1.7B-Q4_K_M.gguf").unlink()
             with self.assertRaisesRegex(RuntimeError, "does not fit"):
                 desktop.install_revision_model()
+            self.assertEqual(target.read_bytes(), weights, "valid files do not imply current memory fit")
+            target.write_bytes(b"broken")
+            with self.assertRaisesRegex(RuntimeError, "does not fit"):
+                desktop.install_revision_model()
+            self.assertEqual(download.call_count, 3)
+
+    def test_revision_failed_or_cancelled_repair_keeps_existing_bytes_and_cleans_its_stage(self):
+        catalog = self.revision_catalog()
+        target = self.directory / "revision.gguf"
+        target.write_bytes(b"old broken bytes")
+        with patch.object(desktop, "model_advice", return_value=catalog), \
+             patch.object(desktop, "MODEL_DIRECTORY", self.directory), \
+             contextlib.redirect_stdout(io.StringIO()):
+            for response in [OSError("offline"), io.BytesIO(b"wrong"), KeyboardInterrupt()]:
+                with patch("urllib.request.urlopen", side_effect=response if isinstance(response, BaseException) else None,
+                           return_value=response):
+                    with self.assertRaises((OSError, RuntimeError, KeyboardInterrupt)):
+                        desktop.install_revision_model()
+                self.assertEqual(target.read_bytes(), b"old broken bytes")
+                self.assertEqual(list(self.directory.glob(".revision-*")), [])
+            # A shared downloader unexpectedly returning unchecked bytes cannot
+            # make the command announce success or replace the previous file.
+            def corrupt(_model, stage):
+                (stage / "revision.gguf").write_bytes(b"x" * catalog["catalog"][0]["download_bytes"])
+            with patch.object(desktop.badi_install, "download_model", side_effect=corrupt):
+                with self.assertRaisesRegex(RuntimeError, "existing file was kept"):
+                    desktop.install_revision_model()
+            self.assertEqual(target.read_bytes(), b"old broken bytes")
+            self.assertEqual(list(self.directory.glob(".revision-*")), [])
+
+    def test_revision_install_does_not_follow_a_model_or_partial_symlink(self):
+        weights = b"verified synthetic weights"
+        catalog = self.revision_catalog(weights)
+        other = self.directory / "unrelated"
+        other.write_bytes(b"keep")
+        target = self.directory / "revision.gguf"
+        target.symlink_to(other)
+        (self.directory / "revision.gguf.part").symlink_to(other)
+        with patch.object(desktop, "model_advice", return_value=catalog), \
+             patch.object(desktop, "MODEL_DIRECTORY", self.directory), \
+             patch("urllib.request.urlopen", return_value=io.BytesIO(weights)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(desktop.install_revision_model()[1])
+        self.assertFalse(target.is_symlink())
+        self.assertEqual(target.read_bytes(), weights)
+        self.assertEqual(other.read_bytes(), b"keep")
+        self.assertTrue((self.directory / "revision.gguf.part").is_symlink())
+
+    def test_concurrent_revision_repairs_use_separate_private_stages(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        weights = b"verified synthetic weights"
+        catalog = self.revision_catalog(weights)
+        gate = threading.Barrier(2)
+        stages = []
+        def download(_model, stage):
+            stages.append(stage)
+            self.assertEqual(stage.stat().st_mode & 0o777, 0o700)
+            (stage / "revision.gguf").write_bytes(weights)
+            gate.wait(timeout=3)
+        with patch.object(desktop, "model_advice", return_value=catalog), \
+             patch.object(desktop, "MODEL_DIRECTORY", self.directory), \
+             patch.object(desktop.badi_install, "download_model", side_effect=download), \
+             ThreadPoolExecutor(max_workers=2) as workers:
+            futures = [workers.submit(desktop.install_revision_model) for _ in range(2)]
+            self.assertTrue(all(future.result(timeout=5)[1] for future in futures))
+        self.assertEqual(len(set(stages)), 2)
+        self.assertEqual((self.directory / "revision.gguf").read_bytes(), weights)
+        self.assertTrue(all(not stage.exists() for stage in stages))
+
+    def test_revision_sigterm_preserves_target_and_cleans_only_its_stage(self):
+        target = self.directory / "revision.gguf"
+        target.write_bytes(b"keep old bytes")
+        script = r"""
+import importlib.util,json,os,signal,sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+spec=importlib.util.spec_from_file_location('desktop', Path(sys.argv[1])/'badi-desktop.py')
+d=importlib.util.module_from_spec(spec);spec.loader.exec_module(d)
+d.MODEL_DIRECTORY=Path(sys.argv[2]);d.model_advice=lambda:json.loads(sys.argv[3])
+def cancel_download(model, stage):
+    (stage / (model['filename']+'.part')).write_bytes(b'partial')
+    os.kill(os.getpid(), signal.SIGTERM)
+d.badi_install.download_model=cancel_download
+try:
+    d.main(['revise','install'])
+except KeyboardInterrupt:
+    assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+    sys.exit(0)
+sys.exit(1)
+"""
+        process = subprocess.run([sys.executable, "-c", script, str(Path(__file__).resolve().parent),
+                                  str(self.directory), json.dumps(self.revision_catalog())],
+                                 capture_output=True, text=True, timeout=5)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(target.read_bytes(), b"keep old bytes")
+        self.assertEqual(list(self.directory.glob(".revision-*")), [])
+
+    def test_revision_overview_reuses_the_catalog_and_does_not_hash(self):
+        self.desktop_socket()
+        payload = {"schema": "badi.overview.v2", "models": {"writing": {"advice": self.revision_catalog()}}}
+        metrics = {"provider_calls": 0, "suggestions_shown": 0, "provider_errors": 0}
+        with patch.object(desktop, "runtime_directory", return_value=self.directory), \
+             patch.object(desktop, "MODEL_DIRECTORY", self.directory), \
+             patch.object(desktop, "model_advice", side_effect=AssertionError("no separate catalog process")), \
+             patch.object(desktop, "verified_revision_model", side_effect=AssertionError("no polling hash")), \
+             patch.object(desktop, "control", side_effect=[json.dumps(payload), json.dumps({"metrics": metrics}), json.dumps(STATS)]), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            desktop.main(["ctl", "overview", "--json"])
+        report = json.loads(output.getvalue())["desktop"]["revision"]
+        self.assertEqual((report["model"], report["file_state"]), ("qwen3-1.7b", "missing"))
 
     def test_spelling_languages_stay_canonical_and_name_missing_dictionaries(self):
         document = {}
@@ -1509,6 +1687,20 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(summary['counts'], {'budget_prefill': 2, 'budget_stream': 1})
         self.assertEqual(summary['last'], 'budget_prefill')
         self.assertIn('prompt prefill', summary['last_meaning'])
+
+    def test_typo_suppression_is_counted_and_explained_without_text(self):
+        metrics = {'provider_calls': 5, 'suggestions_shown': 0, 'provider_errors': 0,
+                   'no_suggestion': {**BREAKDOWN, 'typo_suspected': 2, 'last': 'typo_suspected'}}
+        self.assertEqual(desktop.no_suggestion_summary(metrics), {
+            'total': 5,
+            'counts': {'budget_prefill': 2, 'budget_stream': 1, 'typo_suspected': 2},
+            'last': 'typo_suspected',
+        })
+        self.assertIn('possible typo', desktop.NO_SUGGESTION['typo_suspected'])
+        self.assertIn('could not offer a correction here', desktop.NO_SUGGESTION['typo_suspected'])
+        self.assertIn('No suggestion: 5 (last: typo_suspected)', desktop.status_text({
+            'provider': 'local_model', 'paused': False, 'metrics': metrics,
+        }))
 
     def write_receipt(self, home, broker_entry, mode=0o600):
         path = home / '.local/state/badi/receipts/desktop.json'

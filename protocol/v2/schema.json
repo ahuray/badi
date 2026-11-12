@@ -1378,7 +1378,8 @@
         "timeout",
         "provider_error",
         "low_confidence",
-        "repeated"
+        "repeated",
+        "typo_suspected"
       ]
     },
     "carryMiss": {
@@ -1445,6 +1446,10 @@
         "repeated": {
           "$ref": "#/$defs/counter",
           "description": "Automatic suggestions withheld because the writer turned down that next word at the same spot in that app or site before. Optional for brokers that predate turned-down words."
+        },
+        "typo_suspected": {
+          "$ref": "#/$defs/counter",
+          "description": "Continuations withheld because spelling located a possible typo but no correction could be offered. Optional for brokers that predate unresolved-typo suppression."
         },
         "last": { "$ref": "#/$defs/noSuggestionReason" }
       }

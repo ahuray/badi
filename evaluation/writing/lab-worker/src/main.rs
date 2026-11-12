@@ -34,6 +34,7 @@ struct LabOptions {
     artifact: Option<badi_writing_lab::artifact::ModelArtifactOverride>,
     prefill_batch: badi_writing_lab::PrefillBatch,
     memory_map: bool,
+    threads: Option<badi_writing_lab::InferenceThreads>,
 }
 
 fn lab_options_from(args: &[std::ffi::OsString]) -> Result<LabOptions, &'static str> {
@@ -41,8 +42,13 @@ fn lab_options_from(args: &[std::ffi::OsString]) -> Result<LabOptions, &'static 
     let mut descriptor = None;
     let mut prefill_batch = None;
     let mut memory_map = None;
+    let mut threads = None;
     let mut pairs = args.chunks_exact(2);
     for pair in &mut pairs {
+        if pair[0] == "--threads" && threads.is_none() {
+            threads = Some(badi_writing_lab::InferenceThreads::parse(&pair[1])?);
+            continue;
+        }
         if pair[0] == "--prefill-batch" && prefill_batch.is_none() {
             prefill_batch = Some(badi_writing_lab::PrefillBatch::parse(&pair[1])?);
             continue;
@@ -78,6 +84,7 @@ fn lab_options_from(args: &[std::ffi::OsString]) -> Result<LabOptions, &'static 
         artifact,
         prefill_batch: prefill_batch.unwrap_or_default(),
         memory_map: memory_map.unwrap_or(true),
+        threads,
     })
 }
 
@@ -246,6 +253,7 @@ async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
         artifact,
         prefill_batch,
         memory_map,
+        threads,
     } = lab_options_from(args)?;
     let cancellation = CancellationToken::new();
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -262,7 +270,7 @@ async fn worker(args: &[std::ffi::OsString]) -> Result<(), &'static str> {
     let runtime = tokio::select! {
         biased;
         () = cancellation.cancelled() => return Ok(()),
-        runtime = badi_writing_lab::activate_with_options(directory, artifact, prefill_batch, memory_map) => runtime.map_err(|_| "runtime_start_failed")?,
+        runtime = badi_writing_lab::activate_with_options(directory, artifact, prefill_batch, memory_map, threads) => runtime.map_err(|_| "runtime_start_failed")?,
     };
     emit(
         &json!({"type":"ready","identity":runtime.identity(),"runtime_pid":runtime.process_id(),
@@ -419,6 +427,37 @@ mod tests {
     use super::lab_options_from;
     use badi_writing_lab::PrefillBatch;
     use std::ffi::OsString;
+
+    #[test]
+    fn threads_are_optional_bounded_and_cannot_be_duplicated() {
+        let args = vec![
+            OsString::from("--model-directory"),
+            std::env::temp_dir().into_os_string(),
+        ];
+        assert!(lab_options_from(&args).unwrap().threads.is_none());
+        for count in 1..=4 {
+            let mut selected = args.clone();
+            selected.extend(["--threads".into(), count.to_string().into()]);
+            assert_eq!(
+                lab_options_from(&selected)
+                    .unwrap()
+                    .threads
+                    .unwrap()
+                    .count(),
+                count
+            );
+            selected.extend(["--threads".into(), "4".into()]);
+            assert!(lab_options_from(&selected).is_err());
+        }
+        for value in ["", "0", "5", "04", "+4", "4.0", " 4", "4\n"] {
+            let mut selected = args.clone();
+            selected.extend(["--threads".into(), value.into()]);
+            assert!(lab_options_from(&selected).is_err());
+        }
+        let mut missing = args;
+        missing.push("--threads".into());
+        assert!(lab_options_from(&missing).is_err());
+    }
 
     #[test]
     fn prefill_batch_is_a_strict_launch_option_with_unchanged_default() {
