@@ -8,6 +8,8 @@ import { RecoveringBrokerClient } from '../shared/recovering-client.mjs';
 import { recordActivity } from '../shared/activity.mjs';
 import { writingLanguage } from '../shared/writing-language.mjs';
 import { validCorrection } from '../shared/text-safety.mjs';
+import { nextRevisionMode, revisionModes, sameSelection, validRevisionText } from '../shared/revision.mjs';
+import { captureRevision, markedRevision, revisionFullyVisible, revisionTooltip, revisionTooltipSpace, setRevisionTooltip } from './revision.mjs';
 
 // CodeMirror positions are UTF-16 code units. A fixed-size pre-slice can
 // split an astral character; drop the orphan half before scalar bounding.
@@ -56,7 +58,18 @@ class WritingView {
   applying = false;
   generation = 0;
   renderQueued = false;
-  observeEscape = event => this.dismiss(event);
+  revision = null;
+  revisionCycle = null;
+  revisionReason = null;
+  changingRevision = false;
+  observeEscape = event => {
+    this.dismiss(event);
+    if ((this.snapshot?.kind === 'revision' || this.revisionCycle) && event.isTrusted && !event.isComposing &&
+        !['Control', 'Shift', 'Meta', 'Alt'].includes(event.key) &&
+        !(event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey && event.key === ' ') &&
+        !(event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey)) this.invalidate();
+  };
+  observeBlur = () => this.invalidate();
 
   constructor(view, owner) {
     this.view = view;
@@ -65,6 +78,7 @@ class WritingView {
     // Obsidian prevents Escape before its bundled CodeMirror dispatches even
     // event observers. Observe this editor's DOM without consuming the event.
     view.contentDOM.addEventListener('keydown', this.observeEscape, { passive: true });
+    view.dom.ownerDocument.defaultView?.addEventListener('blur', this.observeBlur);
     // An editor opened while the shared client is ready gets no 'ready' event.
     owner.connect();
     queueMicrotask(() => this.scheduleAutomatic());
@@ -74,6 +88,7 @@ class WritingView {
   get client() { return this.owner.client; }
 
   clientState(state) {
+    if (this.owner.session === this && this.pending && this.snapshot?.kind === 'revision') this.revisionReason = state;
     if (state === 'offline' || state === 'offline_retry') this.invalidate();
     if (state === 'ready') queueMicrotask(() => this.scheduleAutomatic());
   }
@@ -90,6 +105,7 @@ class WritingView {
     this.text = null;
     this.listWords = null;
     this.replaceBefore = undefined;
+    this.revision = null;
     this.decorations = Decoration.none;
     this.render();
   }
@@ -99,7 +115,7 @@ class WritingView {
     this.renderQueued = true;
     queueMicrotask(() => {
       this.renderQueued = false;
-      if (!this.destroyed) this.view.dispatch({});
+      if (!this.destroyed) this.view.dispatch({ effects: setRevisionTooltip.of(this.revision?.tooltip ?? null) });
     });
   }
 
@@ -108,13 +124,14 @@ class WritingView {
     clearTimeout(this.timer);
     this.pending = false;
     this.snapshot = null;
+    this.revisionCycle = null;
     this.clearPreview();
     // The client holds one session at a time; only the editor that opened it
     // may cancel it, so an edit elsewhere never withdraws this one's preview.
     if (this.owner.session === this) this.client.cancel();
   }
 
-  blockedReason() {
+  blockedReason(revising = false) {
     const { selection, doc, readOnly } = this.view.state;
     if (this.destroyed) return 'editor_closed';
     if (!this.client.connected) return 'model_offline';
@@ -123,14 +140,15 @@ class WritingView {
     if (this.view.composing) return 'input_method_composing';
     if (completionStatus(this.view.state) !== null) return 'editor_completion_active';
     if (readOnly) return 'read_only';
-    if (selection.ranges.length !== 1 || !selection.main.empty) return 'selection_active';
+    if (selection.ranges.length !== 1 || (revising ? selection.main.empty : !selection.main.empty))
+      return revising ? 'select_text' : 'selection_active';
     return doc.length ? null : 'empty_note';
   }
 
   eligible() { return this.blockedReason() === null; }
 
   matches(snapshot) {
-    return this.eligible() && this.view.state.doc === snapshot.doc &&
+    return this.blockedReason(snapshot?.kind === 'revision') === null && this.view.state.doc === snapshot.doc &&
       this.view.state.selection.eq(snapshot.selection);
   }
 
@@ -146,6 +164,7 @@ class WritingView {
   }
 
   async request(explicit = true) {
+    if (explicit && !this.view.state.selection.main.empty) return this.revise();
     const reason = this.blockedReason();
     recordActivity('obsidian', 'decision', reason ?? 'eligible');
     if (reason || this.pending || (!explicit && !this.client.automaticAllowed)) return;
@@ -184,6 +203,81 @@ class WritingView {
       if (generation === this.generation && this.view.hasFocus) this.owner.status.setText('Badi · no suggestion · Ctrl+Shift+Space retries');
     } finally {
       if (generation === this.generation) this.pending = false;
+    }
+  }
+
+  async revise(mode) {
+    const reason = this.blockedReason(true);
+    if (reason || this.pending) return;
+    const snapshot = captureRevision(this.view.state);
+    if (!snapshot) { this.owner.status.setText('Badi · select 1–600 characters on one line'); return; }
+    mode ??= this.revisionCycle && this.matches(this.revisionCycle.snapshot) ? this.revisionCycle.next : 'grammar';
+    if (!revisionModes.has(mode)) return;
+    clearTimeout(this.timer);
+    this.generation++;
+    const generation = this.generation;
+    this.clearPreview();
+    this.snapshot = snapshot;
+    this.pending = true;
+    this.revisionReason = null;
+    this.owner.session = this;
+    this.owner.status.setText('Badi · revising selection');
+    try {
+      // revise() retires its own previous preview synchronously while keeping
+      // the exact session for synonyms. Other clears still revoke this view.
+      this.changingRevision = true;
+      const promise = this.client.revise({ before: snapshot.before, selected: snapshot.selected, after: snapshot.after,
+        selection: snapshot.range, mode,
+        language: this.owner.language === 'auto' ? navigator.language : this.owner.language });
+      this.changingRevision = false;
+      const result = await promise;
+      if (generation !== this.generation || !this.matches(snapshot)) return;
+      if (!result && this.revisionReason !== 'no_change') { this.invalidate(); return; }
+      this.revisionCycle = { snapshot, next: nextRevisionMode(mode, snapshot.selected) };
+      if (!result) { this.owner.status.setText('Badi · no change · Ctrl+Shift+Space tries another'); return; }
+      if (result.original !== snapshot.selected || result.mode !== mode || !validRevisionText(result.text)) {
+        this.invalidate(); return;
+      }
+      this.text = result.text;
+      this.revision = { mode, tooltip: markedRevision(snapshot, result.text, mode) };
+      this.render();
+    } catch {
+      if (generation === this.generation) { this.invalidate(); this.owner.status.setText('Badi · revision request failed · retry'); }
+    } finally {
+      this.changingRevision = false;
+      if (generation === this.generation) this.pending = false;
+    }
+  }
+
+  async acceptRevision() {
+    const snapshot = this.snapshot, revision = this.revision, shown = this.text;
+    if (!revision || !shown || this.pending || !this.matches(snapshot)) return;
+    if (!revisionFullyVisible(this.view, revision.tooltip)) {
+      this.invalidate(); this.owner.status.setText('Badi · revision does not fit on screen'); return;
+    }
+    this.pending = true;
+    const generation = this.generation;
+    try {
+      const grant = await this.client.authorizeRevision();
+      if (generation !== this.generation || !this.matches(snapshot) || this.revision !== revision ||
+          grant.text !== shown || grant.replaceBefore !== undefined || !sameSelection(grant.replaceSelection, snapshot.range) ||
+          !validRevisionText(grant.text) || !revisionFullyVisible(this.view, revision.tooltip)) {
+        this.client.report(grant, 'stale'); return;
+      }
+      this.applying = true;
+      try {
+        this.view.dispatch({ changes: { from: snapshot.from, to: snapshot.to, insert: grant.text },
+          selection: { anchor: snapshot.from + grant.text.length },
+          annotations: [Transaction.userEvent.of('input.complete'), isolateHistory.of('full')] });
+        const applied = this.view.state.doc.toString() === snapshot.doc.sliceString(0, snapshot.from) +
+          grant.text + snapshot.doc.sliceString(snapshot.to) &&
+          this.view.state.selection.main.empty && this.view.state.selection.main.head === snapshot.from + grant.text.length;
+        this.client.report(grant, applied ? 'applied' : 'failed');
+      } finally { this.applying = false; }
+    } catch {
+      if (generation === this.generation) this.owner.status.setText('Badi · revision changed · select and try again');
+    } finally {
+      if (generation === this.generation) this.invalidate();
     }
   }
 
@@ -260,6 +354,7 @@ class WritingView {
   }
 
   async accept(acceptance = 'word') {
+    if (this.revision) return this.acceptRevision();
     const snapshot = this.snapshot;
     if (!this.text || !snapshot || !this.matches(snapshot) || this.pending) return;
     this.pending = true;
@@ -309,17 +404,19 @@ class WritingView {
       clearTimeout(this.timer);
       this.pending = false;
       this.snapshot = null;
+      this.revisionCycle = null;
       this.clearPreview();
       return;
     }
-    if (this.pending) this.invalidate();
+    if (this.pending || this.revisionCycle) this.invalidate();
   }
 
   key(event) {
     if (!event.isTrusted || event.isComposing || event.altKey) return false;
     if (event.ctrlKey && event.shiftKey && !event.metaKey && event.key === ' ') {
       if (event.repeat || this.pending) return true;
-      if (this.text) void this.alternative(); else void this.request();
+      if (!this.view.state.selection.main.empty) void this.revise();
+      else if (this.text) void this.alternative(); else void this.request();
       return true;
     }
     if (event.shiftKey) return false;
@@ -336,7 +433,7 @@ class WritingView {
     }
     if (event.key !== 'Tab') return false;
     if (!this.text) return false;
-    const reason = this.blockedReason();
+    const reason = this.blockedReason(!!this.revision);
     recordActivity('obsidian', 'tab', reason ?? 'eligible');
     if (reason) { this.owner.status.setText(`Badi · ${reason.replaceAll('_', ' ')}`); return false; }
     if (event.repeat || this.pending) return true;
@@ -347,6 +444,7 @@ class WritingView {
   destroy() {
     this.destroyed = true;
     this.view.contentDOM.removeEventListener('keydown', this.observeEscape);
+    this.view.dom.ownerDocument.defaultView?.removeEventListener('blur', this.observeBlur);
     this.invalidate();
     if (this.owner.session === this) this.owner.session = null;
     this.owner.views.delete(this.view);
@@ -361,14 +459,24 @@ export default class BadiPlugin extends Plugin {
   session = null;
 
   createClient() {
-    const client = new RecoveringBrokerClient('obsidian', { textReplacement: true });
+    const client = new RecoveringBrokerClient('obsidian', { textReplacement: true, selectionRevision: true });
     client.on('state', state => {
       if (this.client !== client) return;
-      if ([...this.views.keys()].some(view => view.hasFocus)) this.status.setText(`Badi · ${state.replaceAll('_', ' ')}`);
+      if ([...this.views.keys()].some(view => view.hasFocus)) this.status.setText(state === 'revision_unavailable'
+        ? 'Badi · revision unavailable · run badi revise' : `Badi · ${state.replaceAll('_', ' ')}`);
       for (const controller of this.views.values()) controller.clientState(state);
     });
     // A cancelled session withdraws whichever preview it produced.
-    client.on('clear', () => { if (this.client === client) for (const controller of this.views.values()) controller.clearPreview(); });
+    client.on('clear', () => {
+      if (this.client !== client) return;
+      for (const controller of this.views.values()) {
+        if (controller.snapshot?.kind === 'revision' && !controller.changingRevision) {
+          // Local revocation, not another cancel() call from this event.
+          controller.generation++; controller.pending = false; controller.snapshot = null; controller.revisionCycle = null;
+        }
+        controller.clearPreview();
+      }
+    });
     client.on('update', text => { if (this.client === client) this.session?.extend(text); });
     return client;
   }
@@ -396,6 +504,8 @@ export default class BadiPlugin extends Plugin {
     this.status = this.addStatusBarItem();
     this.status.setText('Badi · starting');
     this.client = this.createClient();
+    this.registerEditorExtension(revisionTooltip);
+    this.registerEditorExtension(Prec.highest(revisionTooltipSpace));
     const owner = this;
     this.registerEditorExtension(Prec.highest(ViewPlugin.fromClass(class extends WritingView {
       constructor(view) { super(view, owner); }
@@ -406,9 +516,16 @@ export default class BadiPlugin extends Plugin {
     this.addCommand({ id: 'request-or-accept', name: 'Request or accept words', editorCallback: (_editor, markdown) => {
       // Obsidian exposes its CodeMirror view at editor.cm outside its typed Editor API.
       const controller = this.views.get(markdown.editor.cm);
-      if (!controller?.eligible()) { new Notice('Badi: enable Obsidian with badi app obsidian on, then place the caret in a note.'); return; }
+      if (!controller || controller.blockedReason(!controller.view.state.selection.main.empty)) {
+        new Notice('Badi: enable Obsidian with badi app obsidian on, then focus text in a note.'); return;
+      }
       if (controller.text) void controller.accept(); else void controller.request();
     } });
+    for (const [mode, label] of [['grammar', 'Check selected grammar'], ['refine', 'Refine selected wording'], ['synonyms', 'Find a synonym']]) {
+      this.addCommand({ id: `revise-${mode}`, name: label, editorCallback: (_editor, markdown) => {
+        void this.views.get(markdown.editor.cm)?.revise(mode);
+      } });
+    }
     this.addCommand({ id: 'retry-connection', name: 'Reconnect local model', callback: () => this.reconnect() });
     for (const [language, label] of [['auto', 'the application language'], ['en', 'English'], ['de', 'German'], ['fa', 'Persian']]) {
       this.addCommand({ id: `language-${language}`, name: `Use ${label} for suggestions`, callback: async () => {

@@ -36,6 +36,158 @@ async function markdown(editor, keys) {
   await editor.send(keys);
 }
 
+test('a Visual selection has a marked revision preview, exact replacement and one native undo', { skip }, async t => {
+  const editor = await fakeEditor(t, { automatic: false });
+  await markdown(editor, 'iBefore I has went. After<Esc>0wvt.<C-S-Space>');
+  let state = await editor.until(current => current.status.status === 'revision', 'selection revision');
+  assert.equal(state.mode, 'v');
+  assert.deepEqual(state.lines, ['Before I has went. After'], 'A revision preview is never buffer text');
+  assert.ok(state.chunks.some(chunk => chunk[1] === 'BadiRevisionRemoved'));
+  assert.match(state.preview, /\[-has /);
+  await editor.send('<Tab>');
+  state = await editor.until(current => current.status.status === 'applied', 'selection replacement');
+  assert.deepEqual(state.lines, ['Before I went. After']);
+  await editor.send('A again<Esc>u');
+  await editor.until(current => current.lines[0] === 'Before I went. After', 'undo later typing');
+  await editor.send('u');
+  state = await editor.until(current => current.lines[0] === 'Before I has went. After', 'undo only revision');
+  assert.equal(state.preview, null);
+  assert.doesNotMatch(state.messages, /Before|has went|After/);
+});
+
+test('selection revision preserves reverse and exclusive Unicode ranges', { skip }, async t => {
+  const editor = await fakeEditor(t, { automatic: false });
+  await editor.command('setfiletype markdown');
+  for (const setting of ['inclusive', 'exclusive']) {
+    await editor.send('<Esc>');
+    await editor.command(`set selection=${setting}`);
+    await editor.command('call setline(1, "Grüße 🙂 has went.")');
+    // Reverse the entire characterwise selection; exclusive selects up to
+    // the period, which remains outside the replacement.
+    await editor.send(setting === 'inclusive' ? '$v0<C-S-Space>' : '0v$<C-S-Space>');
+    await editor.until(current => current.status.status === 'revision', `${setting} Unicode preview`);
+    await editor.send('<Tab>');
+    await editor.until(current => current.lines[0] === 'Grüße 🙂 went.', `${setting} exact Unicode replacement`);
+    await editor.send('u');
+    await editor.until(current => current.lines[0] === 'Grüße 🙂 has went.', `${setting} undo`);
+  }
+});
+
+test('the entire marked revision remains visible at the bottom of a window', { skip }, async t => {
+  const editor = await fakeEditor(t, { automatic: false });
+  await editor.command('setfiletype markdown');
+  await editor.command('call setline(1, repeat(["I has went."], 40))');
+  await editor.send('20Gzb0v$<C-S-Space>');
+  const state = await editor.until(current => current.preview !== null, 'bottom-row marked preview');
+  assert.match(state.rows.join('\n'), /Badi grammar: I \[-has \]went\./);
+  assert.match(state.rows.join('\n'), /Tab apply · Esc dismiss/);
+  await editor.send('<Tab>');
+  await editor.until(current => current.lines[19] === 'I went.', 'bottom-row acceptance');
+  await editor.send('u');
+  await editor.until(current => current.lines[19] === 'I has went.', 'bottom-row undo');
+});
+
+test('selection changes, unrelated keys and late or mismatched grants cannot apply a revision', { skip }, async t => {
+  const editor = await fakeEditor(t, { automatic: false });
+  await markdown(editor, 'islow has went.<Esc>0v$<C-S-Space>');
+  await editor.until(current => current.status.pending, 'pending revision');
+  await editor.send('h');
+  await delay(500);
+  assert.equal((await editor.state()).preview, null, 'The late response cannot bind to a moved selection');
+  for (const prefix of ['late', 'wrong', 'revoked']) {
+    await editor.send('<Esc>');
+    await editor.command(`call setline(1, "${prefix} has went.")`);
+    await editor.send('0v$<C-S-Space>');
+    await editor.until(current => current.status.status === 'revision', `${prefix} preview`);
+    await editor.send('<Tab>');
+    if (prefix === 'late') await editor.send('h');
+    await delay(500);
+    const state = await editor.state();
+    assert.equal(state.lines[0], `${prefix} has went.`, `${prefix} grant inserts nothing`);
+    assert.equal(state.preview, null);
+  }
+  await editor.send('<Esc>');
+  await editor.command('call setline(1, "I has went.")');
+  await editor.send('0v$<C-S-Space>');
+  await editor.until(current => current.status.status === 'revision', 'preview before unrelated key');
+  await editor.send('<F12>');
+  await editor.until(current => current.preview === null, 'unrelated key dismisses without editing');
+});
+
+test('selection revision is explicit and denied policy reads no selection text', { skip }, async t => {
+  const editor = await fakeEditor(t, { automatic: false }, 'refused');
+  await markdown(editor, 'iI has went.<Esc>0v$');
+  await editor.command("lua require('badi.revision').capture = function() error('selection was read') end");
+  await editor.send('<C-S-Space>');
+  await editor.until(current => ['app_disabled_or_model_paused', 'app_disabled'].includes(current.status.status), 'refused selection');
+  assert.ok((await editor.operations()).every(operation => operation.op !== 'revise'));
+  assert.doesNotMatch((await editor.state()).messages, /selection was read/);
+});
+
+test('only no_change advances a revision cycle, and unavailable offers content-free recovery', { skip }, async t => {
+  for (const reason of ['revision_unavailable', 'unsupported_language', 'invalid_output', 'provider_timeout', 'provider_error']) {
+    const editor = await fakeEditor(t, { automatic: false });
+    await editor.command(`let $FAKE_BRIDGE_REVISION_REASONS = ${JSON.stringify(JSON.stringify(['no_change', reason]))}`);
+    await markdown(editor, 'iI has went.<Esc>0v$<C-S-Space>');
+    await editor.until(current => !current.status.pending && current.status.status === 'no_change', 'unchanged grammar');
+    await editor.send('<C-S-Space>');
+    const state = await editor.until(current => !current.status.pending && current.status.status === reason, reason);
+    assert.equal(state.preview, null);
+    assert.deepEqual(state.lines, ['I has went.']);
+    assert.doesNotMatch(state.messages, /I has went/);
+    const status = await editor.expr('execute("BadiStatus")');
+    assert.match(status, new RegExp(reason), 'The raw reason remains diagnostic');
+    if (reason === 'revision_unavailable') {
+      assert.match(state.messages, /Badi revisions unavailable — run badi revise/);
+      assert.match(status, /run badi revise/);
+    } else {
+      assert.doesNotMatch(state.messages + status, /run badi revise/);
+    }
+    await editor.send('<C-S-Space>');
+    const retry = await editor.until(current => current.status.status === 'revision', 'grammar after refusal');
+    assert.match(retry.preview, /^Badi grammar:/);
+    assert.deepEqual((await editor.operations()).filter(value => value.op === 'revise').map(value => value.mode),
+      ['grammar', 'refine', 'grammar']);
+  }
+});
+
+test('a stale unavailable revision cannot show a recovery notice', { skip }, async t => {
+  const editor = await fakeEditor(t, { automatic: false });
+  await editor.command(`let $FAKE_BRIDGE_REVISION_REASONS = ${JSON.stringify('["revision_unavailable"]')}`);
+  await markdown(editor, 'islow has went.<Esc>0v$<C-S-Space>');
+  await editor.until(current => current.status.pending, 'pending revision');
+  await editor.send('h');
+  await delay(500);
+  const state = await editor.state();
+  assert.equal(state.preview, null);
+  assert.deepEqual(state.lines, ['slow has went.']);
+  assert.doesNotMatch(state.messages, /run badi revise/);
+});
+
+test('revision dismissal restores Visual mappings and resizing retires its visible authority', { skip }, async t => {
+  const editor = await fakeEditor(t, { automatic: false });
+  await editor.command('setfiletype markdown');
+  await editor.command('vmap <buffer> <Tab> :<C-U>let g:original_visual_tab = 1<CR>');
+  const mapping = async () => {
+    const value = JSON.parse(await editor.expr('json_encode(maparg("<Tab>", "x", 0, 1))'));
+    return [value.rhs, value.mode, value.buffer, value.expr, value.noremap];
+  };
+  const original = await mapping();
+  await editor.send('iI has went.<Esc>0v$<C-S-Space>');
+  await editor.until(current => current.preview !== null, 'revision with existing Visual map');
+  await editor.send('<Esc>');
+  await editor.until(current => current.preview === null, 'dismissed revision');
+  assert.deepEqual(await mapping(), original);
+  await editor.send('0v$<C-S-Space>');
+  await editor.until(current => current.preview !== null, 'revision before resize');
+  await editor.command('set columns=70');
+  await editor.until(current => current.preview === null, 'resize withdraws preview');
+  assert.equal((await editor.state()).lines[0], 'I has went.');
+  assert.deepEqual(await mapping(), original);
+  await editor.send('<Tab>');
+  assert.equal(await editor.expr('g:original_visual_tab'), '1', 'The restored user mapping executes');
+});
+
 test('a pause shows inline grey text; Ctrl+Right inserts it all as one undo step', { skip }, async t => {
   const editor = await fakeEditor(t);
   await markdown(editor, 'iDear team,<CR>thank you');

@@ -232,6 +232,150 @@ fn lfm2_counts_attention_and_shortconv_state_with_bound_runtime_settings() {
     assert_eq!(assess(&input).estimate.state_bytes, None);
 }
 
+fn qwen35_fixture() -> AssessmentInput {
+    let mut input = fixture();
+    input.candidate.architecture = Some("qwen35".to_owned());
+    input.candidate.artifact_bytes = Some(532_517_120);
+    input.settings.runtime_version = "b11840".to_owned();
+    input.candidate.state = StateRequirements::Qwen35 {
+        attention_layers: 6,
+        recurrent_layers: 18,
+        kv_heads: 2,
+        key_length: 256,
+        value_length: 256,
+        convolution_kernel: 4,
+        ssm_inner_size: 2048,
+        ssm_state_size: 128,
+        ssm_group_count: 16,
+        ssm_time_step_rank: 16,
+    };
+    input
+}
+
+#[test]
+fn qwen35_counts_dense_kv_and_both_f32_recurrent_tensors() {
+    let mut input = qwen35_fixture();
+    let kv = 6 * 2048 * 2 * (256 + 256) * 2;
+    let recurrent = 18 * ((4 - 1) * (2048 + 2 * 16 * 128) + 128 * 2048) * 4;
+    let alignment = 18 * 2 * 4096;
+    assert_eq!(kv + recurrent, 45_367_296);
+    let report = assess(&input);
+    assert_eq!(report.estimate.state_bytes, Some(45_514_752));
+    assert!(passed(&report, "estimated_fit"));
+    assert!(!report.recommended, "Fit does not confer measured quality.");
+    assert_eq!(report.estimate.weights_bytes, 532_517_120);
+    assert_eq!(report.estimate.runtime_buffers_bytes, (512 + 16) * MIB);
+    assert_eq!(report.estimate.backend_overhead_bytes, 256 * MIB);
+    assert_eq!(
+        report.estimate.host_reserve_bytes,
+        input.device.total_memory_bytes.unwrap() / 5
+    );
+    input.settings.cache_element_bytes = 4;
+    assert_eq!(
+        assess(&input).estimate.state_bytes,
+        Some(kv * 2 + recurrent + alignment)
+    );
+    input.settings.parallel_sequences = 2;
+    assert_eq!(
+        assess(&input).estimate.state_bytes,
+        Some((kv * 2 + recurrent) * 2 + alignment)
+    );
+    input.settings.context_tokens = 2049;
+    assert_eq!(
+        assess(&input).estimate.state_bytes,
+        Some((6 * 2304 * 2 * 512 * 4 + recurrent) * 2 + alignment)
+    );
+}
+
+#[test]
+fn qwen35_refuses_other_runtime_or_unreviewed_checkpoint_policies() {
+    let mutations: [fn(&mut AssessmentInput); 5] = [
+        |input| input.candidate.architecture = Some("qwen35moe".to_owned()),
+        |input| input.settings.runtime_version = "b10726".to_owned(),
+        |input| input.settings.backend = "vulkan".to_owned(),
+        |input| input.settings.recurrent_snapshots = 1,
+        |input| input.settings.context_checkpoints = 1,
+    ];
+    for mutate in mutations {
+        let mut input = qwen35_fixture();
+        mutate(&mut input);
+        let report = assess(&input);
+        assert_eq!(report.estimate.state_bytes, None);
+        assert!(!passed(&report, "estimated_fit"));
+    }
+    let mut input = fixture();
+    input.candidate.architecture = Some("qwen35".to_owned());
+    input.settings.runtime_version = "b11840".to_owned();
+    assert_eq!(
+        assess(&input).estimate.state_bytes,
+        None,
+        "A generic transformer claim cannot bypass the hybrid estimate."
+    );
+}
+
+#[test]
+fn qwen35_dimensions_fail_closed_including_runtime_u32_overflow() {
+    let original = qwen35_fixture();
+    for (field, value) in [
+        ("attention_layers", 0),
+        ("recurrent_layers", 0),
+        ("recurrent_layers", 251),
+        ("kv_heads", 513),
+        ("key_length", 0),
+        ("value_length", 128),
+        ("value_length", 65_537),
+        ("convolution_kernel", 1),
+        ("convolution_kernel", 4097),
+        ("ssm_inner_size", 1024),
+        ("ssm_state_size", 0),
+        ("ssm_group_count", 0),
+        ("ssm_group_count", 3),
+        ("ssm_time_step_rank", 17),
+        ("ssm_time_step_rank", u64::MAX),
+    ] {
+        let mut encoded = serde_json::to_value(&original.candidate.state).unwrap();
+        encoded[field] = value.into();
+        let mut input = original.clone();
+        input.candidate.state = serde_json::from_value(encoded).unwrap();
+        assert_eq!(assess(&input).estimate.state_bytes, None, "{field}={value}");
+    }
+    let mut input = original.clone();
+    let mut encoded = serde_json::to_value(&input.candidate.state).unwrap();
+    // Fits u64, but the runtime's state*inner uint32_t would wrap to zero.
+    for (key, value) in [
+        ("ssm_state_size", 65_536),
+        ("ssm_inner_size", 65_536),
+        ("ssm_group_count", 1),
+        ("ssm_time_step_rank", 1),
+    ] {
+        encoded[key] = value.into();
+    }
+    input.candidate.state = serde_json::from_value(encoded).unwrap();
+    assert_eq!(assess(&input).estimate.state_bytes, None);
+    for field in [
+        "attention_layers",
+        "recurrent_layers",
+        "kv_heads",
+        "key_length",
+        "value_length",
+        "convolution_kernel",
+        "ssm_inner_size",
+        "ssm_state_size",
+        "ssm_group_count",
+        "ssm_time_step_rank",
+    ] {
+        let mut encoded = serde_json::to_value(&original.candidate.state).unwrap();
+        encoded.as_object_mut().unwrap().remove(field);
+        assert!(
+            serde_json::from_value::<StateRequirements>(encoded).is_err(),
+            "{field}"
+        );
+    }
+    let mut encoded = serde_json::to_value(&original.candidate.state).unwrap();
+    encoded["state_element_bytes"] = 2.into();
+    assert!(serde_json::from_value::<StateRequirements>(encoded).is_err());
+}
+
 #[test]
 fn evidence_invalidates_model_tokenizer_revision_runtime_and_generation_changes() {
     let mut original = fixture();

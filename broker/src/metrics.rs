@@ -10,8 +10,8 @@ pub enum NoSuggestionReason {
     /// Missing or unsupported language, text after the caret, an empty prefix,
     /// or a Persian joiner not yet between two letters. No runtime request.
     RequestAbstained,
-    /// The writing budget expired before response headers (prompt prefill),
-    /// including when an earlier spelling attempt had already spent it.
+    /// The writing budget expired before continuation response headers
+    /// (prompt prefill).
     BudgetPrefill,
     /// The writing budget expired while streaming, before a complete word.
     BudgetStream,
@@ -33,10 +33,13 @@ pub enum NoSuggestionReason {
     /// The writer turned down the same next word at the same spot in this
     /// app or site before: Escape, or typing other letters twice.
     Repeated,
+    /// Spelling located a possible typo, but this request could not offer a
+    /// correction. No continuation is generated from the unresolved word.
+    TypoSuspected,
 }
 
 impl NoSuggestionReason {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::RequestAbstained,
         Self::BudgetPrefill,
         Self::BudgetStream,
@@ -47,6 +50,7 @@ impl NoSuggestionReason {
         Self::ProviderError,
         Self::LowConfidence,
         Self::Repeated,
+        Self::TypoSuspected,
     ];
 
     const fn index(self) -> usize {
@@ -61,6 +65,7 @@ impl NoSuggestionReason {
             Self::ProviderError => 7,
             Self::LowConfidence => 8,
             Self::Repeated => 9,
+            Self::TypoSuspected => 10,
         }
     }
 }
@@ -126,7 +131,7 @@ pub struct Metrics {
     words_dispatched: AtomicU64,
     commit_failures: AtomicU64,
     provider_errors: AtomicU64,
-    no_suggestion: [AtomicU64; 10],
+    no_suggestion: [AtomicU64; 11],
     /// Zero until the first no-suggestion outcome; otherwise its index plus one.
     last_no_suggestion: AtomicU8,
     type_through_carried: AtomicU64,
@@ -152,6 +157,9 @@ pub struct NoSuggestionSnapshot {
     /// Absent from brokers that predate turned-down words.
     #[serde(default)]
     pub repeated: u64,
+    /// Absent from brokers that predate unresolved-typo suppression.
+    #[serde(default)]
+    pub typo_suspected: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last: Option<NoSuggestionReason>,
 }
@@ -170,6 +178,7 @@ impl NoSuggestionSnapshot {
             NoSuggestionReason::ProviderError => self.provider_error,
             NoSuggestionReason::LowConfidence => self.low_confidence,
             NoSuggestionReason::Repeated => self.repeated,
+            NoSuggestionReason::TypoSuspected => self.typo_suspected,
         }
     }
 
@@ -384,6 +393,7 @@ impl Metrics {
                 provider_error: count(NoSuggestionReason::ProviderError),
                 low_confidence: count(NoSuggestionReason::LowConfidence),
                 repeated: count(NoSuggestionReason::Repeated),
+                typo_suspected: count(NoSuggestionReason::TypoSuspected),
                 last,
             }),
             type_through: Some(TypeThroughSnapshot {
@@ -427,7 +437,7 @@ mod tests {
         }
         assert_eq!(
             metrics.snapshot().no_suggestion.expect("breakdown").total(),
-            55
+            66
         );
     }
 
@@ -443,6 +453,23 @@ mod tests {
         breakdown.remove("last");
         let decoded: MetricsSnapshot = serde_json::from_value(value).expect("older broker");
         assert_eq!(decoded.no_suggestion.expect("breakdown").low_confidence, 0);
+    }
+
+    #[test]
+    fn typo_suppression_round_trips_and_older_breakdowns_still_decode() {
+        let metrics = Metrics::default();
+        metrics.record_no_suggestion(NoSuggestionReason::TypoSuspected);
+        let mut value = serde_json::to_value(metrics.snapshot()).expect("metrics JSON");
+        let decoded: MetricsSnapshot = serde_json::from_value(value.clone()).expect("new broker");
+        let counts = decoded.no_suggestion.expect("breakdown");
+        assert_eq!(counts.typo_suspected, 1);
+        assert_eq!(counts.total(), 1);
+        assert_eq!(counts.last, Some(NoSuggestionReason::TypoSuspected));
+        let breakdown = value["no_suggestion"].as_object_mut().expect("breakdown");
+        breakdown.remove("typo_suspected");
+        breakdown.remove("last");
+        let older: MetricsSnapshot = serde_json::from_value(value).expect("older broker");
+        assert_eq!(older.no_suggestion.expect("breakdown").typo_suspected, 0);
     }
 
     #[test]

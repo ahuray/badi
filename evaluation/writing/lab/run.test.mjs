@@ -13,6 +13,21 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const input = { schema: 'badi.prediction-suite.v1', name: 'CLI fixture', cases: [{ id: 'append-case', language: 'en',
   prefix: 'PRIVATE_PREFIX docum', context: 'PRIVATE_CONTEXT', style: 'PRIVATE_STYLE', expected: ['ent'] }] };
 const config = { id: 'context', mode: 'context', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 };
+
+test('style comparison arms always share production decoding and remain opt-in', () => {
+  const base = ['--suite', 'input.json', '--output', 'output/writing/new'];
+  const modes = ['production_boundary', 'style_gentle', 'style_balanced', 'style_strong'];
+  const options = parseOptions([...base, '--modes', modes.join(','), '--budget-ms', '3000', '--max-tokens', '64', '--cache-prompt', 'false']);
+  assert.deepEqual(options.configs.map(value => value.mode), modes);
+  for (const value of options.configs) {
+    assert.equal(value.budget_ms, 550);
+    assert.equal(value.max_tokens, 8);
+    assert.equal(value.cache_prompt, true);
+    assert.equal(value.seed, 42);
+  }
+  assert.equal(parseOptions(base).configs.some(value => value.mode.startsWith('style_')), false);
+});
+
 const cleanupReceipt = { process_id: 42, runtime_identity_sha256: 'a'.repeat(64), challenge_completed: true, reaped: true, exit_code: 0 };
 
 async function artifactFixture(directory) {
@@ -124,6 +139,22 @@ test('prefill batch is an explicit bounded launch choice, separate from generati
   for (const batch of ['0', '32', '064', '64.0', '', '16,64']) {
     assert.throws(() => parseOptions([...args, '--prefill-batch', batch]), /prefill-batch/u);
   }
+});
+
+test('threads are an optional strict launch choice and leave prediction configs unchanged', () => {
+  const base = ['--suite', 'suite.json', '--output', 'output/writing/new'];
+  const defaults = parseOptions(base);
+  assert.equal(Object.hasOwn(defaults, 'threads'), false);
+  for (const threads of ['1', '2', '3', '4']) {
+    const selected = parseOptions([...base, '--threads', threads]);
+    assert.equal(selected.threads, Number(threads));
+    assert.deepEqual(selected.configs, defaults.configs);
+  }
+  for (const threads of ['0', '5', '04', '+4', '4.0', '', '4,2']) {
+    assert.throws(() => parseOptions([...base, '--threads', threads]), /threads/u);
+  }
+  assert.throws(() => parseOptions([...base, '--threads', '4', '--threads=2']), /only once/u);
+  assert.throws(() => parseOptions([...base, '--modes', 'revision_refine', '--threads', '4']), /revision modes/u);
 });
 
 test('instructed healing is an explicit CLI experiment with unchanged defaults and bounds', () => {
@@ -285,6 +316,21 @@ test('CLI uses real HTTP/server scoring and saves exclusive private artifacts wi
   assert.deepEqual(events.slice(-3).map(event => event.type), ['cleanup', 'qualification', 'complete']);
   await assert.rejects(runSuite(f.options, { worker, outputRoot: f.outputRoot }), /EEXIST/u);
   assert.equal(worker.calls.length, 1);
+});
+
+test('fixed threads are frozen in run provenance and mismatched result identities are refused', async t => {
+  for (const actual of [4, 2, undefined]) {
+    const f = await fixture(t);
+    const worker = new FakeWorker(async () => ({ outcome: 'suggestion', text: 'ent', word_complete: true,
+      latency_ms: 4, identity: actual === undefined ? {} : { threads: actual } }));
+    const result = await runSuite({ ...f.options, threads: 4 }, { worker, outputRoot: f.outputRoot });
+    assert.equal(result.report.provenance.requested_threads, 4);
+    assert.equal(result.report.complete, actual === 4);
+    assert.equal(result.session.records.length, actual === 4 ? 1 : 0);
+    if (actual !== 4) assert.match(result.report.error, /selected thread count/u);
+    assert.equal(result.report.cleanup.completed, true);
+    assert.equal(worker.session, null);
+  }
 });
 
 test('an imported session contributes cases only; previous predictions and reviews are not replayed', async t => {

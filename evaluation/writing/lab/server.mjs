@@ -11,9 +11,9 @@ import { fromLabOrigin, hasLabToken, readJSON as readBoundedJSON, sendJSON, setS
 import { createQualificationHandler, isQualificationRoute } from './qualification-server.mjs';
 import { validateSuite, modelInputForCase, planComparison, warmSchedule, scorePrediction, summarizeResults } from './cases.mjs';
 
-const MODES = ['production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'vocabulary'];
+const MODES = ['style_gentle', 'style_balanced', 'style_strong', 'production_boundary', 'context', 'context_confidence', 'instructed', 'healed', 'instructed_healed', 'native_instructed', 'vocabulary'];
 /** Modes that run the production provider with its own fixed settings. */
-export const FIXED_MODES = ['production_boundary', 'vocabulary'];
+export const FIXED_MODES = ['production_boundary', 'vocabulary', 'style_gentle', 'style_balanced', 'style_strong'];
 /** Weights of the pinned Qwen3 1.7B, the one model the `instructed` modes'
  * literal ChatML template is written for. The worker refuses them on any
  * other runtime; this check only names the reason before a run starts. */

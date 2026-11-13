@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { recordActivity } from './activity.mjs';
 import { hasIsolatedSpaces, hasUnsafeText, validCorrection } from './text-safety.mjs';
+import { REVISION_TIMEOUT_MS, revisionModes, validRevisionText, validSelection, sameSelection } from './revision.mjs';
 
 const PROFILES = Object.freeze({
   obsidian: { kind: 'obsidian', app_id: 'obsidian' },
@@ -68,12 +69,17 @@ export class BrokerClient extends EventEmitter {
   #profile;
   #policy = null;
   #textReplacement;
+  #selectionRevision;
+  #revision = null;
+  #revisionContext = null;
 
-  constructor(profile, { textReplacement = false } = {}) {
+  constructor(profile, { textReplacement = false, selectionRevision = false } = {}) {
     super();
     if (!Object.hasOwn(PROFILES, profile)) throw new Error('Unknown editor adapter');
     this.#profile = PROFILES[profile];
     this.#textReplacement = textReplacement === true;
+    if (selectionRevision && !['neovim', 'obsidian'].includes(profile)) throw new Error('Selection revision is not supported by this editor');
+    this.#selectionRevision = selectionRevision === true;
     this.on('activity', event => recordActivity(profile, 'transport', event));
     this.on('state', state => recordActivity(profile, 'state', state));
   }
@@ -116,6 +122,7 @@ export class BrokerClient extends EventEmitter {
     try {
       // Readline's display has its own four-second hold; keep its existing lease.
       const capabilities = [...CAPABILITIES, ...(this.#textReplacement ? ['text_replacement'] : []),
+        ...(this.#selectionRevision ? ['selection_revision'] : []),
         ...(READING_WINDOW.has(this.#profile.kind) ? ['long_reading_window'] : []),
         ...(EDITOR_FOCUS.has(this.#profile.kind) ? ['editor_focus'] : []),
         ...(ALTERNATIVE_LIST.has(this.#profile.kind) ? ['alternative_list'] : [])];
@@ -209,6 +216,71 @@ export class BrokerClient extends EventEmitter {
     this.#setCandidate(session, value);
     this.emit('state', 'suggestion');
     return value.text;
+  }
+
+  // Each request is its own exact snapshot. An unchanged selection reuses
+  // its session with newer coordinates, so the broker can avoid synonyms
+  // already shown. Any editor cancellation ends that history and authority.
+  async revise({ before, selected, after = '', selection, mode = 'grammar', language } = {}) {
+    if (!this.#selectionRevision || !this.allowed) throw new Error('Selection revision unavailable');
+    if (!revisionModes.has(mode) || !validRevisionText(selected, 600) || !selected.trim() ||
+        !validSelection(selection, selected) || typeof before !== 'string' || [...before].length > BEFORE_SCALARS ||
+        hasUnsafeText(before, true) || typeof after !== 'string' || [...after].length > AFTER_SCALARS ||
+        hasUnsafeText(after, true) || (language !== undefined &&
+          (typeof language !== 'string' || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/.test(language)))) {
+      throw new Error('Invalid revision request');
+    }
+    const key = JSON.stringify([before, selected, after, selection.anchor, selection.head, language]);
+    const previous = this.#revisionContext === key ? this.#session : null;
+    this.cancel(!previous);
+    const generation = this.#generation;
+    const id = previous?.session_id ?? randomUUID();
+    const session = { session_id: id, focus_epoch: 1, revision: previous ? previous.revision + 1 : 1,
+      fingerprint: createHash('sha256').update(randomUUID()).update(key).digest('hex') };
+    this.#session = session;
+    this.#revisionContext = key;
+    if (!previous) this.#send('session.open', { target: this.#target(id), activation: 'always' }, randomUUID(),
+      { ...session, revision: 0 });
+    this.emit('state', 'revising');
+    try {
+      const response = await this.#rpc('revision.request', { fingerprint: session.fingerprint, mode,
+        before, selected, after, selection, activation: 'manual', ...(language ? { language } : {}),
+        field: { purpose: 'normal', editable: true, multiline: true, composing: false, sensitive: false,
+          identity_known: true, focused: true, lock_screen: false },
+      }, 'revision.show', session, REVISION_TIMEOUT_MS);
+      if (generation !== this.#generation || this.#session !== session || !this.allowed) throw new Error('Context changed');
+      if (response.payload.fingerprint !== session.fingerprint) throw new Error('Invalid revision binding');
+      if (response.type === 'revision.clear') { this.emit('state', response.payload.reason); return null; }
+      const value = response.payload;
+      if (value.original !== selected || value.mode !== mode || !validRevisionText(value.text) || value.text === selected ||
+          typeof value.revision_id !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(value.revision_id) ||
+          !counter(value.ttl_ms) || value.ttl_ms < 1 || value.ttl_ms > 60000) throw new Error('Invalid revision');
+      this.#revision = { ...session, suggestion_id: value.revision_id, text: value.text,
+        replaceSelection: { ...selection }, expires: performance.now() + value.ttl_ms };
+      this.#expiry = setTimeout(() => this.cancel(), value.ttl_ms);
+      this.emit('state', 'revision');
+      return Object.freeze({ text: value.text, original: selected, mode });
+    } catch (error) {
+      if (this.#session === session) this.cancel();
+      throw error;
+    }
+  }
+
+  async authorizeRevision() {
+    const candidate = this.#revision;
+    const generation = this.#generation;
+    if (!candidate || !this.allowed || performance.now() >= candidate.expires) throw new Error('Revision expired');
+    this.#revision = null;
+    const response = await this.#rpc('control.request', { action: 'accept_all', fingerprint: candidate.fingerprint,
+      suggestion_id: candidate.suggestion_id }, 'commit.prepare', candidate);
+    if (generation !== this.#generation || !this.allowed || performance.now() >= candidate.expires ||
+        response.payload.acceptance !== 'all' || response.payload.text !== candidate.text ||
+        response.payload.fingerprint !== candidate.fingerprint || response.payload.suggestion_id !== candidate.suggestion_id ||
+        response.payload.replace_before !== undefined || !sameSelection(response.payload.replace_selection, candidate.replaceSelection)) {
+      throw new Error('Revision acceptance was revoked');
+    }
+    clearTimeout(this.#expiry);
+    return Object.freeze({ ...candidate, control_id: response.id });
   }
 
   // Another continuation in place of the shown one, starting with a different
@@ -351,7 +423,8 @@ export class BrokerClient extends EventEmitter {
       fingerprint: candidate.fingerprint, suggestion_id: candidate.suggestion_id }, 'commit.prepare', candidate);
     if (generation !== this.#generation || !this.allowed || performance.now() >= candidate.expires ||
         response.payload.acceptance !== acceptance || response.payload.text !== text || response.payload.fingerprint !== candidate.fingerprint ||
-        response.payload.suggestion_id !== candidate.suggestion_id || response.payload.replace_before !== candidate.replaceBefore) {
+        response.payload.suggestion_id !== candidate.suggestion_id || response.payload.replace_before !== candidate.replaceBefore ||
+        response.payload.replace_selection !== undefined) {
       throw new Error('Acceptance was revoked');
     }
     // The grant now binds the edit; the preview's expiry must not close the
@@ -362,7 +435,8 @@ export class BrokerClient extends EventEmitter {
 
   report(grant, status) {
     if (!['applied', 'stale', 'blocked', 'failed'].includes(status)) throw new Error('Invalid commit result');
-    if (this.#session?.session_id !== grant.session_id || !this.allowed) return;
+    if (!this.#session || !sameCoordinates(grant, this.#session) ||
+        grant.fingerprint !== this.#session.fingerprint || !this.allowed) return;
     this.#send('commit.result', { fingerprint: grant.fingerprint, suggestion_id: grant.suggestion_id, status },
       grant.control_id, grant);
     this.cancel();
@@ -372,7 +446,7 @@ export class BrokerClient extends EventEmitter {
   // Escape ends the carried remainder (ADR 0004). Closing the session does not:
   // Fcitx closes one on every edit and the next key still needs the carry.
   dismiss() {
-    const candidate = this.#candidate;
+    const candidate = this.#candidate ?? this.#revision;
     if (candidate && this.#session && !this.#closed) {
       try {
         this.#send('control.request', {
@@ -387,6 +461,8 @@ export class BrokerClient extends EventEmitter {
     this.#generation++;
     clearTimeout(this.#expiry);
     this.#candidate = null;
+    this.#revision = null;
+    this.#revisionContext = null;
     this.#list = null;
     this.#streamed = null;
     const session = this.#session;
@@ -414,11 +490,11 @@ export class BrokerClient extends EventEmitter {
     this.emit('state', 'offline');
   }
 
-  #rpc(type, payload, expected, session) {
+  #rpc(type, payload, expected, session, timeout = 2000) {
     if (this.#closed || this.#pending.size >= 16) return Promise.reject(new Error('Broker unavailable or busy'));
     const id = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error('Broker operation timed out')); }, 2000);
+      const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error('Broker operation timed out')); }, timeout);
       this.#pending.set(id, { resolve, reject, timer, expected, session });
       try { this.#send(type, payload, id, session); }
       catch (error) { clearTimeout(timer); this.#pending.delete(id); reject(error); }
@@ -461,6 +537,7 @@ export class BrokerClient extends EventEmitter {
           message.type !== 'control.result' && message.type !== 'error') throw new Error('Reply context mismatch');
       if (pending && (message.type === pending.expected || message.type === 'error' ||
           (pending.expected === 'suggestion.show' && message.type === 'suggestion.clear') ||
+          (pending.expected === 'revision.show' && message.type === 'revision.clear') ||
           (pending.expected === 'suggestion.list' &&
             (message.type === 'suggestion.show' || message.type === 'suggestion.clear')) ||
           (message.type === 'control.result' && message.payload.accepted === false))) {
@@ -472,7 +549,9 @@ export class BrokerClient extends EventEmitter {
       } else if (message.type === 'suggestion.clear' && this.#superseded !== null &&
           message.session_id === this.#session?.session_id && message.payload.suggestion_id === this.#superseded) {
         // The shown suggestion an alternative replaces; the answer follows.
-      } else if (message.type === 'suggestion.clear' || message.type === 'commit.revoke') {
+      } else if (message.type === 'revision.clear' && this.#session && !sameCoordinates(message, this.#session)) {
+        // A newer revision request retires the previous coordinates first.
+      } else if (message.type === 'suggestion.clear' || message.type === 'revision.clear' || message.type === 'commit.revoke') {
         // A clear can precede the authority notice that retires this session.
         // Do not echo a close for coordinates the broker may already have revoked.
         if (this.#session?.session_id === message.session_id) {

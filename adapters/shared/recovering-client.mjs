@@ -90,6 +90,14 @@ export class RecoveringBrokerClient extends EventEmitter {
     if (!this.allowed) return Promise.reject(new Error('Suggestion expired'));
     return this.#client.authorize(...args);
   }
+  revise(...args) {
+    if (!this.allowed) return Promise.reject(new Error('App disabled or model paused'));
+    return this.#client.revise(...args);
+  }
+  authorizeRevision() {
+    if (!this.allowed) return Promise.reject(new Error('Revision expired'));
+    return this.#client.authorizeRevision();
+  }
   report(...args) { if (this.allowed) this.#client.report(...args); }
   reportFocus(focused) {
     this.#focused = focused === true;

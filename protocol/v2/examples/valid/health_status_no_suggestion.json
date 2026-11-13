@@ -39,7 +39,8 @@
         "provider_error": 0,
         "low_confidence": 2,
         "repeated": 1,
-        "last": "budget_prefill"
+        "typo_suspected": 2,
+        "last": "typo_suspected"
       },
       "type_through": {
         "carried": 2,

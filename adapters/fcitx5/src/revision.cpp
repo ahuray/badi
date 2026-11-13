@@ -182,7 +182,7 @@ std::optional<std::string_view> revisionClearNotice(std::string_view reason) {
     if (reason == "invalid_output") return "Badi could not revise this — try a shorter selection";
     // The broker's revision languages (broker/src/revision.rs).
     if (reason == "unsupported_language") return "Badi revises English, German, French, Spanish and Portuguese";
-    if (reason == "revision_unavailable") return "Badi's revision model is not available — check badi doctor";
+    if (reason == "revision_unavailable") return "Badi revisions unavailable — run badi revise";
     if (reason == "provider_timeout") return "Badi took too long to revise this — try a shorter selection";
     if (reason == "provider_error") return "Badi revision failed — check badi doctor";
     if (reason == "paused") return "Badi paused — resume from the tray";

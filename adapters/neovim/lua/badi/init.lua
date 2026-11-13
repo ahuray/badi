@@ -4,6 +4,7 @@
 -- revalidated before and after the broker's one-shot grant.
 local context = require('badi.context')
 local Bridge = require('badi.bridge')
+local revision = require('badi.revision')
 
 local api = vim.api
 local M = {}
@@ -93,10 +94,10 @@ local function facts()
 end
 
 -- InsertEnter runs before the mode changes; it asks as if already inserting.
-local function blocked_reason(buf, assume_insert)
+local function blocked_reason(buf, assume_insert, selection)
   local current = facts()
   if assume_insert then current.mode = 'i' end
-  return context.blocked_reason(buf or api.nvim_get_current_buf(), state.config, current)
+  return context.blocked_reason(buf or api.nvim_get_current_buf(), state.config, current, selection)
 end
 
 local function snapshot()
@@ -119,6 +120,9 @@ local function matches(s)
   if not s or not api.nvim_win_is_valid(s.win) or not api.nvim_buf_is_valid(s.buf) then return false end
   if api.nvim_get_current_win() ~= s.win or api.nvim_win_get_buf(s.win) ~= s.buf then return false end
   if api.nvim_buf_get_changedtick(s.buf) ~= s.tick then return false end
+  if s.kind == 'revision' then
+    return blocked_reason(s.buf, false, true) == nil and revision.matches(s)
+  end
   local cursor = api.nvim_win_get_cursor(s.win)
   return cursor[1] == s.row + 1 and cursor[2] == s.col and blocked_reason(s.buf) == nil
 end
@@ -133,9 +137,10 @@ local function stop_timer()
 end
 
 local function remove_maps(visible)
+  local mode = visible.map_mode or 'i'
   for lhs, saved in pairs(visible.saved) do
-    pcall(vim.keymap.del, 'i', lhs, { buffer = visible.snapshot.buf })
-    if saved then pcall(vim.fn.mapset, 'i', false, saved) end
+    pcall(vim.keymap.del, mode, lhs, { buffer = visible.snapshot.buf })
+    if saved then pcall(vim.fn.mapset, saved.mode or mode, false, saved) end
   end
   visible.saved = {}
 end
@@ -144,8 +149,11 @@ local function clear_preview()
   local visible = state.visible
   if not visible then return end
   state.visible = nil
+  if visible.preview_win and api.nvim_win_is_valid(visible.preview_win) then
+    pcall(api.nvim_win_close, visible.preview_win, true)
+  end
   if api.nvim_buf_is_valid(visible.snapshot.buf) then
-    pcall(api.nvim_buf_del_extmark, visible.snapshot.buf, namespace, visible.mark)
+    if visible.mark then pcall(api.nvim_buf_del_extmark, visible.snapshot.buf, namespace, visible.mark) end
     remove_maps(visible)
   end
 end
@@ -179,9 +187,10 @@ end
 --- bridge operation that releases the broker's session: 'cancel' keeps the
 --- type-through carry, 'dismiss' ends it.
 local function invalidate(notify)
-  local active = state.pending ~= nil or state.visible ~= nil or state.accepting
+  local active = state.pending ~= nil or state.visible ~= nil or state.accepting or state.revision_cycle ~= nil
   state.generation = state.generation + 1
   state.pending = nil
+  state.revision_cycle = nil
   state.accepting = false
   stop_timer()
   clear_preview()
@@ -197,12 +206,13 @@ local function ensure_bridge()
         -- Expiry, revocation, pause or disconnect: the grant behind the
         -- preview is gone, so the preview goes too. This also stale-outs an
         -- acceptance whose grant reply has not been applied yet.
-        if state.visible then invalidate(nil) end
+        if state.visible or state.accepting then invalidate(nil) end
       elseif message.event == 'update' then
         extend(message.text, message.word)
       elseif message.event == 'state' then
         set_status(message.state)
         set_policy(message)
+        if state.policy and not state.policy.allowed then invalidate(nil) end
         if message.state == 'offline' or message.state == 'offline_retry' then invalidate(nil) end
       end
     end,
@@ -238,16 +248,62 @@ local function on_key(kind, lhs)
   local visible = state.visible
   if visible and state.accepting then return end
   if visible and matches(visible.snapshot) then
-    accept(kind == 'accept_word' and 'word' or 'all')
+    accept(visible.snapshot.kind == 'revision' and 'all' or kind == 'accept_word' and 'word' or 'all')
     return
   end
   -- Not ours: withdraw the preview and its mappings, then hand the key to
   -- whatever the user or another plugin mapped, or to Neovim itself.
   invalidate('cancel')
-  local remaining = vim.fn.maparg(lhs, 'i', false, true)
+  local remaining = vim.fn.maparg(lhs, visible and visible.map_mode or 'i', false, true)
   -- Never feed the key back to this mapping.
   if remaining.buffer == 1 and remaining.desc == 'Badi' then return end
   api.nvim_feedkeys(api.nvim_replace_termcodes(lhs, true, false, true), 'mt', false)
+end
+
+local function show_revision(s, reply)
+  local width, height = api.nvim_win_get_width(s.win), api.nvim_win_get_height(s.win)
+  if width < 16 or height < 4 then return false end
+  local preview = revision.preview(s, reply, width - 2, math.floor(height / 2))
+  if not preview then return false end
+  -- Virtual lines below a bottom-row selection can be completely offscreen.
+  -- Keep the entire marked preview inside the requesting window instead.
+  local buf = api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = 'wipe'
+  local lines = {}
+  for _, line in ipairs(preview.lines) do
+    local parts = {}
+    for _, chunk in ipairs(line) do parts[#parts + 1] = chunk[1] end
+    lines[#lines + 1] = table.concat(parts)
+  end
+  api.nvim_buf_set_lines(buf, 0, -1, true, lines)
+  local highlights = api.nvim_create_namespace('badi_revision_preview')
+  for row, line in ipairs(preview.lines) do
+    local col = 0
+    for _, chunk in ipairs(line) do
+      api.nvim_buf_set_extmark(buf, highlights, row - 1, col,
+        { end_col = col + #chunk[1], hl_group = chunk[2] })
+      col = col + #chunk[1]
+    end
+  end
+  vim.bo[buf].modifiable = false
+  local ok, win = pcall(api.nvim_open_win, buf, false, { relative = 'win', win = s.win, col = 0,
+    row = math.max(0, math.min(vim.fn.winline(), height - #lines - 2)), width = width - 2, height = #lines,
+    focusable = false, style = 'minimal', border = 'single', noautocmd = true, zindex = 200 })
+  if not ok then api.nvim_buf_delete(buf, { force = true }); return false end
+  vim.wo[win].wrap = false
+  local visible = { snapshot = s, text = reply.text, display = preview.display, chunks = preview.chunks,
+    preview_win = win, owner_width = width, owner_height = height,
+    preview_width = width - 2, preview_height = #lines, saved = {}, map_mode = 'x' }
+  state.visible, state.shown = visible, nil
+  local lhs = state.config.keys.accept_word
+  if lhs and lhs ~= '' then
+    local previous = vim.fn.maparg(lhs, 'x', false, true)
+    visible.saved[lhs] = previous.buffer == 1 and previous.desc ~= 'Badi' and previous or false
+    vim.keymap.set('x', lhs, function() on_key('accept', lhs) end,
+      { buffer = s.buf, nowait = true, silent = true, desc = 'Badi' })
+  end
+  set_status('revision')
+  return true
 end
 
 local function on_pick_key(index, lhs)
@@ -390,9 +446,66 @@ end
 
 --- Requests a suggestion for the caret now. `explicit` is a user request;
 --- on a shown suggestion it asks for another one instead.
+function M.revise(mode)
+  if not state.config or state.accepting or state.pending then return end
+  local reason = blocked_reason(nil, false, true)
+  if reason then set_status(reason); return end
+  if not ensure_bridge() then set_status('bridge_unavailable'); return end
+  if not state.policy then
+    local asked = state.generation
+    state.bridge:request({ op = 'status' }, function(reply)
+      if reply.ok then set_policy(reply) end
+      if state.generation == asked and state.policy then M.revise(mode) end
+    end)
+    return
+  end
+  reason = policy_reason(true)
+  if reason then set_status(reason); return end
+  local s = revision.capture()
+  if not s then set_status('unsupported_selection'); return end
+  local cycle = state.revision_cycle
+  mode = mode or (cycle and matches(cycle.snapshot) and cycle.next_mode) or 'grammar'
+  if mode ~= 'grammar' and mode ~= 'refine' and mode ~= 'synonyms' then set_status('invalid_request'); return end
+  invalidate(nil)
+  local generation = state.generation
+  state.pending = { generation = generation, snapshot = s }
+  set_status('revising')
+  state.bridge:request({ op = 'revise', mode = mode, before = s.before, selected = s.selected, after = s.after,
+    selection = s.selection, language = state.config.language }, function(reply)
+    if state.generation ~= generation then return end
+    state.pending = nil
+    local current = matches(s)
+    if not reply.ok or not current then
+      invalidate('cancel')
+      state.bridge:notify({ op = 'cancel' })
+      set_status(reply.ok and 'stale' or reply.reason)
+      if current and reply.reason == 'revision_unavailable' then
+        api.nvim_echo({ { 'Badi revisions unavailable — run badi revise' } }, true, {})
+      end
+      return
+    end
+    if reply.text == nil and reply.reason ~= 'no_change' then
+      invalidate('cancel'); set_status('invalid_response')
+      return
+    end
+    if reply.next_mode ~= 'grammar' and reply.next_mode ~= 'refine' and reply.next_mode ~= 'synonyms' then
+      state.bridge:notify({ op = 'cancel' }); set_status('invalid_request'); return
+    end
+    state.revision_cycle = { snapshot = s, next_mode = reply.next_mode }
+    if reply.text == nil then
+      set_status('no_change')
+      return
+    end
+    if reply.mode ~= mode or not show_revision(s, reply) then
+      invalidate('cancel'); set_status('preview_unavailable')
+    end
+  end)
+end
+
 function M.request(explicit)
   explicit = explicit == true
   if not state.config then return end
+  if explicit and api.nvim_get_mode().mode == 'v' then return M.revise() end
   local visible = state.visible
   if explicit and visible and visible.text and not state.accepting and not state.pending and state.bridge
       and matches(visible.snapshot) then
@@ -488,7 +601,8 @@ accept = function(acceptance)
   local s = visible.snapshot
   local generation = state.generation
   state.accepting = true
-  state.bridge:request({ op = 'accept', acceptance = acceptance }, function(reply)
+  local is_revision = s.kind == 'revision'
+  state.bridge:request({ op = is_revision and 'accept_revision' or 'accept', acceptance = acceptance }, function(reply)
     if state.generation ~= generation then
       -- The editor moved on while the grant was prepared; it is not used.
       if reply.ok then state.bridge:notify({ op = 'result', status = 'stale' }) end
@@ -503,7 +617,14 @@ accept = function(acceptance)
     local text = reply.text
     local replace_before = visible.replace_before
     local expected
-    if replace_before ~= nil then
+    if is_revision then
+      expected = text == visible.text and reply.replace_before == nil
+        and vim.deep_equal(reply.replace_selection, s.selection)
+        and api.nvim_win_is_valid(visible.preview_win) and api.nvim_win_is_valid(s.win)
+        and api.nvim_win_get_width(s.win) == visible.owner_width and api.nvim_win_get_height(s.win) == visible.owner_height
+        and api.nvim_win_get_width(visible.preview_win) == visible.preview_width
+        and api.nvim_win_get_height(visible.preview_win) == visible.preview_height
+    elseif replace_before ~= nil then
       -- Either acceptance takes the whole correction, and only for the exact
       -- suffix shown; any other grant replaces nothing.
       expected = text == visible.text and reply.replace_before == replace_before
@@ -513,7 +634,8 @@ accept = function(acceptance)
         or (acceptance == 'word' and context.insertable(text) and visible.text:sub(1, #text) == text))
     end
     local policy_allowed = state.policy == nil or policy_reason(true) == nil
-    if not expected or not policy_allowed or not context.insertable(text) or not matches(s) then
+    local safe = is_revision and revision.safe_text(text) or context.insertable(text)
+    if not expected or not policy_allowed or not safe or not matches(s) then
       state.bridge:notify({ op = 'result', status = 'stale' })
       invalidate(nil)
       set_status('stale')
@@ -521,7 +643,8 @@ accept = function(acceptance)
     end
     clear_preview()
     state.generation = state.generation + 1
-    local applied = apply(s, text, replace_before)
+    state.revision_cycle = nil
+    local applied = is_revision and revision.apply(s, text) or (not is_revision and apply(s, text, replace_before))
     state.bridge:notify({ op = 'result', status = applied and 'applied' or 'failed' })
     set_status(applied and 'applied' or 'failed')
   end)
@@ -545,6 +668,7 @@ end
 
 local function on_cursor_moved()
   local active = state.visible and state.visible.snapshot or state.pending and state.pending.snapshot
+    or state.revision_cycle and state.revision_cycle.snapshot
   if active then
     if not matches(active) then invalidate('cancel') end
     return
@@ -576,6 +700,8 @@ function M.setup(options)
     state.bridge = nil
   end
   api.nvim_set_hl(0, 'BadiSuggestion', { link = 'Comment', default = true })
+  api.nvim_set_hl(0, 'BadiRevisionRemoved', { link = 'DiffDelete', default = true })
+  api.nvim_set_hl(0, 'BadiRevisionAdded', { link = 'DiffAdd', default = true })
   -- The word Tab takes: the comment colour, bold, unless the user set it.
   local ok, comment = pcall(api.nvim_get_hl, 0, { name = 'Comment', link = false })
   api.nvim_set_hl(0, 'BadiSuggestionWord', { fg = ok and comment.fg or nil, bold = true, default = true })
@@ -587,6 +713,20 @@ function M.setup(options)
   end)
   autocmd('TextChangedI', on_text_changed)
   autocmd('CursorMovedI', on_cursor_moved)
+  autocmd('CursorMoved', on_cursor_moved)
+  autocmd({ 'TextChanged', 'ModeChanged' }, function()
+    local active = state.pending and state.pending.snapshot or state.visible and state.visible.snapshot
+      or state.revision_cycle and state.revision_cycle.snapshot
+    if active and active.kind == 'revision' and not matches(active) then invalidate('cancel') end
+  end)
+  autocmd({ 'WinResized', 'WinScrolled' }, function()
+    -- Window geometry is part of the marked preview's visibility proof.
+    if state.visible and state.visible.snapshot.kind == 'revision' then invalidate('cancel') end
+  end)
+  autocmd('WinClosed', function()
+    local visible = state.visible
+    if visible and visible.preview_win and not api.nvim_win_is_valid(visible.preview_win) then invalidate('cancel') end
+  end)
   autocmd('InsertLeave', dismiss)
   autocmd({ 'TextChangedP', 'CompleteChanged', 'BufLeave', 'WinLeave' }, function() invalidate('cancel') end)
   autocmd('FocusLost', function()
@@ -613,6 +753,22 @@ function M.setup(options)
   if request and request ~= '' and vim.fn.maparg(request, 'i') == '' then
     vim.keymap.set('i', request, function() M.request(true) end, { silent = true, desc = 'Badi: request a suggestion' })
   end
+  if request and request ~= '' and vim.fn.maparg(request, 'x') == '' then
+    vim.keymap.set('x', request, function() M.request(true) end, { silent = true, desc = 'Badi: revise the selection' })
+  end
+  -- Only while an explicit selection request exists: an unrelated key
+  -- retires it even when that key leaves the caret in place. No key text
+  -- is stored or sent to the broker.
+  vim.on_key(function(_, typed)
+    if not typed or typed == '' then return end
+    local active = state.pending and state.pending.snapshot or state.visible and state.visible.snapshot
+      or state.revision_cycle and state.revision_cycle.snapshot
+    if not active or active.kind ~= 'revision' then return end
+    local function is_key(lhs) return lhs and typed == api.nvim_replace_termcodes(lhs, true, false, true) end
+    if is_key(request) or (state.visible and is_key(state.config.keys.accept_word)) then return end
+    local generation = state.generation
+    vim.schedule(function() if state.generation == generation then invalidate('dismiss') end end)
+  end, namespace)
 end
 
 function M.is_setup()
@@ -639,7 +795,7 @@ function M.status()
     holds_terminal = state.holds_terminal,
     policy = not state.policy and 'unknown' or not state.policy.allowed and 'refused'
       or state.policy.automatic and 'automatic' or 'manual',
-    blocked = not state.config and 'not_set_up' or blocked_reason(),
+    blocked = not state.config and 'not_set_up' or blocked_reason(nil, false, api.nvim_get_mode().mode == 'v'),
   }
 end
 
@@ -652,6 +808,7 @@ end
 function M._preview_chunks()
   local visible = state.visible
   if not visible then return nil end
+  if visible.chunks then return visible.chunks end
   local ok, mark = pcall(api.nvim_buf_get_extmark_by_id, visible.snapshot.buf, namespace, visible.mark,
     { details = true })
   return ok and mark[3] and mark[3].virt_text or nil

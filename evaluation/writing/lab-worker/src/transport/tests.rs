@@ -174,7 +174,10 @@ async fn native_template_uses_local_formatter_and_rejects_missing_prompt() {
             .unwrap(),
         "<native-assistant>"
     );
-    assert_eq!(task.await.unwrap(), json!({"messages":messages}));
+    assert_eq!(
+        task.await.unwrap(),
+        json!({"messages":messages,"chat_template_kwargs":{"enable_thinking":false}})
+    );
     for body in [json!({}), json!({"prompt":""}), json!({"prompt":false})] {
         let (client, task) = fixture(body.to_string(), Duration::ZERO, "application/json").await;
         assert!(matches!(

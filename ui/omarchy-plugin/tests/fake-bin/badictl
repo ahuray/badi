@@ -42,8 +42,13 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
   if [[ -n ${BADI_FAKE_SETTINGS:-} && -f $BADI_FAKE_SETTINGS ]]; then
     extra=$(cat -- "$BADI_FAKE_SETTINGS")
   fi
+  overview_extra='{}'
+  if [[ -n ${BADI_FAKE_OVERVIEW:-} && -f $BADI_FAKE_OVERVIEW ]]; then
+    overview_extra=$(cat -- "$BADI_FAKE_OVERVIEW")
+  fi
 
-  jq -n --argjson all_web_origins "$all_web_origins" --argjson extra "$extra" '
+  jq -n --argjson all_web_origins "$all_web_origins" --argjson extra "$extra" \
+    --argjson overview_extra "$overview_extra" '
     {
       schema: "badi.overview.v2",
       broker: {
@@ -95,7 +100,7 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
           }
         ]
       } + $extra)
-    }
+    } + $overview_extra
   '
   exit 0
 fi

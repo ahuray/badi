@@ -582,7 +582,11 @@ impl HelloPayload {
         if self.capabilities.contains(&Capability::SelectionRevision)
             && !matches!(
                 self.adapter.kind,
-                AdapterKind::Fcitx | AdapterKind::Test | AdapterKind::Cli
+                AdapterKind::Fcitx
+                    | AdapterKind::Neovim
+                    | AdapterKind::Obsidian
+                    | AdapterKind::Test
+                    | AdapterKind::Cli
             )
         {
             return Err(ProtocolError::InvalidPayload);
@@ -1898,7 +1902,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_fcitx_addon_negotiates_selection_revision() {
+    fn selection_revision_requires_an_implemented_editor() {
         let hello = |kind| HelloPayload {
             min_v: CURRENT_PROTOCOL_VERSION,
             max_v: CURRENT_PROTOCOL_VERSION,
@@ -1916,9 +1920,13 @@ mod tests {
         hello(AdapterKind::Fcitx)
             .validate()
             .expect("the Fcitx addon");
-        for kind in [AdapterKind::Obsidian, AdapterKind::Terminal] {
-            assert!(hello(kind).validate().is_err(), "{kind:?}");
-        }
+        hello(AdapterKind::Neovim)
+            .validate()
+            .expect("the Neovim editor");
+        hello(AdapterKind::Obsidian)
+            .validate()
+            .expect("the Obsidian editor");
+        assert!(hello(AdapterKind::Terminal).validate().is_err());
     }
 
     #[test]

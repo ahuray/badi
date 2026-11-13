@@ -4,7 +4,7 @@
 - Date: 2026-10-23
 - Scope: the broker's revision authority and its on-demand revision
   runtime, the Fcitx addon in native exact and observed IME-parity fields,
-  and the observer's selection snapshot
+  the observer's selection snapshot, and Neovim's and Obsidian's editor-owned selections
 
 ## Context
 
@@ -17,6 +17,17 @@ already written, so a revision replaces it, and the base model that writes
 continuations cannot follow an instruction such as "fix the grammar".
 
 ## Decision
+
+Neovim implements this authority through its own exact characterwise Visual
+selection, marked preview and one-undo range replacement; it reads back the
+editor mutation before reporting `applied`. Its adapter contract and tested
+boundaries live in the [Neovim runbook](../../adapters/neovim/README.md#selection-revision).
+Obsidian follows the same contract with one single-line CodeMirror selection,
+a tooltip that marks the full change, and one isolated native undo transaction.
+Its exact UTF-16 range is kept locally while the broker binds scalar offsets;
+the complete preview must fit before a grant is requested and before it is
+applied. See the [editor runbook](../../adapters/shared/README.md#obsidian-selection-revision).
+Bash does not negotiate selection revision.
 
 1. **Trigger.** Ctrl+Shift+Space while text is selected asks for a grammar
    check of that selection, and pressing it again while a revision shows
@@ -47,7 +58,9 @@ continuations cannot follow an instruction such as "fix the grammar".
    ignoring case and punctuation. An unchanged result is "nothing
    to fix". A selection that starts mid-sentence keeps its first letter's
    case, and one that is followed by more text on its line gains no final
-   mark.
+   mark. Each angle bracket, backtick and Markdown emphasis delimiter
+   (`*`, `_`) must already occur in the selection before it can occur in
+   the answer; an existing delimiter does not permit another kind.
 5. **Show.** The adapter shows the revision with its changes marked and
    applies nothing until the user accepts it with Tab; Escape or any other
    key retires it, and it expires after 60 seconds.

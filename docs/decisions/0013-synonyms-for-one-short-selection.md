@@ -3,7 +3,7 @@
 - Status: accepted (user request, 2026-10-31)
 - Date: 2026-10-31
 - Scope: the broker's revision modes, prompt and gate, and the Fcitx
-  addon's revision chord in the fields of ADR 0012
+  addon, Neovim and Obsidian revision chords in the fields of ADR 0012
 
 ## Context
 
@@ -48,5 +48,5 @@ A synonym is one more marked replacement the writer reads before Tab
 applies it, so a weak 1.7B answer is visible, never silently typed.
 Offers are one at a time, like alternatives on a suggestion, not a
 numbered list; the list remains future work if it is wanted. Synonyms
-exist only where revision does — the Fcitx addon — not in the editor
-clients, which have no selection revision today.
+exist where revision does: the Fcitx addon, Neovim's characterwise Visual
+selection and Obsidian's single-line selection. Bash does not negotiate selection revision.

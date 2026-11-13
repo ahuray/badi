@@ -8,6 +8,7 @@ import { boundedContext, refusalReason } from '../shared/broker-client.mjs';
 import { RecoveringBrokerClient } from '../shared/recovering-client.mjs';
 import { recordActivity } from '../shared/activity.mjs';
 import { bridgeLanguage } from '../shared/writing-language.mjs';
+import { nextRevisionMode, revisionDiff, revisionModes } from '../shared/revision.mjs';
 
 // Exit after this long without a command so an idle editor does not keep a
 // Node process (about 60 MB); the plugin starts a new bridge when it next needs one.
@@ -18,8 +19,9 @@ const LANGUAGE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/;
 const ACCEPTANCE = new Set(['all', 'word']);
 const RESULTS = new Set(['applied', 'stale', 'failed']);
 
-const client = new RecoveringBrokerClient('neovim', { textReplacement: true });
+const client = new RecoveringBrokerClient('neovim', { textReplacement: true, selectionRevision: true });
 let grant = null;
+let revisionRequest = null;
 // While Neovim holds its terminal's focus the bridge stays connected, since
 // the broker drops the focus report with the connection.
 let focused = false;
@@ -41,7 +43,10 @@ client.on('update', text => send({ event: 'update', text, word: client.acceptWor
 // text for a request the broker would refuse.
 const policy = () => ({ connected: client.connected, allowed: client.allowed, automatic: client.automaticAllowed });
 client.on('state', state => {
-  if (typeof state === 'string' && /^[a-z_]{1,48}$/.test(state)) send({ event: 'state', state, ...policy() });
+  if (typeof state === 'string' && /^[a-z_]{1,48}$/.test(state)) {
+    if (revisionRequest) revisionRequest.reason = state;
+    send({ event: 'state', state, ...policy() });
+  }
 });
 
 const reason = () => refusalReason(client);
@@ -73,6 +78,38 @@ async function suggest(command) {
 
 async function handle(command) {
   switch (command.op) {
+    case 'revise': {
+      if (!validContext(command.before, 4096) || !validContext(command.after ?? '', 1024) ||
+          !validContext(command.selected, 2400) || !revisionModes.has(command.mode)) {
+        return { ok: false, reason: 'invalid_request' };
+      }
+      if (!client.connected) await client.connect().catch(() => false);
+      if (!client.allowed) return { ok: false, reason: reason() };
+      grant = null;
+      const { before, after } = boundedContext(command.before, command.after ?? '');
+      const pending = { reason: null };
+      revisionRequest = pending;
+      try {
+        const result = await client.revise({ before, after, selected: command.selected, selection: command.selection,
+          mode: command.mode, language: command.language });
+        if (revisionRequest !== pending) return { ok: false, reason: 'stale' };
+        // A clear names its own refusal. Only no_change permits the next
+        // revision mode; missing assets, policy and provider failures do not.
+        if (!result && pending.reason !== 'no_change') {
+          return { ok: false, reason: pending.reason ?? 'expired_or_unavailable' };
+        }
+        return { ok: true, text: result?.text ?? null, mode: command.mode,
+          next_mode: nextRevisionMode(command.mode, command.selected),
+          ...(result ? { diff: revisionDiff(command.selected, result.text) } : { reason: 'no_change' }) };
+      } finally {
+        if (revisionRequest === pending) revisionRequest = null;
+      }
+    }
+    case 'accept_revision': {
+      grant = null;
+      grant = await client.authorizeRevision();
+      return { ok: true, text: grant.text, replace_selection: grant.replaceSelection };
+    }
     case 'suggest':
       return suggest(command);
     case 'alternative': {
@@ -144,7 +181,7 @@ try {
     // Commands run concurrently: a newer suggestion supersedes an older one
     // in the client, which rejects the older request with a changed context.
     void handle(command).then(reply => send({ id, ...reply }), () => {
-      if (command.op === 'accept' || command.op === 'suggest') grant = null;
+      if (['accept', 'suggest', 'revise', 'accept_revision'].includes(command.op)) grant = null;
       send({ id, ok: false, reason: reason() });
     }).finally(armIdleExit);
   }

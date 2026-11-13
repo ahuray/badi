@@ -6,7 +6,8 @@ The **b** mark on the Omarchy bar opens Badi's settings and shows whether sugges
 
 - `panel-open` opens the popout under the mark.
 - `panel-pause` pauses from the mark or the pause switch and dims the mark.
-- `panel-model` shows the model in use on the hero pill. After All settings, the Writing model row names that model's licence, the device recommendation, and every model that fits, with ★ on the recommended one.
+- `panel-model` shows the model in use on the hero pill. After All settings, the Writing model row names that model's licence, the device recommendation and its memory-fit reason, and every model that fits, with ★ on the recommended one.
+- `panel-revisions` shows the separate revision model's size and file status. Install or Verify/Repair runs `badi revise install`; errors remain visible and permit retry. Presence is metadata, not a ready-runtime claim.
 - `panel-search` filters rows from `/`.
 - `panel-length` sets Short or Normal on Suggestion length.
 - `panel-snooze` shows a Snoozed row while an app or site is quiet, and Enter ends every snooze.
@@ -30,6 +31,7 @@ Preconditions:
 - **Open.** Left-click the **b** mark. A screenshot shows the popout with the model pill and the pause switch.
 - **Pause from the mark.** Right-click the mark. The mark dims, and `badi status` reports paused. Right-click again, and status reports the model ready.
 - **Search.** Press `/`, type a row name, and confirm the other rows are hidden. Escape or clearing the query shows them again.
+- **Revision setup.** Search `/revisions` or open All settings. Check the model size and status against `badi revise --json`; on the installed model, Verify/Repair checks its pinned bytes and reports success. Missing/damaged assets and failed/cancelled downloads use the isolated controller/lifecycle fixtures so the desktop model stays intact ([runbook](../../../../ui/omarchy-plugin/README.md#client-contract)).
 - **Length, snooze, and stats on the panel.** Set Short on Suggestion length and confirm the next local-model suggestion is one or two words. Snooze from the focused field and confirm the Snoozed row names that app or site. The History header's week matches `badi stats`. Open All settings for the leading apps and for Forget usage statistics. These are not on a cloud VM.
 - **Source check, not the panel.** `npm run omarchy:check` exits 0 when the repo's fast QML and keyboard checks pass. That command never opens the bar. A green run is not `panel-open`.
 

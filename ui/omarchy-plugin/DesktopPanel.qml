@@ -126,6 +126,14 @@ Item {
   readonly property var statsSummary: client.objectValue(stats, "summary")
   readonly property var modelAdvice: client.objectValue(client.objectValue(client.objectValue(client.overview, "models"), "writing"), "advice")
   readonly property var modelCatalog: Array.isArray(modelAdvice.catalog) ? modelAdvice.catalog : []
+  readonly property var revisionModel: client.objectValue(desktop, "revision")
+  readonly property bool revisionReported: revisionModel.schema === "badi.revision.v1"
+    && revisionModel.model === "qwen3-1.7b" && typeof revisionModel.name === "string"
+    && typeof revisionModel.fits === "boolean" && typeof revisionModel.installed === "boolean"
+    && Number.isSafeInteger(revisionModel.bytes) && revisionModel.bytes > 0
+    && revisionModel.license === "Apache-2.0"
+    && ["missing", "present", "invalid", "unreadable"].indexOf(revisionModel.file_state) >= 0
+    && revisionModel.installed === (revisionModel.file_state === "present")
   // Terms that come with a model's licence; a model with terms is chosen,
   // then downloaded only from the row that names them.
   readonly property var modelTerms: ({
@@ -651,15 +659,18 @@ Item {
     // measured one marked; picking one downloads it (pinned) and restarts.
     var fitting = modelCatalog.filter(function(model) { return model.fits === true })
     var recommendedId = client.objectValue(modelAdvice, "recommended").id
+    // The advice begins with the memory fit; the CLI shows every reason.
+    var fitReason = Array.isArray(modelAdvice.rationale) && typeof modelAdvice.rationale[0] === "string"
+      ? "\n" + modelAdvice.rationale[0] : ""
     if (fitting.length > 0) {
       var licences = {"Gemma": "Gemma terms", "Llama-3.2-Community": "Llama 3.2 licence", "Apache-2.0": "Apache-2.0"}
       var pending = fitting.filter(function(model) { return model.id === root.pendingModel })[0]
       list.push({key: "model", section: "Model", kind: "choice", label: "Writing model",
         // The licence is the model in use's, so it is named with that model.
-        detail: activeModel.id === recommendedId
+        detail: (activeModel.id === recommendedId
           ? "Recommended for this device · " + (licences[activeModel.license] || activeModel.license || "")
           : (modelName ? modelName + ", " + (licences[activeModel.license] || activeModel.license || "") + " · " : "")
-            + "Recommended: " + (client.objectValue(modelAdvice, "recommended").name || "none"),
+            + "Recommended: " + (client.objectValue(modelAdvice, "recommended").name || "none")) + fitReason,
         value: pending ? pending.id : activeModel.id || "", enabled: !controlsBusy,
         options: fitting.map(function(model) {
           return {value: model.id, label: model.name + (model.id === recommendedId ? " ★" : "")}
@@ -683,6 +694,23 @@ Item {
           }})
       }
     }
+    var revision = revisionModel
+    var revisionDetail = !revisionReported ? "Status unavailable · run badi revise"
+      : revision.name + " · " + (revision.bytes / 1e9).toFixed(1) + " GB · " + revision.license + "\n"
+        + (!revision.fits ? "Does not fit this device's memory."
+          : revision.file_state === "present" ? "Model file present; verified before use.\nSelect one line and press Ctrl+Shift+Space."
+          : revision.file_state === "missing" ? "Not installed. Download to check grammar and refine selected text."
+          : "Model file needs repair. Download and verify it again.")
+    list.push({key: "revision", section: "Revisions", kind: "action",
+      label: !revisionReported || !revision.fits ? "Revision model"
+        : revision.file_state === "present" ? "Verify or repair revision model"
+        : revision.file_state === "missing" ? "Install revision model" : "Repair revision model",
+      detail: revisionDetail, wrapDetail: true,
+      enabled: revisionReported && revision.fits && !controlsBusy,
+      activate: function() {
+        if (!root.revisionReported || !root.revisionModel.fits || root.controlsBusy) return
+        root.runAction(["revise", "install"], "Checking the revision model", "Revision model verified · select text and press Ctrl+Shift+Space", 900000)
+      }})
     // Opt-in context (ADR 0010): asked once while unchosen, then a switch,
     // one row per allowed app and a way to forget the learned words.
     var context = client.settings.context_words

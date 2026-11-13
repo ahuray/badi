@@ -35,7 +35,8 @@ links to it. A tested app version is not a claim about Linux in general.
   in front of the next word; `badi length short` shows one or
   two words instead of up to four; search boxes stay quiet; Ctrl+Shift+Space
   on a selected line checks its grammar or refines it, shown with marked
-  changes and applied by Tab
+  changes and applied by Tab, including editor-owned selections in Obsidian
+  and Neovim
   ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md));
   typos in Chromium-based apps are corrected after checks
   ([ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)); the inline
@@ -194,11 +195,11 @@ publish need the user's go-ahead first; the rest can start at once.
      all) and no prompt reads them
      ([broker runbook](broker/README.md#style-learning-opt-in));
      Cotypist's core feature is exactly this loop closed, with a six-stop
-     strength slider. Work: (i) in the Lab only, add a style arm to
-     `production_boundary` that puts a bounded number of sealed samples for
-     the request's subject and language in front of the current sentence
-     (charge them against the 512-token window and report the trade), at
-     three strengths that map to sample count and position; (ii) run the
+     strength slider. The Lab now has [three explicit style arms](evaluation/writing/README.md#style-comparison)
+     with production checks and measured 512-token admission, using one,
+     two or four case-local examples. The user chose synthetic examples
+     for development on 2026-11-12; no private export was read.
+     Remaining work: (ii) run the
      paired comparison step 5 already specifies (same suites, settings and
      seed, style off against on, the user's held-out drafts as the private
      set, samples never leaving the machine or entering the checkout);
@@ -218,11 +219,24 @@ publish need the user's go-ahead first; the rest can start at once.
      and language overrides but no instruction text, and paired Lab probes
      (2026-10-20) found neither the raw prompt nor an instructed variant
      follows instructions on the current 1B base model — so this item is
-     evidence-gated, not settings-first. Work: (i) extend the Lab's
-     instructed-healed arms with an instruction-adherence suite (tone,
-     formality, terminology and language instructions with decidable
-     checks) over the current Gemma 3 1B, Qwen3 1.7B and any 1c candidate;
-     (ii) only for a model that follows them without a useful/harmful
+     evidence-gated, not settings-first. The Lab now has a synthetic
+     [instruction-adherence suite](evaluation/writing/README.md#instruction-adherence)
+     for tone, formality, terminology and language markers. Its fully paired
+     80-request screen pinned four threads and found one lexical gain for
+     Gemma 3 and none for Qwen3; some lexical passes were incomplete additions.
+     Neither model qualifies for production instructions. A further 64-request
+     Qwen3 0.6B screen corrected its native non-thinking prefix and reached
+     4/8 lexical passes, but no instructed addition met timely full-usefulness
+     criteria ([evidence](evaluation/writing/README.md#instruction-adherence)).
+     The Lab now estimates Qwen3.5's hybrid memory under the pinned CPU
+     runtime, with independent downloaded-metadata checks. Its actual
+     artifact download, runtime load and instruction trial remain unverified;
+     work stopped at the user's request before that trial.
+     Remaining work: screen a stronger instruction candidate, then use a
+     separate held-out set with full-addition review; repeat for a 1c
+     candidate when available.
+     (ii) Only for a model that
+     follows instructions without a useful/harmful
      regression, add bounded instruction fields to settings v2 (global,
      then per-subject override appended after it), count their tokens
      against the window in the prompt builder, and surface them in
@@ -266,61 +280,40 @@ publish need the user's go-ahead first; the rest can start at once.
      Badi-shaped version reads structure, not pixels: subject line,
      recipients, headings and the paragraphs around the field from the
      accessibility tree the observer already walks, never another field's
-     text and never across windows. Work: (i) define the observer's
+     text and never across windows. A bounded heading/paragraph prototype
+     failed its 2026-11-12 screen (4/16 useful against 6/16 without context,
+     plus a wrong-context override) and was removed
+     ([result](evaluation/writing/README.md#retired-experiments)).
+     Work with a stronger candidate: (i) define the observer's
      structured-context reply in [its contract](adapters/accessibility/README.md)
      (bounded scalars, same identity binding as the snapshot, denied with
      the field), behind the existing per-subject context consent;
-     (ii) charge it against the prompt window in the Lab's window-context
-     arms and run the paired comparison (context off against on, same
+     (ii) charge it against the prompt window in a paired Lab comparison (context off against on, same
      suites and seed, a wrong-context arm to prove it cannot override the
      draft); (iii) ship only on a measured gain, with `badi context`
      status naming what was read. *Gate:* paired Lab evidence, observer
      contract tests for cross-field and cross-window denial, and a live
      trial in a mail-shaped page where the subject visibly steers a
      suggestion. Clipboard reading stays out, on purpose.
-   - **1e. Selection help in the editors.** Cotypist Labs offers synonyms
-     for a selected word; Badi's grammar/refine/synonym revision
-     ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md),
-     [ADR 0013](docs/decisions/0013-synonyms-for-one-short-selection.md))
-     exists only through the Fcitx addon. Work: admit Neovim and Obsidian
-     to `selection_revision` one adapter at a time — broker capability
-     admission first, then each editor's exact selection snapshot, marked
-     preview and one-undo replacement reusing the range binding Neovim
-     spelling just proved; Bash stays out (a shell line is not prose
-     revision). *Gate:* broker admission tests, scripted and real-broker
-     editor tests for stale selections and undo, and one live trial per
-     editor with disposable text.
    - **1f. More writing languages.** Cotypist works across languages from
      the model's own coverage; Badi writes in English, German, French,
      Spanish and Portuguese (Persian opt-in) and only spells in Italian,
-     Dutch and Polish. Work per language, in that order: add Lab suites,
+     Dutch and Polish. The Italian development screen on 2026-11-12 failed
+     on Gemma 3: space healing gave one coherent, timely addition out of 16
+     against two without, with invented facts in both arms. The prototype
+     was removed and Italian stays spelling-only
+     ([result](evaluation/writing/README.md#retired-experiments)).
+     Work per language, in that order, with a stronger candidate: add Lab suites,
      choose healing only from per-model evidence (the current rule), run
      the European screen on the recommended model, then enable the
      language in `WritingLanguage`, the panel list and the spelling
      defaults together. *Gate:* the same useful/harmful bars as the
      languages already on; a language that misses them stays spelling-only
      and this line says so with its date.
-   - **1g. Make it feel finished.** Cotypist's advantage users feel first
-     is packaging: one download, a settings app, a statistics page, a
-     model picker that recommends by machine. Badi's equivalents exist as
-     CLI and an Omarchy panel that cannot pick a model or show trends.
-     Work, each independently shippable: (i) a model picker in the panel
-     and `badi model` output that names the recommended artifact and why
-     it fits (the advice already exists in
-     `broker/src/model_selection.rs`); (ii) a counts-only stats view in
-     the panel from the existing `badi stats` data (words saved per day
-     and per app/site, no new collection); (iii) a typo-suspected
-     suppression where no correction path exists, mirroring Cotypist's
-     free-tier indicator: when the spelling locate finds a typo but no
-     correction may be offered, withhold the continuation built on it and
-     count the reason. Publication itself stays step 6. *Gate:* panel
-     host/lifecycle lanes, a screenshot of each new panel surface, and
-     broker tests for the suppression reason.
 
-   First task for the next agent: 1a(i) — the Lab style arm. It is the
-   only item that needs no new hardware, no new settings and no user
-   decision, and its result decides whether 1a(iii) and the tone half of
-   1b are worth building at all. Everything else waits behind its gate:
+   Next for personalization: 1a(ii), the paired private-draft comparison
+   using the Lab's style arms. Its result decides whether 1a(iii) and the
+   tone half of 1b are worth building. Everything else waits behind its gate:
    1b behind instruction evidence, 1c behind a discrete-GPU machine, 1d
    behind its paired Lab gain.
 
@@ -509,8 +502,6 @@ publish need the user's go-ahead first; the rest can start at once.
       (`unsupported_selection`), since their blocks serialize differently for
       Fcitx ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md),
       [observer](adapters/accessibility/README.md#selection-for-a-revision)).
-- [ ] A Revisions row in the settings panel: whether the revision model is
-      installed, its size and an install button (`badi revise install`).
 - [ ] Pair-run stronger revision models in the Lab's revision lane before
       offering one; each download needs the user's go-ahead. Candidates
       (Apache-2.0, checked 2026-10-24): Qwen3.5-2B (1.28 GB at Q4, about

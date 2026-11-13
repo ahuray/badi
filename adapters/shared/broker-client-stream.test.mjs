@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { BrokerClient } from './broker-client.mjs';
+import { validRevisionText, revisionDiff } from './revision.mjs';
 
 const frame = message => {
   const body = Buffer.from(JSON.stringify({ v: 2, mono_ms: 1, ...message }));
@@ -19,10 +20,11 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Just enough broker for one editor session: handshake, policy, and a
 // continuation that streams in growing frames. `received` lists the type of
 // every frame the client sent.
-async function fakeBroker(onSuggest) {
+async function fakeBroker(onSuggest, onRevision) {
   const directory = await mkdtemp('/tmp/badi-stream-test-');
   const path = join(directory, 'broker.sock');
   const received = [];
+  const messages = [];
   // Each shown suggestion's text, which its grant carries.
   const texts = new Map();
   const server = createServer(socket => {
@@ -33,6 +35,7 @@ async function fakeBroker(onSuggest) {
         const message = JSON.parse(buffer.subarray(4, buffer.readUInt32LE() + 4));
         buffer = buffer.subarray(buffer.readUInt32LE() + 4);
         received.push(message.type);
+        messages.push(message);
         const reply = (type, payload, extra = {}) => socket.write(frame({ id: message.id, type, payload, ...extra }));
         if (message.type === 'hello') {
           reply('hello.ack', { selected_v: 2, max_frame_bytes: 65536, max_before_chars: 512, max_after_chars: 128,
@@ -41,6 +44,16 @@ async function fakeBroker(onSuggest) {
         } else if (message.type === 'policy.query') {
           reply('policy.status', { authority_epoch: 1, settings_revision: 1, paused: false, context_allowed: true,
             display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always' });
+        } else if (message.type === 'revision.request') {
+          const coordinates = { session_id: message.session_id, focus_epoch: message.focus_epoch, revision: message.revision };
+          const show = (text = 'I went.', extra = {}) => {
+            const revisionId = `r${message.revision}`;
+            texts.set(revisionId, { text, selection: message.payload.selection, ...extra });
+            return frame({ id: message.id, type: 'revision.show', ...coordinates, payload: {
+              fingerprint: message.payload.fingerprint, revision_id: revisionId, mode: message.payload.mode,
+              original: message.payload.selected, text, ttl_ms: 60000, provider: 'phrase_v1', ...extra } });
+          };
+          onRevision({ socket, message, show, reply, coordinates });
         } else if (message.type === 'suggest.request') {
           const coordinates = { session_id: message.session_id, focus_epoch: message.focus_epoch, revision: message.revision };
           const show = (n, text, ttl = 15000, extra = {}) => {
@@ -50,6 +63,7 @@ async function fakeBroker(onSuggest) {
               replaceBefore: extra.replace_before,
               grantText: extra.grant_text,
               grantReplaceBefore: extra.grant_replace_before ?? extra.replace_before,
+              selection: extra.replace_selection,
             };
             texts.set(`s${n}`, spec);
             return frame({ id: message.id, type: 'suggestion.show', ...coordinates, payload: {
@@ -79,6 +93,7 @@ async function fakeBroker(onSuggest) {
           const acceptance = message.payload.action === 'accept_word' ? 'word' : 'all';
           reply('commit.prepare', { fingerprint: message.payload.fingerprint, suggestion_id: message.payload.suggestion_id,
             text: spec?.grantText ?? (acceptance === 'word' ? spec?.acceptWord : spec?.text), acceptance,
+            ...(spec?.selection ? { replace_selection: spec.grantSelection ?? spec.selection } : {}),
             ...(spec?.grantReplaceBefore !== undefined ? { replace_before: spec.grantReplaceBefore } : {}) },
           { session_id: message.session_id, focus_epoch: message.focus_epoch, revision: message.revision });
         }
@@ -88,8 +103,93 @@ async function fakeBroker(onSuggest) {
   server.listen(path);
   await once(server, 'listening');
   chmodSync(path, 0o600);
-  return { path, received, close: async () => { server.close(); await rm(directory, { recursive: true, force: true }); } };
+  return { path, received, messages, close: async () => { server.close(); await rm(directory, { recursive: true, force: true }); } };
 }
+
+const revisionRequest = { before: '', selected: 'I has went.', after: '', mode: 'grammar', language: 'en',
+  selection: { anchor: 0, head: 11, unit: 'unicode_scalar_values' } };
+
+for (const profile of ['neovim', 'obsidian']) test(`${profile} revisions retain one exact session and grant a selection only once`, async () => {
+  const broker = await fakeBroker(null, ({ socket, message, show }) => {
+    if (message.revision > 1) socket.write(frame({ type: 'revision.clear',
+      session_id: message.session_id, focus_epoch: 1, revision: message.revision - 1,
+      payload: { fingerprint: 'older', reason: 'superseded' } }));
+    socket.write(show());
+  });
+  const client = new BrokerClient(profile, { selectionRevision: true });
+  try {
+    await client.connect(broker.path);
+    assert.equal((await client.revise(revisionRequest)).text, 'I went.');
+    assert.equal((await client.revise({ ...revisionRequest, mode: 'refine' })).text, 'I went.');
+    const requests = broker.messages.filter(message => message.type === 'revision.request');
+    assert.equal(requests[0].session_id, requests[1].session_id);
+    assert.equal(requests[1].revision, requests[0].revision + 1);
+    assert.notEqual(requests[0].payload.fingerprint, requests[1].payload.fingerprint);
+    const grant = await client.authorizeRevision();
+    assert.deepEqual(grant.replaceSelection, revisionRequest.selection);
+    assert.equal(grant.text, 'I went.');
+    await assert.rejects(client.authorizeRevision(), /expired/);
+    client.report(grant, 'applied');
+    await client.revise(revisionRequest);
+    const last = broker.messages.filter(message => message.type === 'revision.request').at(-1);
+    assert.notEqual(last.session_id, requests[0].session_id, 'A completed edit cannot reuse its authority');
+  } finally { client.close(); await broker.close(); }
+});
+
+test('revision-specific timeouts admit a slow reply; cancellation refuses a late reply', async () => {
+  let respond;
+  const broker = await fakeBroker(null, ({ socket, show }) => { respond = () => socket.write(show()); });
+  const client = new BrokerClient('neovim', { selectionRevision: true });
+  try {
+    await client.connect(broker.path);
+    const pending = client.revise(revisionRequest);
+    await delay(2150);
+    respond();
+    assert.equal((await pending).text, 'I went.');
+    const cancelled = client.revise(revisionRequest);
+    const rejected = assert.rejects(cancelled, /Context changed/);
+    await delay(20);
+    client.cancel();
+    await rejected;
+    respond();
+    await delay(20);
+    await assert.rejects(client.authorizeRevision(), /expired/);
+  } finally { client.close(); await broker.close(); }
+});
+
+test('a continuation grant cannot silently acquire selection replacement authority', async () => {
+  const broker = await fakeBroker(({ socket, show }) => socket.write(show(1, ' the', 15000,
+    { replace_selection: revisionRequest.selection })));
+  const client = new BrokerClient('neovim', { selectionRevision: true });
+  try {
+    await client.connect(broker.path);
+    await client.suggest('Thank you for');
+    await assert.rejects(client.authorize(), /revoked/);
+  } finally { client.close(); await broker.close(); }
+});
+
+test('a revision rejects mismatched original, mode, safety, expiry and replacement ranges', async () => {
+  for (const extra of [{ original: 'other' }, { mode: 'synonyms' }, { text: 'I\nwent.' }, { ttl_ms: 60001 },
+    { grantSelection: { anchor: 1, head: 12, unit: 'unicode_scalar_values' } }]) {
+    const broker = await fakeBroker(null, ({ socket, show }) => socket.write(show('I went.', extra)));
+    const client = new BrokerClient('neovim', { selectionRevision: true });
+    try {
+      await client.connect(broker.path);
+      if (extra.grantSelection) {
+        await client.revise(revisionRequest);
+        await assert.rejects(client.authorizeRevision(), /revoked/);
+      } else await assert.rejects(client.revise(revisionRequest), /Invalid revision/);
+    } finally { client.close(); await broker.close(); }
+  }
+  assert.throws(() => new BrokerClient('terminal', { selectionRevision: true }), /not supported/);
+  assert.doesNotThrow(() => new BrokerClient('obsidian', { selectionRevision: true }));
+  assert.equal(validRevisionText('x'.repeat(1100)), true);
+  assert.equal(validRevisionText('x'.repeat(1101)), false);
+  for (const text of ['a\u200cb', 'a\u2028b', 'a\tb', 'a\u2003b']) assert.equal(validRevisionText(text), false);
+  const diff = revisionDiff('I has went. ', 'I went. ');
+  assert.equal(diff.filter(part => part.kind !== 'added').map(part => part.text).join(''), 'I has went. ');
+  assert.equal(diff.filter(part => part.kind !== 'removed').map(part => part.text).join(''), 'I went. ');
+});
 
 test('a streamed continuation grows the shown suggestion and acceptance binds to the newest', async () => {
   let socket;

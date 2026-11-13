@@ -1,0 +1,54 @@
+{
+  "schema": "badi.instruction-adherence-suite.v1",
+  "name": "Synthetic instruction adherence: lexical probes, not qualification",
+  "cases": [
+    {
+      "id": "term-folder", "category": "terminology", "language": "en",
+      "prefix": "Save the draft in the",
+      "instruction": "Call a directory a folder. Never use directory.",
+      "checks": { "all": ["folder"], "any": [], "none": ["directory"] }
+    },
+    {
+      "id": "term-directory", "category": "terminology", "language": "en",
+      "prefix": "Save the draft in the",
+      "instruction": "Call a folder a directory. Never use folder.",
+      "checks": { "all": ["directory"], "any": [], "none": ["folder"] }
+    },
+    {
+      "id": "language-fr", "category": "language", "language": "fr",
+      "prefix": "Message :", "context": "Fact: The draft is ready.",
+      "instruction": "Write the continuation entirely in French.",
+      "checks": { "all": ["brouillon", "prêt"], "any": [], "none": ["draft", "ready", "the"] }
+    },
+    {
+      "id": "language-es", "category": "language", "language": "es",
+      "prefix": "Mensaje:", "context": "Fact: The draft is ready.",
+      "instruction": "Write the continuation entirely in Spanish.",
+      "checks": { "all": ["borrador", "listo"], "any": [], "none": ["draft", "ready", "the"] }
+    },
+    {
+      "id": "tone-courteous", "category": "tone", "language": "en",
+      "prefix": "The draft is ready. Could you",
+      "instruction": "Make the request courteous by including please. Do not use exclamation marks.",
+      "checks": { "all": ["please"], "any": [], "none": [], "exclamation_marks": 0 }
+    },
+    {
+      "id": "tone-upbeat", "category": "tone", "language": "en",
+      "prefix": "The draft is ready. I feel",
+      "instruction": "Use upbeat wording including delighted or excited, and exactly one exclamation mark.",
+      "checks": { "all": [], "any": ["delighted", "excited"], "none": [], "exclamation_marks": 1 }
+    },
+    {
+      "id": "formality-formal", "category": "formality", "language": "de",
+      "prefix": "Ich bitte",
+      "instruction": "Sprich die Person förmlich mit Sie an, nicht mit dich.",
+      "checks": { "all": ["Sie"], "any": [], "none": ["dich", "dir", "du", "Dich", "Dir", "Du"], "case_sensitive": true }
+    },
+    {
+      "id": "formality-informal", "category": "formality", "language": "de",
+      "prefix": "Ich bitte",
+      "instruction": "Sprich die Person informell mit dich an, nicht mit Sie.",
+      "checks": { "all": ["dich"], "any": [], "none": ["Sie", "Ihnen"] }
+    }
+  ]
+}

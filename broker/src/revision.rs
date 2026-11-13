@@ -330,10 +330,14 @@ pub fn accept(
     let answer =
         strip_sentence_lead(answer, sentence_lead(before), lead).ok_or(RevisionAbstain::Context)?;
     let mut revised = answer.trim().to_owned();
+    // Preserve literal delimiters the selection already contains, but one
+    // kind of delimiter must not authorize another. Plain prose cannot gain
+    // Markdown emphasis (for example the model's "big **cat**" answer).
     if revised.is_empty()
         || !safe_revision_text(&revised)
-        || (["<", ">", "`"].iter().any(|mark| revised.contains(mark))
-            && !["<", ">", "`"].iter().any(|mark| core.contains(mark)))
+        || ['<', '>', '`', '*', '_']
+            .into_iter()
+            .any(|mark| revised.contains(mark) && !core.contains(mark))
     {
         return Err(RevisionAbstain::Shape);
     }

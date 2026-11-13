@@ -4,9 +4,10 @@ import { confidenceCoverage } from './confidence.mjs';
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="badi-lab-token"]').content;
 const headers = { 'Content-Type': 'application/json', 'X-Badi-Lab-Token': token };
-const names = { production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', native_instructed: 'Selected model instructions', vocabulary: 'Finish words from context' };
-const fixedProductionMode = mode => mode === 'production_boundary';
+const names = { style_gentle: 'Style · gentle', style_balanced: 'Style · balanced', style_strong: 'Style · strong', production_boundary: 'Current Badi logic', context: 'Full context', context_confidence: 'Full context + token confidence', instructed: 'Context + style', healed: 'Word-boundary experiment', instructed_healed: 'Instructions + word boundary', native_instructed: 'Selected model instructions', vocabulary: 'Finish words from context' };
+const fixedProductionMode = mode => ['production_boundary', 'vocabulary', 'style_gentle', 'style_balanced', 'style_strong'].includes(mode);
 const reasonLabels = {
+  style_context_overflow: 'The writing examples and draft exceed the 512-token budget. No draft text was removed.',
   production_abstention_or_budget: 'The current provider returned no usable continuation. Its response does not distinguish an abstention from an exhausted time budget.',
   no_complete_word: 'The model did not produce a complete word.',
   token_preflight_deadline: 'The time budget expired while checking the prompt.',
@@ -88,6 +89,11 @@ function renderRecord(record, index) {
   if (result.reason && !result.text) article.append(node('p', reasonLabels[result.reason] ?? 'No usable prediction was delivered. Inspect the measurements for the exact reason.', 'diagnostic warning'));
   if (Number.isFinite(result.first_word_ms)) article.append(node('p', `First complete word observed at ${Math.round(result.first_word_ms)} ms. This diagnostic timestamp precedes the completed result shown above.`, 'diagnostic'));
   if (Number.isFinite(result.candidate_mean_token_logprob)) article.append(node('p', `Mean candidate token log probability: ${result.candidate_mean_token_logprob.toFixed(3)} across ${result.candidate_logprob_token_count} tokens. This is an uncalibrated model feature, not a correctness score.`, 'diagnostic'));
+  if (result.style_budget) {
+    const usage = result.style_budget;
+    const budgets = usage.prompts.map(value => `${value.prompt_tokens} / ${value.context_tokens} prompt tokens (${value.draft_tokens} without examples, ${value.generation_tokens} reserved for generation)`).join('; ');
+    article.append(node('p', `${usage.samples_selected} of ${usage.samples_supplied} writing examples selected. ${budgets || 'No prefixed continuation was sent.'} Draft text is never removed to fit examples.`, 'diagnostic'));
+  }
   article.append(node('p', 'Useful confirms substantive value and correctness of the entire addition, including its tail. Acceptable alternative alone does not earn useful credit.', 'hint'), review);
   article.append(details); $('results').append(article);
 }

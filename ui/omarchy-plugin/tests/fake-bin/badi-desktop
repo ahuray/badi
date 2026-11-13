@@ -13,5 +13,30 @@ if [[ ${1:-} == service && ${2:-} == status ]]; then
   printf '%s\n' '{"autostart":true,"active":"active"}'
   exit 0
 fi
+if [[ ${1:-} == model && ${2:-} == use && $# -ge 3 && $# -le 4 ]] ||
+    [[ ${1:-} == revise && ${2:-} == install && $# == 2 ]] ||
+    [[ ${1:-} == stats && ${2:-} == forget && $# == 2 ]]; then
+  printf '%s\n' "$*" >>"${BADI_FAKE_ACTION_LOG:?}"
+  if [[ -n ${BADI_FAKE_HOLD_ACTION:-} && -f $BADI_FAKE_HOLD_ACTION ]]; then
+    printf '%s\n' "$$" >>"${BADI_FAKE_PID_LOG:?}"
+    trap '' TERM
+    while [[ -f $BADI_FAKE_HOLD_ACTION ]]; do sleep 1; done
+  fi
+  if [[ -n ${BADI_FAKE_FAIL_ACTION:-} && -f $BADI_FAKE_FAIL_ACTION ]]; then
+    if [[ $1 == revise ]]; then
+      printf 'Revision model download failed; the existing file was kept\n' >&2
+      exit 1
+    fi
+    printf 'Model download failed; the current model is unchanged\n' >&2
+    exit 1
+  fi
+  if [[ $1 == revise ]]; then
+    # Only the private synthetic overview changes; no real model is read.
+    jq '.desktop.revision.file_state = "present" | .desktop.revision.installed = true' \
+      "${BADI_FAKE_OVERVIEW:?}" >"${BADI_FAKE_OVERVIEW}.next"
+    mv -- "${BADI_FAKE_OVERVIEW}.next" "$BADI_FAKE_OVERVIEW"
+  fi
+  exit 0
+fi
 printf 'unsupported fake badi-desktop argv\n' >&2
 exit 64

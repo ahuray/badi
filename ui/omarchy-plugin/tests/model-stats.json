@@ -1,0 +1,45 @@
+{
+  "models": {
+    "writing": {
+      "advice": {
+        "recommended": {"id": "qwen3-1.7b", "name": "Qwen3 1.7B", "filename": "qwen3-1.7b.gguf", "license": "Apache-2.0"},
+        "rationale": [
+          "The 1800 MiB artifact plus 1024 MiB conservative runtime headroom fits within 4096 MiB usable host memory.",
+          "Power state is unknown, so the candidate is capped below quality."
+        ],
+        "catalog": [
+          {"id": "qwen3-0.6b", "name": "Qwen3 0.6B", "filename": "qwen3-0.6b.gguf", "license": "Apache-2.0", "fits": true, "download_bytes": 600000000},
+          {"id": "qwen3-1.7b", "name": "Qwen3 1.7B", "filename": "qwen3-1.7b.gguf", "license": "Apache-2.0", "fits": true, "download_bytes": 1800000000},
+          {"id": "gemma-3-1b", "name": "Gemma 3 1B", "filename": "gemma-3-1b.gguf", "license": "Gemma", "fits": true, "download_bytes": 1000000000},
+          {"id": "llama-3.2-1b", "name": "Llama 3.2 1B", "filename": "llama-3.2-1b.gguf", "license": "Llama-3.2-Community", "fits": true, "download_bytes": 1000000000},
+          {"id": "qwen3-8b", "name": "Qwen3 8B", "filename": "qwen3-8b.gguf", "license": "Apache-2.0", "fits": false, "download_bytes": 8000000000}
+        ]
+      }
+    }
+  },
+  "desktop": {
+    "revision": {"schema": "badi.revision.v1", "model": "qwen3-1.7b", "name": "Qwen3 1.7B", "bytes": 1282439264, "license": "Apache-2.0", "fits": true, "installed": false, "file_state": "missing"},
+    "model_file": "qwen3-0.6b.gguf",
+    "stats": {
+      "available": true,
+      "summary": {
+        "today": "2026-03-02",
+        "retention_days": 90,
+        "totals": {
+          "today": {"shown": 3, "accepted": 2, "words": 5},
+          "last_7_days": {"shown": 12, "accepted": 6, "words": 12},
+          "retained": {"shown": 40, "accepted": 20, "words": 31}
+        },
+        "days": [
+          {"day": "2026-02-20", "shown": 28, "accepted": 14, "words": 19},
+          {"day": "2026-02-28", "shown": 9, "accepted": 4, "words": 7},
+          {"day": "2026-03-02", "shown": 3, "accepted": 2, "words": 5}
+        ],
+        "subjects": [
+          {"identity": {"kind": "browser_origin", "adapter": "chromium", "scheme": "https", "host": "example.com", "port": 443}, "last_7_days": {"shown": 9, "accepted": 4, "words": 7}},
+          {"identity": {"kind": "linux_app", "adapter": "fcitx", "app_id": "com.mitchellh.ghostty"}, "last_7_days": {"shown": 3, "accepted": 2, "words": 5}}
+        ]
+      }
+    }
+  }
+}

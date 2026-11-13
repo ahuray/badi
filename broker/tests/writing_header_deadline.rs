@@ -156,7 +156,7 @@ async fn exhausted_spelling_header_budget_does_not_submit_a_continuation()
             )
             .await
             .map(|reply| reply.outcome)?,
-        ProviderOutcome::NoSuggestion(NoSuggestionReason::BudgetPrefill)
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::TypoSuspected)
     );
     server.await?;
     Ok(())
@@ -351,63 +351,58 @@ async fn explicit_requests_have_their_own_budget_and_deadline_classes() -> Resul
 }
 
 #[tokio::test]
-async fn explicit_spelling_and_continuation_share_the_explicit_budget() -> Result<(), Box<dyn Error>>
-{
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let client = SemanticClient::new(config(&listener)?)?;
-    let server = tokio::spawn(async move {
-        // The ambiguous typo spends 700 ms of the explicit budget without an
-        // answer; the continuation must still arrive before 1,200 ms.
-        let (mut correction, _) = listener.accept().await.expect("correction connection");
-        read_request(&mut correction).await;
-        tokio::time::sleep(Duration::from_millis(700)).await;
-        let _ = correction
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
-                data: {\"index\":0,\"content\":\"teh\",\"stop\":false}\n\n\
-                data: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"eos\"}\n\n",
+async fn explicit_spelling_has_its_budget_but_never_falls_through_to_continuation()
+-> Result<(), Box<dyn Error>> {
+    for answer in ["teh", "the"] {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let client = SemanticClient::new(config(&listener)?)?;
+        let server = tokio::spawn(async move {
+            let (mut correction, _) = listener.accept().await.expect("correction connection");
+            let payload = read_request(&mut correction).await;
+            assert!(
+                payload["prompt"]
+                    .as_str()
+                    .expect("prompt")
+                    .contains("teh ->")
+            );
+            // Beyond the automatic window, but still inside the explicit one.
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            let token = token_event(answer);
+            let stop = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
+            correction.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {token}\n\ndata: {stop}\n\n").as_bytes()).await.expect("answer");
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err(),
+                "neither a correction nor an unresolved typo permits a second prose request"
+            );
+        });
+        let mut typo = request();
+        typo.before = "This is teh".to_owned();
+        let started = Instant::now();
+        let outcome = client
+            .propose_outcome(
+                typo,
+                CancellationToken::new(),
+                true,
+                RequestTrigger::Explicit,
             )
-            .await;
-        let (mut next, _) = listener.accept().await.expect("continuation connection");
-        let payload = read_request(&mut next).await;
-        // The unknown word is healed: the prompt ends before its separating
-        // space, and the model must reproduce that space and the word first.
-        assert_eq!(payload["prompt"], "This is");
-        assert_eq!(
-            payload["grammar"],
-            "root ::= \" teh\" [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*"
-        );
-        next.write_all(
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
-            data: {\"index\":0,\"content\":\" teh review it\",\"stop\":false,\"completion_probabilities\":[{\"token\":\" teh review it\",\"logprob\":-0.1}]}\n\n\
-            data: {\"index\":0,\"content\":\"\",\"stop\":true,\"stop_type\":\"eos\"}\n\n",
-        )
-        .await
-        .expect("continuation");
-    });
-    let mut typo = request();
-    typo.before = "This is teh".to_owned();
-    let started = Instant::now();
-    let automatic_budget = RequestTrigger::Automatic.writing_budget();
-    let outcome = client
-        .propose_outcome(
-            typo,
-            CancellationToken::new(),
-            true,
-            RequestTrigger::Explicit,
-        )
-        .await
-        .map(|reply| reply.outcome)?;
-    assert!(started.elapsed() > automatic_budget);
-    assert!(started.elapsed() < RequestTrigger::Explicit.writing_budget());
-    assert_eq!(
-        outcome
-            .into_proposal()
-            .map(|proposal| proposal.text)
-            .as_deref(),
-        Some(" review it")
-    );
-    server.await?;
+            .await?
+            .outcome;
+        assert!(started.elapsed() > RequestTrigger::Automatic.writing_budget());
+        assert!(started.elapsed() < RequestTrigger::Explicit.writing_budget());
+        if answer == "teh" {
+            assert_eq!(
+                outcome,
+                ProviderOutcome::NoSuggestion(NoSuggestionReason::TypoSuspected)
+            );
+        } else {
+            let proposal = outcome.into_proposal().expect("explicit correction");
+            assert_eq!(proposal.text, "the");
+            assert_eq!(proposal.replace_before.as_deref(), Some("teh"));
+        }
+        server.await?;
+    }
     Ok(())
 }
 

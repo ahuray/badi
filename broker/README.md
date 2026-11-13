@@ -197,8 +197,12 @@ is never kept.
   samples. A store sealed under another key reports `key: "mismatch"` and
   stays unreadable until `forget`.
 - **Not used by prompts.** No production prompt reads these samples. They
-  exist so the Lab can measure, on the user's own text, whether style examples
-  help without the `style_fact_conflict` harm before any prompt uses them.
+  exist so the Lab's [three style arms](../evaluation/writing/README.md#style-comparison)
+  can compare explicitly supplied examples with production behavior, on the
+  user's own text, before any production prompt uses them. The client's
+  explicit completion-prefix API is clone-local and unused by the broker;
+  it preserves spelling and output guards and refuses prompts exceeding
+  512 tokens including generation and one spare token.
 
 This protects stored text at rest; a process running as the same user can
 still ask the keyring or the broker ([ADR 0001](../docs/decisions/0001-same-uid-trust-boundary.md)).
@@ -245,7 +249,7 @@ badictl models writing --json
 `status` counts each call that showed nothing once under `no_suggestion`
 (`request_abstained`, `budget_prefill`, `budget_stream`, `model_abstained`,
 `output_rejected`, `stale`, `timeout`, `provider_error`, `low_confidence`,
-`repeated`) and
+`repeated`, `typo_suspected`) and
 names the latest.
 Its `type_through` counts requests answered from the carry (`carried`) and,
 for admitted requests that reached the provider although a carry existed,
@@ -358,7 +362,7 @@ in `src/revision.rs` (prompts and gate), `src/revision/` (the runtime and its
 fixture) and `src/engine/revision.rs` (authority).
 
 - **Admission.** `revision.request` needs the negotiated `selection_revision`
-  capability (the Fcitx addon) and is a context snapshot of its own: it
+  capability (the Fcitx addon, Neovim and Obsidian; not Bash) and is a context snapshot of its own: it
   revokes the session's context, suggestion and earlier revision first. Policy
   is that of an explicit request, plus no terminal field; a refusal (pause,
   snooze, hold, setting, sensitive or composing field) is answered with
@@ -747,6 +751,13 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   answer. Both spelling prompts run with prompt caching on, so their
   prefixes live in the RAM prompt cache beside the writing window's and a
   choice does not re-read them inside the typing budget (still one slot).
+  When the same spelling check locates a possible typo but replacement is
+  unavailable (including mid-text), or its correction attempt abstains,
+  no continuation runs on that word (`typo_suspected`). Locating needs no
+  model call and uses only the enabled spelling languages. Known partial
+  words and names retain the spelling check's exemptions; a word from the
+  admitted context vocabulary is finished before this check. This is a
+  suspicion, not proof that a word is misspelled.
   A word without its typed
   space is checked only on an explicit request, and a capitalized word
   mid-sentence only in German. Replacements are 2-32 characters with case
@@ -769,6 +780,7 @@ universal scores.
 
 | Rule | Setup | Result |
 | --- | --- | --- |
+| Unresolved typo suppression | Broker admission/count test plus fake-HTTP client and deadline tests (`writing_client`, `writing_header_deadline`); real Obsidian 1.14.4-2 with a private local-model broker | No inference without replacement authority or mid-text; no prose fallback after correction abstention or deadline. Known words, prefixes, names, disabled spelling languages, cancellation and the longer explicit spelling budget retain their contracts. The isolated app with mid-line enabled counted `typo_suspected` and left `The shipping adress next` unchanged (`output/playwright/obsidian-g0jdkx/`); installed-desktop behavior remains untested |
 | Window steps | Installed build, real model, a 380-character run-on sentence typed word by word into Ghostty | Performance profile, 250 ms per word: 40 of 47 requests showed a suggestion; each step (inputs 228, 292 and 359) cost one request cancelled before its first token while it re-read about 30 tokens, and the next was warm again (`cache_n` 27–28); none missed its budget. Power-saver, 450 ms per word: `quiet` scheduling set the rate, 15 of 62 showed one |
 | Per-keystroke sliding start (replaced by steps) | Once one sentence passed 160 scalars | Prefix cache reuse 0 of about 30 prompt tokens; first token 380–510 ms |
 | Whole window as the prompt (not kept) | 19 real-text Lab cases, cold; a live paragraph in Ghostty | 10 against 15 suggestions, no more matches; read no better live |

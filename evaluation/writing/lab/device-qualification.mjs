@@ -9,6 +9,50 @@ const evaluatorSources = ['device-qualification.mjs', 'gguf.mjs', 'model-artifac
   'qualification-evidence.mjs', 'qualification-diagnostics.mjs', 'qualification-server.mjs', 'public/qualification.mjs', 'public/app.mjs'];
 export const digest = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 const positive = value => Number.isSafeInteger(value) && value > 0 ? value : null;
+const boundedPositive = (value, max) => positive(value) && value <= max ? value : null;
+
+function qwen35State(config, gguf) {
+  const m = gguf?.metadata ?? {}, field = (key, name) => gguf ? m[`qwen35.${key}`] : config[name];
+  const all = boundedPositive(field('block_count', 'num_hidden_layers'), 256);
+  const nextn = gguf && Object.hasOwn(m, 'qwen35.nextn_predict_layers') ? m['qwen35.nextn_predict_layers'] : 0;
+  if (!all || !Number.isSafeInteger(nextn) || nextn < 0 || nextn >= all) return null;
+  const layers = all - nextn;
+  const maskName = gguf ? 'qwen35.attention.recurrent_layers' : 'layer_types', source = gguf ? m : config;
+  const mask = source[maskName];
+  const hasMask = Object.hasOwn(source, maskName);
+  const validMask = Array.isArray(mask) && mask.length === all && mask.every((value, index) => gguf
+    ? typeof value === 'boolean' && (index < layers || value === false)
+    : ['linear_attention', 'full_attention'].includes(value));
+  const intervalName = gguf ? 'qwen35.full_attention_interval' : 'full_attention_interval';
+  const hasInterval = Object.hasOwn(source, intervalName);
+  const interval = boundedPositive(source[intervalName], layers);
+  if (hasMask && !validMask || hasInterval && !interval || !hasMask && !hasInterval) return null;
+  const recurrent = Array.from({ length: layers }, (_, index) => hasMask
+    ? gguf ? mask[index] : mask[index] === 'linear_attention' : (index + 1) % interval !== 0);
+  if (hasMask && hasInterval && recurrent.some((value, index) => value !== ((index + 1) % interval !== 0))) return null;
+  const linear = recurrent.filter(Boolean).length, attention = layers - linear;
+  if (!linear || !attention) return null;
+  // The reviewed dense Qwen3.5 layout has explicit scalar head dimensions;
+  // hidden_size / query_heads is not its attention head size.
+  const heads = boundedPositive(field('attention.head_count', 'num_attention_heads'), 512);
+  const kv = boundedPositive(field('attention.head_count_kv', 'num_key_value_heads'), 512);
+  const key = boundedPositive(field('attention.key_length', 'head_dim'), 65536);
+  const value = boundedPositive(field('attention.value_length', 'head_dim'), 65536);
+  const kernel = boundedPositive(field('ssm.conv_kernel', 'linear_conv_kernel_dim'), 4096);
+  const state = boundedPositive(field('ssm.state_size', 'linear_key_head_dim'), 65536);
+  const groups = boundedPositive(field('ssm.group_count', 'linear_num_key_heads'), 512);
+  const rank = boundedPositive(field('ssm.time_step_rank', 'linear_num_value_heads'), 512);
+  const inner = gguf ? boundedPositive(m['qwen35.ssm.inner_size'], 65536)
+    : boundedPositive(config.linear_value_head_dim * rank, 65536);
+  if (!heads || !kv || kv > heads || heads % kv || !key || !value || key !== value || !kernel || kernel < 2
+    || !state || !groups || !rank || rank % groups || !inner || inner !== state * rank
+    || !gguf && config.linear_value_head_dim !== state) return null;
+  const convolution = (kernel - 1) * (inner + 2 * groups * state), recurrentState = state * inner;
+  if (convolution > 0xffffffff || recurrentState > 0xffffffff) return null;
+  return { kind: 'qwen35', attention_layers: attention, recurrent_layers: linear, kv_heads: kv,
+    key_length: key, value_length: value, convolution_kernel: kernel, ssm_inner_size: inner,
+    ssm_state_size: state, ssm_group_count: groups, ssm_time_step_rank: rank };
+}
 
 // The child is a fixed local read-only inspector, never a repository executable.
 export function qualificationCommand(flag, input, { executable = binary, cacheDirectory, signal } = {}) {
@@ -33,8 +77,16 @@ export function qualificationCommand(flag, input, { executable = binary, cacheDi
 }
 
 export function candidateMetadata(candidate, gguf = null) {
-  const c = candidate.config ?? {}, m = gguf?.metadata ?? {};
+  let c = candidate.config ?? {};
+  const m = gguf?.metadata ?? {};
   let architecture = gguf ? gguf.architecture ?? null : candidate.architecture ?? c.model_type ?? null;
+  if (!gguf && ['qwen3_5', 'qwen3_5_text'].includes(c.model_type)
+    && !['qwen35', 'qwen3_5', 'qwen3_5_text'].includes(architecture)) c = {};
+  if (!gguf && ['qwen35', 'qwen3_5', 'qwen3_5_text'].includes(architecture)) {
+    c = c.model_type === 'qwen3_5' ? c.text_config ?? {} : c;
+    if (c.model_type === 'qwen3_5_text') architecture = 'qwen35';
+    else c = {};
+  }
   if (!gguf && architecture === 'granitemoehybrid' && Array.isArray(c.layer_types)
     && c.layer_types.length === c.num_hidden_layers && c.num_hidden_layers > 0
     && c.layer_types.every(value => value === 'attention') && c.num_local_experts === 0) architecture = 'granite';
@@ -69,7 +121,9 @@ export function candidateMetadata(candidate, gguf = null) {
   const key = headDimension('attention.key_length');
   const value = headDimension('attention.value_length');
   let state = { kind: 'unknown' };
-  if (layers && kv && key && value && ['llama', 'qwen2', 'qwen3', 'granite', 'gemma', 'gemma2', 'gemma3', 'smollm3'].includes(architecture)) {
+  if (architecture === 'qwen35') {
+    state = qwen35State(c, gguf) ?? state;
+  } else if (layers && kv && key && value && ['llama', 'qwen2', 'qwen3', 'granite', 'gemma', 'gemma2', 'gemma3', 'smollm3'].includes(architecture)) {
     state = { kind: 'transformer', layers, kv_heads: kv, key_length: key, value_length: value };
   } else if (architecture === 'lfm2' && layers && hidden && kv && key && value) {
     let attention = null;

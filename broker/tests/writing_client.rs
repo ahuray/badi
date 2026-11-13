@@ -67,7 +67,7 @@ async fn unsupported_writing_requests_never_reach_the_runtime() -> Result<(), Bo
         "writing-fixture",
         "public-fixture-token",
     )?)?;
-    for language in [None, Some("fr"), Some("ar")] {
+    for language in [None, Some("fr"), Some("ar"), Some("it"), Some("it-IT")] {
         let result = client
             .complete_observed(request("fixture:valid", language), CancellationToken::new())
             .await?;
@@ -732,75 +732,156 @@ async fn slow_stream_salvages_only_complete_words_and_respects_cancellation()
 }
 
 #[tokio::test]
-async fn spelling_and_continuation_share_one_deadline() -> Result<(), Box<dyn Error>> {
+async fn unresolved_spelling_never_starts_a_continuation() -> Result<(), Box<dyn Error>> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let endpoint = listener.local_addr()?;
     let server = tokio::spawn(async move {
-        for (text, delay, terminal) in [(" teh", 250, true), (" teh next word parti", 0, false)] {
-            let (mut socket, _) = listener.accept().await.expect("HTTP connection");
-            let mut data = Vec::new();
-            let mut buffer = [0; 4096];
-            while !data.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
-                let count = socket.read(&mut buffer).await.expect("request");
-                assert_ne!(count, 0);
-                data.extend_from_slice(&buffer[..count]);
-            }
-            let end = data
-                .windows(4)
-                .position(|bytes| bytes == b"\r\n\r\n")
-                .expect("header end");
-            let length: usize = std::str::from_utf8(&data[..end])
-                .expect("headers")
-                .lines()
-                .find_map(|line| {
-                    let (key, value) = line.split_once(':')?;
-                    key.eq_ignore_ascii_case("content-length")
-                        .then(|| value.trim().parse().expect("length"))
-                })
-                .expect("content length");
-            while data.len() < end + 4 + length {
-                let count = socket.read(&mut buffer).await.expect("request body");
-                assert_ne!(count, 0);
-                data.extend_from_slice(&buffer[..count]);
-            }
-            tokio::time::sleep(Duration::from_millis(delay)).await;
-            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").await.expect("headers");
-            let token = token_event(text);
-            socket
-                .write_all(format!("data: {token}\n\n").as_bytes())
-                .await
-                .expect("token");
-            if terminal {
-                let stop =
-                    serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
-                socket
-                    .write_all(format!("data: {stop}\n\n").as_bytes())
-                    .await
-                    .expect("stop");
-            } else {
-                tokio::time::sleep(Duration::from_millis(650)).await;
-            }
-        }
+        let (mut socket, _) = listener.accept().await.expect("spelling request");
+        let (_, payload) = read_http_request(&mut socket).await;
+        assert!(
+            payload["prompt"]
+                .as_str()
+                .expect("prompt")
+                .contains("teh ->")
+        );
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("headers");
+        // Echoing the typo is the spelling model's explicit abstention.
+        let token = token_event(" teh");
+        let stop = serde_json::json!({"index":0,"content":"","stop":true,"stop_type":"eos"});
+        socket
+            .write_all(format!("data: {token}\n\ndata: {stop}\n\n").as_bytes())
+            .await
+            .expect("answer");
+        listener
     });
     let client = fixture_client(SemanticClientConfig::new(
         endpoint,
-        "deadline-fixture",
+        "spelling-fixture",
         "public-fixture-token",
     )?)?;
-    let started = std::time::Instant::now();
-    let result = propose(
-        &client,
-        request("This is teh", Some("en")),
-        CancellationToken::new(),
-        true,
-    )
-    .await?;
-    assert!(
-        started.elapsed() < Duration::from_millis(600),
-        "correction cannot reset the request budget"
+    let result = client
+        .propose_outcome(
+            request("This is teh", Some("en")),
+            CancellationToken::new(),
+            true,
+            RequestTrigger::Automatic,
+        )
+        .await?;
+    assert_eq!(
+        result.outcome,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::TypoSuspected)
     );
-    assert_eq!(result.expect("separator-proven suffix").text, " next word");
-    server.await?;
+    let listener = server.await?;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), listener.accept())
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn suspected_typos_without_a_correction_path_never_reach_inference()
+-> Result<(), Box<dyn Error>> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let client = fixture_client(SemanticClientConfig::new(
+        listener.local_addr()?,
+        "typo-fixture",
+        "public-fixture-token",
+    )?)?;
+    for before in ["The shipping adress", "The shipping adress "] {
+        for (allow_replacement, after) in [(false, ""), (false, " next"), (true, " next")] {
+            let mut input = request(before, Some("en"));
+            input.after = after.to_owned();
+            let result = client
+                .propose_outcome(
+                    input,
+                    CancellationToken::new(),
+                    allow_replacement,
+                    RequestTrigger::Automatic,
+                )
+                .await?;
+            assert_eq!(
+                result.outcome,
+                ProviderOutcome::NoSuggestion(NoSuggestionReason::TypoSuspected)
+            );
+            assert!(result.stats.is_none(), "no model work");
+        }
+    }
+    let mut inside_word = request("The shipping adress", Some("en"));
+    inside_word.after = "es".to_owned();
+    assert_eq!(
+        client
+            .propose_outcome(
+                inside_word,
+                CancellationToken::new(),
+                false,
+                RequestTrigger::Automatic
+            )
+            .await?
+            .outcome,
+        ProviderOutcome::NoSuggestion(NoSuggestionReason::RequestAbstained),
+        "the caret is inside a word, not after a suspected typo",
+    );
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    assert!(matches!(
+        client
+            .propose_outcome(
+                request("The shipping adress", Some("en")),
+                cancellation,
+                false,
+                RequestTrigger::Automatic
+            )
+            .await,
+        Err(ProviderError::Cancelled)
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), listener.accept())
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn spelling_suppression_preserves_names_prefixes_and_disabled_languages()
+-> Result<(), Box<dyn Error>> {
+    // A closed endpoint makes continuation attempts observable without a model.
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+    let endpoint = listener.local_addr()?;
+    drop(listener);
+    let client = fixture_client(SemanticClientConfig::new(
+        endpoint,
+        "eligibility-fixture",
+        "public-fixture-token",
+    )?)?;
+    for (before, language) in [
+        ("Please ask Zorblax", "en"),
+        ("Please review the docum", "en"),
+        ("The shipping address", "en"),
+        ("The shipping adress", "de"),
+    ] {
+        assert!(
+            matches!(
+                client
+                    .propose_outcome(
+                        request(before, Some(language)),
+                        CancellationToken::new(),
+                        false,
+                        RequestTrigger::Automatic
+                    )
+                    .await,
+                Err(ProviderError::Unavailable)
+            ),
+            "{before:?} {language}"
+        );
+    }
     Ok(())
 }
 
@@ -849,20 +930,17 @@ async fn unambiguous_spelling_does_not_require_an_inference_round_trip()
             .is_err()
     );
     drop(listener);
-    // Without exact replacement authority or English eligibility, the same
-    // typo cannot take the dictionary edit path, even if inference is down.
-    for (language, replacement) in [("en", false), ("de", true)] {
-        assert!(matches!(
-            propose(
-                &client,
-                request("The shipping adress", Some(language)),
-                CancellationToken::new(),
-                replacement,
-            )
-            .await,
-            Err(badi_broker::provider::ProviderError::Unavailable)
-        ));
-    }
+    // A disabled spelling language still follows the continuation path.
+    assert!(matches!(
+        propose(
+            &client,
+            request("The shipping adress", Some("de")),
+            CancellationToken::new(),
+            true,
+        )
+        .await,
+        Err(badi_broker::provider::ProviderError::Unavailable)
+    ));
     Ok(())
 }
 
@@ -1492,6 +1570,129 @@ impl RequestObserver for BodyRecorder {
     fn observe(&self, body: &[u8]) {
         self.0.lock().expect("recorder").push(body.to_vec());
     }
+}
+
+#[tokio::test]
+async fn explicit_completion_prefix_keeps_guards_and_rejects_overflow() -> Result<(), Box<dyn Error>>
+{
+    for count in [80, 512] {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let endpoint = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            for (expected, tokens) in [
+                ("Please review", 3),
+                ("Keep notes concise.\n\nPlease review", count),
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let payload = read_payload(&mut socket).await;
+                assert_eq!(payload["content"], expected);
+                let body = serde_json::json!({"tokens": vec![1; tokens]}).to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+            if count == 512 {
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                        .await
+                        .is_err()
+                );
+                return;
+            }
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let payload = read_payload(&mut socket).await;
+            assert_eq!(payload["prompt"], "Keep notes concise.\n\nPlease review");
+            assert_eq!(payload["n_probs"], 1);
+            assert_eq!(payload["temperature"], 0.0);
+            let stop = serde_json::json!({"index":0,"content":" the report","stop":true,"stop_type":"eos","completion_probabilities":[
+                {"id":1,"token":" the","bytes":" the".as_bytes(),"logprob":-0.1,"top_logprobs":[]},
+                {"id":2,"token":" report","bytes":" report".as_bytes(),"logprob":-0.1,"top_logprobs":[]}]});
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {stop}\n\n").as_bytes()).await.unwrap();
+            // The undecorated client shares the runtime, not the prefix.
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let payload = read_payload(&mut socket).await;
+            assert_eq!(payload["prompt"], "Please review");
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {stop}\n\n").as_bytes()).await.unwrap();
+        });
+        let base = fixture_client(SemanticClientConfig::new(
+            endpoint,
+            "prefix-fixture",
+            "public-token",
+        )?)?;
+        let client = base
+            .clone()
+            .with_completion_prefix("Keep notes concise.\n\n".into())?;
+        let result = client
+            .complete_observed(
+                request("Please review the", Some("en")),
+                CancellationToken::new(),
+            )
+            .await?;
+        assert_eq!(result.output(), (count == 80).then_some(" report"));
+        assert!(!format!("{client:?}").contains("Keep notes concise"));
+        if count == 80 {
+            let plain = base
+                .complete_observed(
+                    request("Please review the", Some("en")),
+                    CancellationToken::new(),
+                )
+                .await?;
+            assert_eq!(plain.output(), Some(" report"));
+        }
+        server.await?;
+        // Local dictionary corrections require neither tokenization nor a
+        // prefixed continuation. The server has closed, so any request fails.
+        let correction = propose(
+            &client,
+            request("The shipping adress ", Some("en")),
+            CancellationToken::new(),
+            true,
+        )
+        .await?;
+        assert_eq!(correction.unwrap().text, "address ");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn prefix_preflight_is_cancellable_and_charged_to_the_writing_deadline()
+-> Result<(), Box<dyn Error>> {
+    for cancel in [true, false] {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let cancellation = CancellationToken::new();
+        let client = fixture_client(SemanticClientConfig::new(
+            listener.local_addr()?,
+            "prefix-fixture",
+            "public-token",
+        )?)?
+        .with_completion_prefix("Keep notes concise.\n\n".into())?;
+        let token = cancellation.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_payload(&mut socket).await;
+            if cancel {
+                token.cancel();
+            }
+            let mut byte = [0];
+            let closed = tokio::time::timeout(Duration::from_secs(2), socket.read(&mut byte))
+                .await
+                .unwrap();
+            assert!(matches!(closed, Ok(0) | Err(_)));
+        });
+        let started = std::time::Instant::now();
+        let result = client
+            .complete_observed(request("Please review the", Some("en")), cancellation)
+            .await;
+        if cancel {
+            assert!(matches!(result, Err(ClientError::Cancelled)));
+        } else {
+            assert_eq!(
+                result?.no_suggestion_reason(),
+                Some(NoSuggestionReason::BudgetPrefill)
+            );
+            assert!(started.elapsed() < Duration::from_millis(900));
+        }
+        server.await?;
+    }
+    Ok(())
 }
 
 #[tokio::test]
