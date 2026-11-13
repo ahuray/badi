@@ -231,7 +231,9 @@ bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
 
 - **`omarchy:check`** runs ShellCheck, the JSON and source contracts, the
   keyboard and statistics models under Node, and process-group escalation
-  against a fake `badictl` that ignores TERM. When `qs` is present it also
+  against a fake `badictl` that ignores TERM. A stopped-parent fixture proves
+  that a terminated zombie differs from a live child: container PID 1 may
+  postpone reaping after group teardown. When `qs` is present it also
   runs the headless client lifecycle.
 - **`run-client-lifecycle.sh`** loads the real `BadiClient.qml` offscreen with
   a fake `badictl`. It covers settings validation (every optional key the

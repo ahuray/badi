@@ -28,8 +28,9 @@ cleanup() {
   if [[ -f $pid_log ]]; then
     while IFS= read -r pid; do
       [[ $pid =~ ^[1-9][0-9]*$ ]] || continue
+      badi_process_has_exited "$pid" && continue
       [[ -r /proc/$pid/environ ]] || continue
-      if tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null |
+      if tr '\0' '\n' 2>/dev/null <"/proc/$pid/environ" |
           grep -Fx "BADI_FAKE_PID_LOG=$pid_log" >/dev/null; then
         kill -KILL "$pid" 2>/dev/null || true
       fi
@@ -150,7 +151,7 @@ wait_until_idle() {
 wait_for_pid_exit() {
   local pid=$1
   for _ in $(seq 1 80); do
-    ! kill -0 "$pid" 2>/dev/null && return 0
+    badi_process_has_exited "$pid" && return 0
     sleep 0.05
   done
   echo "client lifecycle check: TERM-ignoring PID $pid survived teardown" >&2
@@ -715,7 +716,7 @@ jq -e 'any(.[]; .key == "revision" and (.enabled | not)
   and (.detail | contains("Status unavailable")))' <<<"$(ipc rows)" >/dev/null || fail "incoherent revision state admitted"
 
 # An in-flight revision setup disables repeat activation. Closing this
-# isolated shell reaps even a helper that ignores TERM; no late install runs.
+# isolated shell terminates even a helper that ignores TERM; no late install runs.
 cp -- "$tests_dir/model-stats.json" "$overview_extra"
 ipc refresh >/dev/null
 wait_for_call_count 33

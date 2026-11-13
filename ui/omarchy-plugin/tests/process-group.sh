@@ -7,6 +7,25 @@
 # shellcheck disable=SC2034
 BADI_PROCESS_GROUP_ESCALATED=0
 
+# kill -0 also succeeds for a terminated, unreaped child. Container PID 1 may
+# retain that zombie after the shell and its helper are killed together.
+# Unknown/unreadable metadata is not evidence that a process has exited.
+badi_process_has_exited() {
+  local pid=$1
+  local status
+  local state
+
+  [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+  if ! status=$(cat -- "/proc/$pid/stat" 2>/dev/null); then
+    [[ ! -e /proc/$pid ]]
+    return
+  fi
+  [[ $status == "$pid ("* && $status == *") "* ]] || return 1
+  status=${status##*) }
+  state=${status%% *}
+  [[ $state == Z || $state == X ]]
+}
+
 badi_live_process_group_members() {
   local group_id=$1
 
