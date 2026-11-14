@@ -478,6 +478,7 @@ installed model.
 | [future plans.md](<future plans.md>) | The only backlog, with the ordered next steps |
 | [CHANGELOG.md](CHANGELOG.md) | What shipped, by release |
 | [docs/decisions](docs/decisions/) | Durable architecture decisions |
+| [2026 Q4 time to rewrite](docs/ttr/2026-Q4.md) | How long a hands-off rewrite would take, and which checks would shorten it |
 | Component runbooks | [broker](broker/README.md), [Fcitx addon](adapters/fcitx5/README.md), [observer](adapters/accessibility/README.md), [session helper](adapters/session/README.md), [editors](adapters/shared/README.md), [Bash](adapters/shell/README.md), [Neovim](adapters/neovim/README.md), [LibreOffice Writer](adapters/libreoffice/README.md), [Omarchy panel](ui/omarchy-plugin/README.md), [Prediction Lab](evaluation/writing/README.md) |
 
 ```sh
