@@ -347,7 +347,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bash-builtins libreadline-dev
-      - name: Run docs, editor, desktop, accessibility, Omarchy and writing checks
+      - name: Run formal, docs, editor, desktop, accessibility, Omarchy and writing checks
         run: npm run check
       - name: Check whitespace
         # The whole tree against the empty tree: a clean checkout has no
@@ -355,3 +355,64 @@ jobs:
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD -- . ':!packaging/licenses'
       - name: Check shell scripts
         run: git ls-files -z '*.sh' '*.bash' | xargs -0 shellcheck -S warning
+
+  # Sync check on every run. A skill's check.sh (TLC, jar pinned and
+  # checksummed inside that script) runs only when its covered files, its
+  # spec, or the script itself change. actions: write is the cache save.
+  formal:
+    name: Formal spec sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check formal specs against the commits they name
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-formal-sync-check.py && PYTHONDONTWRITEBYTECODE=1 python3 scripts/formal-sync-check.py
+      - name: List formal checks for this change
+        id: changed
+        env:
+          FORMAL_SINCE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || 'ALL' }}
+        run: |
+          if [[ -z "$FORMAL_SINCE" || "$FORMAL_SINCE" == 0000000000000000000000000000000000000000 ]]; then
+            FORMAL_SINCE=ALL
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/formal-sync-check.py --changed-since "$FORMAL_SINCE" > "$RUNNER_TEMP/formal-checks.txt"
+          if [[ -s "$RUNNER_TEMP/formal-checks.txt" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Formal checks to run:"
+            cat "$RUNNER_TEMP/formal-checks.txt"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No covered file or formal spec changed."
+          fi
+      - name: Cache the pinned TLC jar and the broker build
+        if: steps.changed.outputs.run == 'true'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/badi
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: formal-v1-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.cursor/skills/*/check.sh') }}
+          restore-keys: |
+            formal-v1-${{ runner.os }}-
+      - name: Install Rust
+        if: steps.changed.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@1.99.0
+      - name: Install Java for TLC
+        if: steps.changed.outputs.run == 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends openjdk-21-jre-headless
+      - name: Run the formal checks whose code or spec changed
+        if: steps.changed.outputs.run == 'true'
+        run: |
+          while IFS= read -r check; do
+            echo "=== $check ==="
+            "$check"
+          done < "$RUNNER_TEMP/formal-checks.txt"
