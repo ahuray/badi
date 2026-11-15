@@ -26,6 +26,7 @@ ROOT = LIBRARY.parent
 APPS = ("xournalpp", "omawrite")
 APP_IDS = {"omawrite": "omawrite", "xournalpp": "com.github.xournalpp.xournalpp"}
 APP_ADAPTERS = {"obsidian": "obsidian", "bash": "shell", "nvim": "neovim", "libreoffice-writer": "libreoffice"}
+TERMINAL_APPS = ("com.mitchellh.ghostty", "foot", "org.codeberg.dnkl.foot")
 SERVICE = "badi-broker.service"
 ACCESSIBILITY_SERVICE = "badi-accessibility.service"
 SESSION_SERVICE = "badi-session.service"
@@ -105,6 +106,9 @@ HELP = """Badi — local writing controls
                                write before accepting a suggestion, sealed
                                with a key in your keyring; no prompt uses
                                them yet
+  badi style app ID on [DAYS]|off
+                               Learn in one allowed native app, kept DAYS
+                               (1-90, default 30); terminals never learn
   badi style site ORIGIN on [DAYS]|off
                                Learn on one allowed site, kept DAYS (1-90,
                                default 30)
@@ -1149,8 +1153,9 @@ def set_escape_quiet(document, seconds):
 
 
 STYLE_ON = ("Style learning is on. Badi keeps the sentence you wrote before each accepted suggestion, "
-            "only on sites you allow with: badi style site ORIGIN on. Samples are sealed with a key in your "
-            "keyring and no prompt uses them yet; badi style export shows them, badi style forget deletes them.")
+            "only in apps and on sites you allow with: badi style app ID on or badi style site ORIGIN on. "
+            "Samples are sealed with a key in your keyring and no prompt uses them yet; badi style export "
+            "shows them, badi style forget deletes them.")
 
 
 def style_keyring():
@@ -1173,12 +1178,21 @@ def set_style_learning(document, enabled):
         document.pop("style_learning", None)
 
 
-def set_site_learning(document, value, days):
-    """Learning for one site that is already allowed; `days` None turns it off."""
-    identity = site_identity(value)
+def is_terminal_identity(identity, raw=None):
+    return (raw == "ghostty"
+            or (identity["kind"] == "linux_app"
+                and (identity["adapter"] == "shell"
+                     or (identity["adapter"] == "fcitx" and identity["app_id"] in TERMINAL_APPS))))
+
+
+def set_subject_learning(document, kind, value, days):
+    """Learning for one app or site that is already allowed; `days` None turns it off."""
+    identity = app_identity(value) if kind == "app" else site_identity(value)
+    if is_terminal_identity(identity, value):
+        raise RuntimeError("Terminals and shells never learn style samples.")
     subject = next((item for item in document["subjects"] if item["identity"] == identity), None)
     if days is not None and (subject is None or subject["permissions"]["suggest"] != "allow"):
-        raise RuntimeError(f"Allow the site first: badi site {value} on")
+        raise RuntimeError(f"Allow the {kind} first: badi {kind} {value} on")
     if subject is None:
         return
     permissions = subject["permissions"]
@@ -1186,6 +1200,10 @@ def set_site_learning(document, value, days):
         permissions.update(learn="block", retention={"mode": "none"})
     else:
         permissions.update(learn="allow", retention={"mode": "bounded", "days": days})
+
+
+def set_site_learning(document, value, days):
+    set_subject_learning(document, "site", value, days)
 
 
 def style_command(arguments):
@@ -1199,31 +1217,38 @@ def style_command(arguments):
         print(STYLE_ON)
     elif arguments == ["off"]:
         update_settings(lambda document: set_style_learning(document, False))
-        print("Style learning is off; nothing new is kept. Kept samples expire with each site's retention, "
+        print("Style learning is off; nothing new is kept. Kept samples expire with each app or site's retention, "
               "or delete them now with badi style forget.")
     elif arguments == ["status"]:
         status = json.loads(control(["style", "status"]))
         document = json.loads(control(["settings", "show", "--json"]))
-        sites = [origin_text(item["identity"]) + f" ({item['permissions']['retention']['days']} days)"
-                 for item in document["subjects"] if item["permissions"].get("learn") == "allow"]
+        def retention_label(retention):
+            return f"{retention['days']} days" if retention.get("mode") == "bounded" else "session only"
+        subjects = [identity_text(item["identity"]) + f" ({retention_label(item['permissions']['retention'])})"
+                    for item in document["subjects"] if item["permissions"].get("learn") == "allow"]
         key = {"ready": "ready", "absent": "not delivered (badi style on)",
                "mismatch": "different from the one that sealed the samples (badi style forget)"}[status["key"]]
         print(f"Style learning: {'on' if status['enabled'] else 'off'} · samples: {status['samples']} "
-              f"from {status['subjects']} site(s) · key: {key}"
+              f"from {status['subjects']} app(s) and site(s) · key: {key}"
               + ("" if status["available"] else " · store unreadable (badi style forget)")
-              + f"\nLearning sites: {', '.join(sites) if sites else 'none'}")
-    elif len(arguments) in (3, 4) and arguments[0] == "site" and arguments[2] in ("on", "off"):
-        origin = arguments[1]
+              + f"\nLearning in: {', '.join(subjects) if subjects else 'none'}")
+    elif len(arguments) in (3, 4) and arguments[0] in ("app", "site") and arguments[2] in ("on", "off"):
+        kind, target = arguments[0], arguments[1]
+        usage = "Usage: badi style app ID|site ORIGIN on [DAYS]|off (DAYS is 1-90)"
         if arguments[2] == "off" and len(arguments) == 3:
             days = None
         elif arguments[2] == "on" and (len(arguments) == 3 or (arguments[3].isascii() and arguments[3].isdigit()
                                                                 and 1 <= int(arguments[3]) <= 90)):
             days = int(arguments[3]) if len(arguments) == 4 else 30
         else:
-            raise RuntimeError("Usage: badi style site ORIGIN on [DAYS]|off (DAYS is 1-90)")
-        update_settings(lambda document: set_site_learning(document, origin, days))
-        print(f"{origin}: style samples kept for {days} days." if days else
-              f"{origin}: no style samples; any kept from it are deleted.")
+            raise RuntimeError(usage)
+        identity = app_identity(target) if kind == "app" else site_identity(target)
+        if is_terminal_identity(identity, target):
+            raise RuntimeError("Terminals and shells never learn style samples.")
+        update_settings(lambda document: set_subject_learning(document, kind, target, days))
+        label = identity_text(identity)
+        print(f"{label}: style samples kept for {days} days." if days else
+              f"{label}: no style samples; any kept from it are deleted.")
     elif arguments == ["export"]:
         if json.loads(control(["style", "status"]))["key"] != "ready":
             raise RuntimeError("The style key is not available to the broker. Run badi style on, or badi style status.")
@@ -1236,7 +1261,7 @@ def style_command(arguments):
             raise RuntimeError(f"Samples were deleted, but the keyring key was not ({error}).") from None
         print("All style samples were deleted" + (" and the keyring key removed." if removed else "."))
     else:
-        raise RuntimeError("Usage: badi style on|off|status|export|forget, or badi style site ORIGIN on [DAYS]|off")
+        raise RuntimeError("Usage: badi style on|off|status|export|forget, or badi style app ID|site ORIGIN on [DAYS]|off")
 
 
 CONTEXT_ON = ("Context is on. Once you have typed five letters of a word, Badi can finish it with a word "

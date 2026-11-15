@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Allowed per-app opt-in style learning and personalization aggregates for non-terminal Linux apps (`badi style app ID on [DAYS]|off`), while keeping terminals, shells and sensitive fields fail-closed against style, context-word and personalization learning.
+
 - In Zen (`zen` and `zen-twilight`), the Fcitx addon now corroborates exact
   `fcitx_before + committed_suffix` immediately after Badi's own append-only
   `commitString` while Gecko leaves Fcitx's surrounding text at the

@@ -184,14 +184,18 @@ again and its hash recorded.
 
 ## Style learning (opt-in)
 
-Off by default (`style_learning` omitted). With `badi style on` and a site
-whose rule allows learning with bounded retention (`badi style site ORIGIN
-on [DAYS]`), each accepted suggestion that the adapter reports `applied` or
+Off by default (`style_learning` omitted). With `badi style on` and a
+non-terminal app or site whose rule allows learning with bounded retention
+(`badi style app ID on [DAYS]` or `badi style site ORIGIN on [DAYS]`), each
+accepted suggestion that the adapter reports `applied` or
 `dispatched_unverified` keeps the most recent complete sentence the user
 wrote before it ([src/style.rs](src/style.rs)): at most 240 characters,
 earlier sentences of the same line added only while it is shorter than 24,
 and nothing with a digit, an at sign or a web address. The suggestion itself
-is never kept.
+is never kept. Terminals and shells (`shell`, `com.mitchellh.ghostty`,
+`foot`, `org.codeberg.dnkl.foot`, `TargetKind::Terminal`,
+`FieldPurpose::Terminal`) and sensitive fields never learn style samples,
+context words or personalization aggregates.
 
 - **Sealed.** `style.json` in the private data directory holds each record's
   subject and day in the clear and its text sealed with XChaCha20-Poly1305.
@@ -200,9 +204,9 @@ is never kept.
   helper or `badi style on` delivers it (`style.key`, capability
   `style_key`), and the broker holds it in memory only. Without a key,
   samples are dropped, never kept in the clear.
-- **Bounded.** 16 samples per site and 64 in all, oldest first out;
+- **Bounded.** 16 samples per app or site and 64 in all, oldest first out;
   duplicates are skipped. A complete export fits one frame.
-- **Purged without the key.** A settings change that revokes a site's
+- **Purged without the key.** A settings change that revokes an app or site's
   learning or retention purges its samples before the settings commit, as
   for the personalization aggregates; expiry runs at startup and with the
   periodic sweep. Turning `style_learning` off stops collection and keeps
@@ -251,7 +255,7 @@ badictl status            # health, metrics and no-suggestion classes
 badictl overview          # broker, settings, privacy and model readiness
 badictl settings show
 badictl settings replace --if-revision N --json -   # read the document from stdin
-badictl memory clear      # text-free origin and day aggregates
+badictl memory clear      # text-free subject and day aggregates
 badictl style status|forget|export   # style learning; style key - reads the key from stdin
 badictl stats status|forget   # usage counts per day and per app or site
 badictl pause [on|off|toggle]

@@ -93,30 +93,107 @@ fn unrecognized_settings_schemas_including_retired_v1_are_rejected() {
 }
 
 #[test]
-fn linux_application_learning_is_rejected_until_personalization_is_versioned() {
-    let document = json!({
-        "schema": "badi.settings.v2",
-        "revision": 1,
-        "paused": false,
-        "subjects": [{
-            "identity": {
-                "kind": "linux_app",
-                "adapter": "fcitx",
-                "app_id": "omawrite"
-            },
-            "permissions": {
-                "suggest": "allow",
-                "display": "allow",
-                "context_read": "allow",
-                "learn": "allow",
-                "retention": { "mode": "none" }
-            }
-        }]
-    });
-    assert!(!validator().is_valid(&document));
+fn native_linux_apps_allow_learning_while_terminals_and_shells_fail_closed() {
+    let schema = validator();
+    for (adapter, app_id) in [
+        ("fcitx", "omawrite"),
+        ("obsidian", "obsidian"),
+        ("neovim", "nvim"),
+        ("libreoffice", "libreoffice-writer"),
+    ] {
+        for retention in [
+            json!({ "mode": "none" }),
+            json!({ "mode": "bounded", "days": 30 }),
+        ] {
+            let document = json!({
+                "schema": "badi.settings.v2",
+                "revision": 1,
+                "paused": false,
+                "subjects": [{
+                    "identity": {
+                        "kind": "linux_app",
+                        "adapter": adapter,
+                        "app_id": app_id
+                    },
+                    "permissions": {
+                        "suggest": "allow",
+                        "display": "allow",
+                        "context_read": "allow",
+                        "learn": "allow",
+                        "retention": retention
+                    }
+                }]
+            });
+            assert!(
+                schema.is_valid(&document),
+                "schema rejected {adapter}:{app_id}"
+            );
+            let decoded: SettingsV2 = serde_json::from_value(document).expect("typed v2 settings");
+            decoded
+                .validate()
+                .unwrap_or_else(|error| panic!("Rust rejected {adapter}:{app_id}: {error}"));
+        }
+    }
 
-    let decoded: SettingsV2 = serde_json::from_value(document).expect("typed v2 settings");
-    assert!(decoded.validate().is_err());
+    for (adapter, app_id) in [
+        ("shell", "bash"),
+        ("fcitx", "com.mitchellh.ghostty"),
+        ("fcitx", "foot"),
+        ("fcitx", "org.codeberg.dnkl.foot"),
+    ] {
+        for retention in [
+            json!({ "mode": "none" }),
+            json!({ "mode": "bounded", "days": 30 }),
+        ] {
+            let learning = json!({
+                "schema": "badi.settings.v2",
+                "revision": 1,
+                "paused": false,
+                "subjects": [{
+                    "identity": {
+                        "kind": "linux_app",
+                        "adapter": adapter,
+                        "app_id": app_id
+                    },
+                    "permissions": {
+                        "suggest": "allow",
+                        "display": "allow",
+                        "context_read": "allow",
+                        "learn": "allow",
+                        "retention": retention
+                    }
+                }]
+            });
+            assert!(
+                !schema.is_valid(&learning),
+                "schema accepted terminal learning for {adapter}:{app_id}"
+            );
+            let decoded: SettingsV2 =
+                serde_json::from_value(learning).expect("typed invalid terminal settings");
+            assert_eq!(
+                decoded.validate(),
+                Err(badi_broker::settings::SettingsValidationError::TerminalLearningUnsupported),
+                "Rust accepted terminal learning for {adapter}:{app_id}"
+            );
+        }
+
+        let suggest_only = json!({
+            "schema": "badi.settings.v2",
+            "revision": 1,
+            "paused": false,
+            "subjects": [{
+                "identity": {
+                    "kind": "linux_app",
+                    "adapter": adapter,
+                    "app_id": app_id
+                },
+                "permissions": permissions()
+            }]
+        });
+        assert!(schema.is_valid(&suggest_only));
+        let decoded: SettingsV2 = serde_json::from_value(suggest_only).expect("typed settings");
+        decoded.validate().expect("suggest-only terminal rule");
+    }
 }
 
 #[test]

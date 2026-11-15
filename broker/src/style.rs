@@ -332,9 +332,12 @@ impl StyleDocument {
     }
 }
 
-/// A record may exist only while its subject allows learning with bounded
-/// retention, and only within that many days.
+/// A record may exist only while its non-terminal subject allows learning with
+/// bounded retention, and only within that many days.
 fn retains(settings: &SettingsV2, identity: &StableIdentity, day: u64, today: u64) -> bool {
+    if identity.is_terminal() {
+        return false;
+    }
     let resolution = settings.resolve_identity_validated(identity);
     let RetentionPermission::Bounded { days } = resolution.permissions.retention else {
         return false;
@@ -463,6 +466,7 @@ fn validate_document(document: &StyleDocument) -> Result<(), StyleError> {
         || document.records.len() > MAX_STYLE_SAMPLES
         || document.records.iter().any(|record| {
             record.identity.validate().is_err()
+                || record.identity.is_terminal()
                 || decode_hex(&record.nonce).is_none_or(|bytes| bytes.len() != NONCE_BYTES)
                 || decode_hex(&record.ciphertext).is_none()
         })

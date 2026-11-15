@@ -12,7 +12,7 @@ use tokio::time;
 use super::{Broker, BrokerError};
 use crate::control_plane::{ControlPlane, ControlPlaneError, ControlPlaneSnapshot};
 use crate::personalization::{PersonalizationProvider, PersonalizationSignal};
-use crate::protocol::{StatsStatusPayload, TargetDescriptor};
+use crate::protocol::{StatsStatusPayload, TargetDescriptor, TargetKind};
 use crate::settings::StableIdentity;
 use crate::stats::{StatsEvent, StatsStore, StatsSummary, local_today};
 use crate::style::{StyleKey, StyleSample, StyleStatus};
@@ -154,6 +154,24 @@ impl Broker {
     }
 
     /// Must be called under the broker state lock, like [`Self::queue_for`].
+    fn queue_non_terminal(
+        &self,
+        target: &TargetDescriptor,
+        command: impl FnOnce(StableIdentity) -> OutcomeCommand,
+    ) -> bool {
+        if target.kind == TargetKind::Terminal {
+            return false;
+        }
+        let Ok(identity) = StableIdentity::from_target(target) else {
+            return false;
+        };
+        if identity.is_terminal() {
+            return false;
+        }
+        self.queue(command(identity))
+    }
+
+    /// Must be called under the broker state lock, like [`Self::queue_for`].
     pub(super) fn queue_outcome(
         &self,
         target: &TargetDescriptor,
@@ -162,7 +180,7 @@ impl Broker {
         signal: PersonalizationSignal,
     ) -> bool {
         let provider = PersonalizationProvider::from(self.inner.provider_kind);
-        self.queue_for(target, |identity| OutcomeCommand::Signal {
+        self.queue_non_terminal(target, |identity| OutcomeCommand::Signal {
             expected_settings_revision,
             event_day,
             identity,
@@ -178,7 +196,7 @@ impl Broker {
         expected_settings_revision: u64,
         text: String,
     ) -> bool {
-        self.queue_for(target, |identity| OutcomeCommand::Style {
+        self.queue_non_terminal(target, |identity| OutcomeCommand::Style {
             expected_settings_revision,
             identity,
             text,
@@ -192,6 +210,9 @@ impl Broker {
         expected_settings_revision: u64,
         words: Vec<String>,
     ) -> bool {
+        if identity.is_terminal() {
+            return false;
+        }
         self.queue(OutcomeCommand::Learned {
             expected_settings_revision,
             identity,

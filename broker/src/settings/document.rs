@@ -11,7 +11,8 @@ use crate::spelling::SpellingLanguage;
 
 use super::identity::{IdentityError, StableIdentity};
 use super::permissions::{
-    ALL_LINUX_APPS_PERMISSIONS, ALL_WEB_ORIGINS_PERMISSIONS, SubjectPermissions, SubjectRule,
+    ALL_LINUX_APPS_PERMISSIONS, ALL_WEB_ORIGINS_PERMISSIONS, PermissionDecision,
+    RetentionPermission, SubjectPermissions, SubjectRule,
 };
 use super::policy::{PolicyResolution, PolicySource};
 use super::{MAX_ESCAPE_QUIET_SECONDS, MAX_SUBJECTS, SETTINGS_SCHEMA};
@@ -366,8 +367,10 @@ impl SettingsV2 {
             .copied()
     }
 
-    /// Whether context is on for `identity`: chosen globally and not turned
-    /// off for it. Permission to suggest there is checked separately.
+    /// Whether context is on for `identity`: chosen globally, not paused and not
+    /// turned off for it. Permission to suggest there is checked separately;
+    /// terminals keep only current-line draft completion and never read window
+    /// text or learn words.
     #[must_use]
     pub fn context_words_for(&self, identity: &StableIdentity) -> bool {
         self.context_words == Some(true)
@@ -453,10 +456,8 @@ impl SettingsV2 {
         for rule in &self.subjects {
             rule.identity.validate()?;
             rule.permissions.validate()?;
-            if matches!(rule.identity, StableIdentity::LinuxApp { .. })
-                && rule.permissions.learn.is_allowed()
-            {
-                return Err(SettingsValidationError::LinuxAppLearningUnsupported);
+            if rule.identity.is_terminal() && rule.permissions.learn.is_allowed() {
+                return Err(SettingsValidationError::TerminalLearningUnsupported);
             }
             if let Some(identity) = previous {
                 match identity.cmp(&rule.identity) {
@@ -486,13 +487,20 @@ impl SettingsV2 {
             .subjects
             .binary_search_by(|rule| rule.identity.cmp(identity))
         {
-            Ok(index) => PolicyResolution {
-                settings_revision: self.revision,
-                paused: self.paused,
-                identity_known: true,
-                source: PolicySource::Rule,
-                permissions: self.subjects[index].permissions,
-            },
+            Ok(index) => {
+                let mut permissions = self.subjects[index].permissions;
+                if identity.is_terminal() {
+                    permissions.learn = PermissionDecision::Block;
+                    permissions.retention = RetentionPermission::None;
+                }
+                PolicyResolution {
+                    settings_revision: self.revision,
+                    paused: self.paused,
+                    identity_known: true,
+                    source: PolicySource::Rule,
+                    permissions,
+                }
+            }
             Err(_)
                 if self.all_web_origins
                     && matches!(identity, StableIdentity::BrowserOrigin { .. }) =>
@@ -557,8 +565,6 @@ pub enum SettingsValidationError {
     Identity(#[from] IdentityError),
     #[error("invalid_retention")]
     InvalidRetention,
-    #[error("linux_app_learning_unsupported")]
-    LinuxAppLearningUnsupported,
     #[error("permission_dependency")]
     PermissionDependency,
     #[error("revision_out_of_range")]
@@ -569,6 +575,8 @@ pub enum SettingsValidationError {
     WritingLanguagesNotCanonical,
     #[error("subjects_not_canonical")]
     SubjectsNotCanonical,
+    #[error("terminal_learning_unsupported")]
+    TerminalLearningUnsupported,
     #[error("too_many_subjects")]
     TooManySubjects,
     #[error("unsupported_schema")]

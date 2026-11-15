@@ -191,11 +191,28 @@ linux_learning_settings=$(jq -cn '{
     identity: {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"},
     permissions: {
       suggest: "allow", display: "allow", context_read: "allow", learn: "allow",
-      retention: {mode: "none"}
+      retention: {mode: "bounded", days: 30}
     }
   }]
 }')
-[[ $(ipc validateSettings "$linux_learning_settings") == false ]]
+[[ $(ipc validateSettings "$linux_learning_settings") == true ]]
+for terminal_pair in "shell:bash" "fcitx:com.mitchellh.ghostty" "fcitx:foot" "fcitx:org.codeberg.dnkl.foot"; do
+  terminal_adapter=${terminal_pair%%:*}
+  terminal_app=${terminal_pair#*:}
+  terminal_learning_settings=$(jq -cn --arg adapter "$terminal_adapter" --arg app_id "$terminal_app" '{
+    schema: "badi.settings.v2",
+    revision: 1,
+    paused: false,
+    subjects: [{
+      identity: {kind: "linux_app", adapter: $adapter, app_id: $app_id},
+      permissions: {
+        suggest: "allow", display: "allow", context_read: "allow", learn: "allow",
+        retention: {mode: "none"}
+      }
+    }]
+  }')
+  [[ $(ipc validateSettings "$terminal_learning_settings") == false ]]
+done
 for all_web_origins in true false; do
   document=$(jq -cn --argjson value "$all_web_origins" \
     '{schema: "badi.settings.v2", revision: 1, paused: false, all_web_origins: $value, subjects: []}')

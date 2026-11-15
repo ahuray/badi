@@ -71,10 +71,8 @@ fn producer_document_matches_the_formal_json_schema() {
     ))
     .expect("personalization schema JSON");
     let validator = jsonschema::validator_for(&schema).expect("personalization validator");
-    let document = PersonalizationV1 {
-        schema: PERSONALIZATION_SCHEMA.to_owned(),
-        revision: 1,
-        records: vec![DailyAggregate {
+    let mut records = vec![
+        DailyAggregate {
             identity: identity("example.com"),
             provider: PersonalizationProvider::PhraseV1,
             day: 10,
@@ -82,7 +80,55 @@ fn producer_document_matches_the_formal_json_schema() {
             dismissed: 1,
             accepted_word: 1,
             accepted_all: 0,
-        }],
+        },
+        DailyAggregate {
+            identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite")
+                .expect("Linux identity"),
+            provider: PersonalizationProvider::LocalModel,
+            day: 10,
+            shown: 3,
+            dismissed: 0,
+            accepted_word: 1,
+            accepted_all: 1,
+        },
+        DailyAggregate {
+            identity: StableIdentity::linux_app(LinuxAdapter::Libreoffice, "libreoffice-writer")
+                .expect("Writer identity"),
+            provider: PersonalizationProvider::PhraseV1,
+            day: 10,
+            shown: 1,
+            dismissed: 0,
+            accepted_word: 0,
+            accepted_all: 1,
+        },
+        DailyAggregate {
+            identity: StableIdentity::linux_app(LinuxAdapter::Neovim, "nvim")
+                .expect("Neovim identity"),
+            provider: PersonalizationProvider::LocalModel,
+            day: 10,
+            shown: 2,
+            dismissed: 1,
+            accepted_word: 0,
+            accepted_all: 1,
+        },
+        DailyAggregate {
+            identity: StableIdentity::linux_app(LinuxAdapter::Obsidian, "obsidian")
+                .expect("Obsidian identity"),
+            provider: PersonalizationProvider::LocalModel,
+            day: 10,
+            shown: 1,
+            dismissed: 0,
+            accepted_word: 1,
+            accepted_all: 0,
+        },
+    ];
+    records.sort_by(|left, right| {
+        (&left.identity, left.provider, left.day).cmp(&(&right.identity, right.provider, right.day))
+    });
+    let document = PersonalizationV1 {
+        schema: PERSONALIZATION_SCHEMA.to_owned(),
+        revision: 1,
+        records,
     };
     document.validate().expect("Rust document validation");
     let value = serde_json::to_value(document).expect("personalization JSON");
@@ -92,23 +138,90 @@ fn producer_document_matches_the_formal_json_schema() {
 }
 
 #[test]
-fn personalization_v1_rejects_linux_application_identities() {
-    let document = PersonalizationV1 {
-        schema: PERSONALIZATION_SCHEMA.to_owned(),
-        revision: 1,
-        records: vec![DailyAggregate {
-            identity: StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite")
-                .expect("Linux identity"),
-            provider: PersonalizationProvider::PhraseV1,
-            day: 10,
-            shown: 1,
-            dismissed: 0,
-            accepted_word: 0,
-            accepted_all: 0,
-        }],
-    };
+fn personalization_v1_accepts_native_apps_and_rejects_terminals_and_shells() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../schemas/badi.personalization.v1.schema.json"
+    ))
+    .expect("personalization schema JSON");
+    let validator = jsonschema::validator_for(&schema).expect("personalization validator");
 
-    assert!(document.validate().is_err());
+    let temporary = tempdir().expect("temporary directory");
+    let path = temporary.path().join("badi/personalization.json");
+    let omawrite =
+        StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("Linux identity");
+    let mut granted = settings(RetentionPermission::Bounded { days: 14 });
+    granted.subjects.push(crate::settings::SubjectRule {
+        identity: omawrite.clone(),
+        permissions: crate::settings::SubjectPermissions {
+            suggest: crate::settings::PermissionDecision::Allow,
+            display: crate::settings::PermissionDecision::Allow,
+            context_read: crate::settings::PermissionDecision::Allow,
+            learn: crate::settings::PermissionDecision::Allow,
+            retention: RetentionPermission::Bounded { days: 14 },
+        },
+    });
+    granted
+        .subjects
+        .sort_by(|left, right| left.identity.cmp(&right.identity));
+    let store = PersonalizationStore::open(&path, &granted, 10).expect("store");
+    let shown = store
+        .record(
+            0,
+            &granted,
+            10,
+            10,
+            omawrite.clone(),
+            PersonalizationProvider::LocalModel,
+            PersonalizationSignal::Shown,
+        )
+        .expect("shown in native app");
+    assert!(shown.signal_recorded);
+    let accepted = store
+        .record(
+            shown.revision,
+            &granted,
+            10,
+            10,
+            omawrite,
+            PersonalizationProvider::LocalModel,
+            PersonalizationSignal::AcceptedAll,
+        )
+        .expect("accepted in native app");
+    assert!(accepted.signal_recorded);
+    assert!(path.exists(), "bounded native-app aggregate persists");
+
+    for (adapter, app_id) in [
+        (LinuxAdapter::Shell, "bash"),
+        (LinuxAdapter::Fcitx, "com.mitchellh.ghostty"),
+        (LinuxAdapter::Fcitx, "foot"),
+        (LinuxAdapter::Fcitx, "org.codeberg.dnkl.foot"),
+    ] {
+        let document = PersonalizationV1 {
+            schema: PERSONALIZATION_SCHEMA.to_owned(),
+            revision: 1,
+            records: vec![DailyAggregate {
+                identity: StableIdentity::linux_app(adapter, app_id).expect("terminal identity"),
+                provider: PersonalizationProvider::PhraseV1,
+                day: 10,
+                shown: 1,
+                dismissed: 0,
+                accepted_word: 0,
+                accepted_all: 0,
+            }],
+        };
+        assert_eq!(
+            document.validate(),
+            Err(super::PersonalizationValidationError::UnsupportedIdentity),
+            "Rust accepted terminal personalization for {}:{app_id}",
+            adapter.as_str()
+        );
+        let value = serde_json::to_value(&document).expect("personalization JSON");
+        assert!(
+            !validator.is_valid(&value),
+            "schema accepted terminal personalization for {}:{app_id}",
+            adapter.as_str()
+        );
+    }
 }
 
 #[test]

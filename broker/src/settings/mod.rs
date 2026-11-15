@@ -16,7 +16,9 @@ pub use document::{
     BatteryMode, DEFAULT_WRITING_LANGUAGES, PredictionLanguage, ScreenShareMode, SettingsV2,
     SettingsValidationError, SuggestionLength,
 };
-pub use identity::{BrowserAdapter, IdentityError, LinuxAdapter, StableIdentity, WebScheme};
+pub use identity::{
+    BrowserAdapter, IdentityError, LinuxAdapter, StableIdentity, TERMINAL_FCITX_APP_IDS, WebScheme,
+};
 pub(crate) use paths::PrivateStorage;
 pub use paths::StoragePaths;
 pub use permissions::{

@@ -389,7 +389,12 @@ impl Broker {
             vocabulary,
         } = admitted;
         if let Some((identity, window_text)) = vocabulary {
-            let mut words = crate::vocabulary::Vocabulary::from_texts(&window_text, &[] as &[&str]);
+            let window = if identity.is_terminal() {
+                ""
+            } else {
+                window_text.as_str()
+            };
+            let mut words = crate::vocabulary::Vocabulary::from_texts(window, &[] as &[&str]);
             words.learned = self.learned_words(&identity);
             request.vocabulary = Some(words);
         }
@@ -1159,7 +1164,12 @@ impl BrokerState {
         target: &TargetDescriptor,
         context: &ContextChangedPayload,
     ) -> Vec<String> {
-        if context.field.purpose != FieldPurpose::Normal || target.kind == TargetKind::Terminal {
+        if context.field.purpose != FieldPurpose::Normal
+            || context.field.sensitive
+            || context.field.lock_screen
+            || target.kind == TargetKind::Terminal
+            || !StableIdentity::from_target(target).is_ok_and(|identity| !identity.is_terminal())
+        {
             return Vec::new();
         }
         let key = serde_json::to_string(target).unwrap_or_default();

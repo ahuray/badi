@@ -21,11 +21,12 @@ use crate::provider::{
     RequestTrigger,
 };
 use crate::settings::{
-    BrowserAdapter, PermissionDecision, RetentionPermission, SettingsV2, StableIdentity,
-    StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
+    BrowserAdapter, LinuxAdapter, PermissionDecision, RetentionPermission, SettingsV2,
+    StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, WebScheme,
 };
 use crate::style::{StyleKey, StyleKeyState};
 use crate::vocabulary::Vocabulary;
+use crate::vocabulary::learned::LearnedStore;
 
 const WINDOW: &str = "Re: Venue deposit\nMarinella Costa wrote: the deposit is due.";
 
@@ -398,4 +399,223 @@ async fn one_field_visit_counts_a_word_once_however_often_its_session_reopens() 
         request.vocabulary.expect("context on").learned,
         Vec::<String>::new()
     );
+}
+
+fn terminal_targets() -> [(StableIdentity, TargetDescriptor); 4] {
+    [
+        (
+            StableIdentity::linux_app(LinuxAdapter::Shell, "bash").expect("bash"),
+            TargetDescriptor {
+                kind: TargetKind::Terminal,
+                app_id: "bash".to_owned(),
+                target_id: "readline-1".to_owned(),
+                origin: None,
+            },
+        ),
+        (
+            StableIdentity::linux_app(LinuxAdapter::Fcitx, "com.mitchellh.ghostty")
+                .expect("ghostty"),
+            TargetDescriptor {
+                kind: TargetKind::DesktopApplication,
+                app_id: "com.mitchellh.ghostty".to_owned(),
+                target_id: "pty-1".to_owned(),
+                origin: None,
+            },
+        ),
+        (
+            StableIdentity::linux_app(LinuxAdapter::Fcitx, "foot").expect("foot"),
+            TargetDescriptor {
+                kind: TargetKind::DesktopApplication,
+                app_id: "foot".to_owned(),
+                target_id: "pty-2".to_owned(),
+                origin: None,
+            },
+        ),
+        (
+            StableIdentity::linux_app(LinuxAdapter::Fcitx, "org.codeberg.dnkl.foot")
+                .expect("foot rdns"),
+            TargetDescriptor {
+                kind: TargetKind::DesktopApplication,
+                app_id: "org.codeberg.dnkl.foot".to_owned(),
+                target_id: "pty-3".to_owned(),
+                origin: None,
+            },
+        ),
+    ]
+}
+
+async fn visit_terminal_field(fixture: &Fixture, target: TargetDescriptor, purpose: FieldPurpose) {
+    let session_id = SessionId::new();
+    let (sink, mut events) = mpsc::channel(16);
+    fixture
+        .broker
+        .open_session(
+            Coordinates {
+                session_id,
+                focus_epoch: 1,
+                revision: 0,
+            },
+            SessionOpenPayload {
+                target,
+                activation: Activation::Always,
+            },
+            SessionAuthority {
+                adapter_kind: AdapterKind::Test,
+                capabilities: vec![
+                    Capability::Context,
+                    Capability::Suggestion,
+                    Capability::CommitApplied,
+                    Capability::Policy,
+                ],
+            },
+            BrokerEventSink::new(sink, CancellationToken::new()),
+        )
+        .await
+        .expect("session");
+    let before = "Thanks, I asked Okonkwo. ";
+    let length = u64::try_from(before.chars().count()).expect("length");
+    fixture
+        .broker
+        .update_context(
+            Coordinates {
+                session_id,
+                focus_epoch: 1,
+                revision: 1,
+            },
+            ContextChangedPayload {
+                fingerprint: "fingerprint_ctx_term_01".to_owned(),
+                before: before.to_owned(),
+                after: String::new(),
+                selection: Selection {
+                    anchor: length,
+                    head: length,
+                    unit: OffsetUnit::UnicodeScalarValues,
+                },
+                field: FieldDescriptor {
+                    purpose,
+                    editable: true,
+                    multiline: true,
+                    composing: false,
+                    sensitive: false,
+                    identity_known: true,
+                    focused: true,
+                    lock_screen: false,
+                },
+                activation: Activation::Always,
+                explicit: true,
+                language: Some("en".to_owned()),
+                window_text: Some(WINDOW.to_owned()),
+            },
+        )
+        .await
+        .expect("context");
+    fixture
+        .broker
+        .request_suggestion(
+            Coordinates {
+                session_id,
+                focus_epoch: 1,
+                revision: 1,
+            },
+            SuggestRequestPayload {
+                fingerprint: "fingerprint_ctx_term_01".to_owned(),
+                explicit: true,
+            },
+            None,
+        )
+        .await
+        .expect("request");
+    let _ = timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event deadline")
+        .expect("event");
+    let last = fixture
+        .provider
+        .requests
+        .lock()
+        .expect("requests")
+        .pop()
+        .expect("provider request");
+    assert_eq!(
+        last.vocabulary,
+        Some(Vocabulary::default()),
+        "terminals keep draft-only vocabulary and drop window and learned words"
+    );
+}
+
+#[tokio::test]
+async fn terminal_and_shell_targets_and_sensitive_fields_never_seal_learned_words_even_with_learn_allow()
+ {
+    let omawrite = StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("omawrite");
+    let terminals = terminal_targets();
+    let mut initial = settings(1, Some(true), false);
+    initial.subjects.push(SubjectRule {
+        identity: omawrite,
+        permissions: SubjectPermissions {
+            suggest: PermissionDecision::Allow,
+            display: PermissionDecision::Allow,
+            context_read: PermissionDecision::Allow,
+            learn: PermissionDecision::Allow,
+            retention: RetentionPermission::Bounded { days: 30 },
+        },
+    });
+    for (identity, _) in &terminals {
+        initial.subjects.push(SubjectRule {
+            identity: identity.clone(),
+            permissions: SubjectPermissions {
+                suggest: PermissionDecision::Allow,
+                display: PermissionDecision::Allow,
+                context_read: PermissionDecision::Allow,
+                learn: PermissionDecision::Block,
+                retention: RetentionPermission::None,
+            },
+        });
+    }
+    initial
+        .subjects
+        .sort_by(|left, right| left.identity.cmp(&right.identity));
+
+    let fixture = fixture(initial.clone());
+    let mut forged = initial;
+    for rule in &mut forged.subjects {
+        rule.permissions.learn = PermissionDecision::Allow;
+        rule.permissions.retention = RetentionPermission::Bounded { days: 30 };
+    }
+    fixture.broker.inner.state.lock().await.settings = Some(forged.clone());
+
+    for (_, base_target) in &terminals {
+        for visit in ["visit-a", "visit-b"] {
+            for purpose in [FieldPurpose::Terminal, FieldPurpose::Normal] {
+                let mut target = base_target.clone();
+                target.target_id = format!("{}-{visit}", base_target.target_id);
+                visit_terminal_field(&fixture, target, purpose).await;
+            }
+        }
+    }
+
+    fixture
+        .broker
+        .flush_outcomes_before_pause_ack()
+        .await
+        .expect("flush");
+    let status = fixture.broker.learned_status().expect("status");
+    assert_eq!((status.subjects, status.words), (0, Some(0)));
+
+    let direct_dir = tempdir().expect("direct learned dir");
+    let mut direct_store =
+        LearnedStore::open(direct_dir.path().join("learned-words.json")).expect("learned store");
+    direct_store.set_key(key());
+    for (terminal_identity, _) in &terminals {
+        assert!(
+            !direct_store
+                .record(
+                    &forged,
+                    10,
+                    terminal_identity,
+                    &["Okonkwo".to_owned(), "Marinella".to_owned()]
+                )
+                .expect("terminal learned record refused")
+        );
+    }
+    assert_eq!(direct_store.status().words, Some(0));
 }

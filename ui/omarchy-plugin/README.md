@@ -112,8 +112,8 @@ is open, so every `badi` settings write, snooze and snooze end calls its
 `refresh()` (`omarchy-shell -q badi-writing refresh`, quiet where Omarchy is
 not running): a pause from a shortcut or a terminal dims the mark at once. The terminal equivalents are in
 the [README](../../README.md#choose-where-badi-writes).
-Per-app language overrides are currently set from the terminal. Panel writes
-validate and preserve them.
+Per-app language overrides and style learning are currently set from the
+terminal. Panel writes validate and preserve them.
 
 ## Install and update
 

@@ -1079,6 +1079,29 @@ fn context_words_keep_per_subject_off_canonical_and_stay_off_until_chosen() {
     assert!(!settings.context_words_for(&site));
     settings.context_words = Some(true);
     assert!(settings.context_words_for(&site) && settings.context_words_for(&other));
+    let omawrite = StableIdentity::linux_app(LinuxAdapter::Fcitx, "omawrite").expect("omawrite");
+    assert!(settings.context_words_for(&omawrite));
+    for (adapter, app_id) in [
+        (LinuxAdapter::Shell, "bash"),
+        (LinuxAdapter::Fcitx, "com.mitchellh.ghostty"),
+        (LinuxAdapter::Fcitx, "foot"),
+        (LinuxAdapter::Fcitx, "org.codeberg.dnkl.foot"),
+    ] {
+        let terminal = StableIdentity::linux_app(adapter, app_id).expect("terminal");
+        assert!(terminal.is_terminal(), "{app_id} is a terminal/shell");
+        let mut forged = settings_with(SubjectRule {
+            identity: terminal.clone(),
+            permissions: allowed(Some(30)),
+        });
+        forged.style_learning = true;
+        assert_eq!(
+            forged.validate(),
+            Err(crate::settings::SettingsValidationError::TerminalLearningUnsupported)
+        );
+        let resolved = forged.resolve_identity_validated(&terminal);
+        assert!(!resolved.allows_learning());
+        assert_eq!(resolved.permissions.retention, RetentionPermission::None);
+    }
     settings.context_words_off = vec![site.clone()];
     settings.validate().expect("valid");
     assert!(!settings.context_words_for(&site) && settings.context_words_for(&other));

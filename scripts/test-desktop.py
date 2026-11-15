@@ -1,5 +1,6 @@
 """Behavior checks for the desktop controls, settings updates and diagnostics."""
 import contextlib
+import copy
 import hashlib
 import importlib.util
 import io
@@ -497,7 +498,20 @@ class DesktopTests(unittest.TestCase):
         settings = {'schema': 'badi.settings.v2', 'revision': 7, 'paused': False, 'subjects': [
             {'identity': desktop.site_identity('https://mail.example'), 'permissions': {
                 'context_read': 'allow', 'display': 'allow', 'suggest': 'allow', 'learn': 'block',
+                'retention': {'mode': 'none'}}},
+            {'identity': desktop.app_identity('omawrite'), 'permissions': {
+                'context_read': 'allow', 'display': 'allow', 'suggest': 'allow', 'learn': 'block',
+                'retention': {'mode': 'none'}}},
+            {'identity': desktop.app_identity('com.mitchellh.ghostty'), 'permissions': {
+                'context_read': 'allow', 'display': 'allow', 'suggest': 'allow', 'learn': 'block',
+                'retention': {'mode': 'none'}}},
+            {'identity': desktop.app_identity('foot'), 'permissions': {
+                'context_read': 'allow', 'display': 'allow', 'suggest': 'allow', 'learn': 'block',
+                'retention': {'mode': 'none'}}},
+            {'identity': desktop.app_identity('bash'), 'permissions': {
+                'context_read': 'allow', 'display': 'allow', 'suggest': 'allow', 'learn': 'block',
                 'retention': {'mode': 'none'}}}]}
+        settings['subjects'].sort(key=lambda item: desktop.identity_key(item['identity']))
         calls = []
 
         def control(arguments, endpoint=None, *, input_text=None):
@@ -519,24 +533,59 @@ class DesktopTests(unittest.TestCase):
         self.assertFalse(any(key[1] in ' '.join(arguments) for arguments, _ in calls), 'never in argv')
         self.assertLess(calls.index(delivery), len(calls) - 1, 'the key arrives before learning is enabled')
         self.assertTrue(json.loads(calls[-1][1])['style_learning'])
+        self.assertIn('badi style app ID on', output.getvalue())
         self.assertIn('badi style site ORIGIN on', output.getvalue())
 
-        for arguments, learn, retention in ((['style', 'site', 'https://mail.example', 'on'], 'allow', 30),
-                                            (['style', 'site', 'https://mail.example', 'on', '7'], 'allow', 7),
-                                            (['style', 'site', 'https://mail.example', 'off'], 'block', None)):
+        for arguments, identity, learn, retention in (
+            (['style', 'site', 'https://mail.example', 'on'], desktop.site_identity('https://mail.example'), 'allow', 30),
+            (['style', 'site', 'https://mail.example', 'on', '7'], desktop.site_identity('https://mail.example'), 'allow', 7),
+            (['style', 'site', 'https://mail.example', 'off'], desktop.site_identity('https://mail.example'), 'block', None),
+            (['style', 'app', 'omawrite', 'on'], desktop.app_identity('omawrite'), 'allow', 30),
+            (['style', 'app', 'omawrite', 'on', '14'], desktop.app_identity('omawrite'), 'allow', 14),
+            (['style', 'app', 'omawrite', 'off'], desktop.app_identity('omawrite'), 'block', None),
+        ):
             calls.clear()
             with self.subTest(arguments=arguments), patch.object(desktop, 'control', side_effect=control), \
                  contextlib.redirect_stdout(io.StringIO()):
                 desktop.main(arguments)
-            permissions = json.loads(calls[-1][1])['subjects'][0]['permissions']
+            updated = json.loads(calls[-1][1])
+            subject, = [item for item in updated['subjects'] if item['identity'] == identity]
+            permissions = subject['permissions']
             self.assertEqual(permissions['learn'], learn)
             self.assertEqual(permissions['retention'], {'mode': 'bounded', 'days': retention} if retention
                              else {'mode': 'none'})
-        for invalid in (['style', 'site', 'https://other.example', 'on'], ['style', 'site', 'https://mail.example', 'on', '91'],
-                        ['style', 'site', 'https://mail.example/path', 'on'], ['style', 'maybe']):
+
+        status_settings = copy.deepcopy(settings)
+        for item in status_settings['subjects']:
+            if item['identity'] == desktop.site_identity('https://mail.example'):
+                item['permissions'].update(learn='allow', retention={'mode': 'bounded', 'days': 30})
+            elif item['identity'] == desktop.app_identity('omawrite'):
+                item['permissions'].update(learn='allow', retention={'mode': 'bounded', 'days': 14})
+        def status_control(arguments, endpoint=None, *, input_text=None):
+            if arguments[:2] == ['settings', 'show']:
+                return json.dumps(status_settings)
+            if arguments == ['style', 'status']:
+                return json.dumps({'enabled': True, 'available': True, 'key': 'ready', 'samples': 5, 'subjects': 2})
+            return '{}'
+        with patch.object(desktop, 'control', side_effect=status_control), \
+             contextlib.redirect_stdout(io.StringIO()) as status_output:
+            desktop.main(['style', 'status'])
+        self.assertIn('from 2 app(s) and site(s)', status_output.getvalue())
+        self.assertIn('Learning in: https://mail.example (30 days), omawrite (14 days)', status_output.getvalue())
+
+        for invalid in (['style', 'site', 'https://other.example', 'on'],
+                        ['style', 'app', 'nvim', 'on'],
+                        ['style', 'site', 'https://mail.example', 'on', '91'],
+                        ['style', 'app', 'omawrite', 'on', '0'],
+                        ['style', 'site', 'https://mail.example/path', 'on'],
+                        ['style', 'maybe']):
             with self.subTest(invalid=invalid), patch.object(desktop, 'control', side_effect=control), \
                  self.assertRaises(RuntimeError):
                 desktop.main(invalid)
+        for terminal in ('com.mitchellh.ghostty', 'ghostty', 'foot', 'org.codeberg.dnkl.foot', 'bash'):
+            with self.subTest(terminal=terminal), patch.object(desktop, 'control', side_effect=control), \
+                 self.assertRaisesRegex(RuntimeError, 'Terminals and shells never learn style samples'):
+                desktop.main(['style', 'app', terminal, 'on'])
 
         calls.clear()
         with patch.object(desktop, 'style_keyring', return_value=keyring), \
