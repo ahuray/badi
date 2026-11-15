@@ -34,7 +34,7 @@ From the repository root:
 
 Exit 0 means TLC found no counterexample and every `withhold_` test in `broker/src/engine/tests/withhold.rs` passed. The script prints a TLC summary and a final line `TLC exit N; cargo test exit N`. Any other exit is a failure. A TLC "No error has been found" line is not success on its own.
 
-The checker is TLA+ 1.7.4, TLC 2.19 of 08 August 2024, jar sha256 `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`. The script downloads that jar into the user cache and refuses a different hash. It needs `java` (OpenJDK 21 is enough; Debian and Ubuntu package `openjdk-21-jre-headless`) and `curl`. It does not install Rust.
+The checker is TLA+ 1.7.4, TLC 2.19 of 08 August 2024, jar sha256 `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`. The script downloads that jar into the user cache and refuses a different hash. It needs `java` 17 or newer (checked on OpenJDK 17 LTS and 21 LTS; Debian 13 and Ubuntu 24.04 package `openjdk-21-jre-headless`) and `curl`. It does not install Rust.
 
 The model is [Withhold.tla](Withhold.tla) with [Withhold.cfg](Withhold.cfg). TLC is the tool because the question is whether these withholds can happen in a bad order. The broker test calls the same functions on a running broker, so a broken guard fails even when the model is unchanged.
 

@@ -13,7 +13,7 @@ field to the focused window's process and app id, checked against an exact
 identity rule, and denies while the session is locked. It has that source on
 Hyprland and, through a KWin script, on KDE Plasma 6 (ADR 0015, proposed in
 its own change). GNOME had none
-([future plans](../../future%20plans.md), step 7):
+([future plans](../../future%20plans.md), step 6):
 
 - `org.gnome.Shell.Introspect` (`GetWindows`, `GetRunningApplications`)
   gives no process id, and since GNOME 41 answers only callers on its

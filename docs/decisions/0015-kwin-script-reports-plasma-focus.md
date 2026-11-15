@@ -12,7 +12,7 @@ field to the active window's process and app id, checked against an exact
 identity rule, and denies while the session is locked. It learned both only
 from Hyprland's IPC and Omarchy's lock status, so on KDE Plasma its unit was
 skipped and Chromium-based apps, Zen, VS Code and Writer's grey preview got
-no observed fields ([future plans](../../future%20plans.md), step 7).
+no observed fields ([future plans](../../future%20plans.md), step 6).
 
 Plasma offers two sources of the active window's process and app id:
 
