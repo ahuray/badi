@@ -14,7 +14,7 @@ import badi_install
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ("manifest.json", "BarWidget.qml", "BadiMark.qml", "DesktopPanel.qml", "SettingsView.qml", "BadiClient.qml",
-         "KeyModel.js", "StatsModel.js")
+         "KeyModel.js", "SettingsModel.js", "StatsModel.js")
 FCITX_THEME = ROOT / "ui/omarchy-plugin/fcitx-theme.py"
 HOOK_EVENTS = ("theme-set", "font-set")
 

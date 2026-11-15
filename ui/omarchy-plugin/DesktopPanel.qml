@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "KeyModel.js" as KeyModel
+import "SettingsModel.js" as SettingsModel
 import "StatsModel.js" as StatsModel
 
 // The panel's state and actions, without any visuals: the broker client,
@@ -41,16 +42,20 @@ Item {
     {name: "Claude", appId: "com.anthropic.claude", context: "window", detail: "Desktop app composer", desktop: ["com.anthropic.Claude"]},
     {name: "Discord", appId: "discord", context: "window", detail: "Needs renderer accessibility", desktop: ["discord"]}]
 
-  // The supported apps installed here, by their desktop entries. Quickshell
-  // scans them in the background, so the list fills in once the scan ends.
-  readonly property var installedApps: {
+  // The desktop entry ids installed here. Quickshell scans them in the
+  // background, so the map fills in once the scan ends.
+  readonly property var installedDesktopIds: {
     var entries = DesktopEntries.applications.values
     var ids = {}
     for (var i = 0; i < entries.length; i++) ids[entries[i].id] = true
-    return supportedApps.filter(function(app) {
-      return Array.isArray(app.desktop) && app.desktop.some(function(id) { return ids[id] === true })
-    })
+    return ids
   }
+
+  // The supported apps installed here, by their desktop entries; the first-run
+  // places question offers those apps.
+  readonly property var installedApps: supportedApps.filter(function(app) {
+    return Array.isArray(app.desktop) && app.desktop.some(function(id) { return installedDesktopIds[id] === true })
+  })
 
   // The languages the panel offers, European only: `name` on the chips,
   // `english` in the Suggestions and Spelling rows; `writing` the model
@@ -89,23 +94,27 @@ Item {
 
   readonly property bool appsBlocklist: client.settings.all_linux_apps === true
   readonly property bool sitesBlocklist: client.settings.all_web_origins === true
-  readonly property bool anyAppEnabled: appsBlocklist || sitesBlocklist
-    || supportedApps.some(function(app) { return appEnabled(app.appId) })
-    || siteRules().some(function(rule) { return rule.allowed })
-  readonly property bool ready: client.brokerReachable && !client.brokerPaused && !client.controlPlaneDegraded && anyAppEnabled
-  readonly property bool paused: client.brokerReachable && client.brokerPaused
+  readonly property bool anyAppEnabled: SettingsModel.anyAppEnabled(client.settings, supportedApps)
   // The session helper's report (badi-session), when the broker sends one:
   // while the screen is shared, settings hold every suggestion by default.
   readonly property var sessionHelper: client.objectValue(client.broker, "desktop")
   readonly property bool sharingHeld: sessionHelper.screen_share === "held"
+  readonly property var statusState: SettingsModel.status({
+    brokerReachable: client.brokerReachable,
+    brokerPaused: client.brokerPaused,
+    controlPlaneDegraded: client.controlPlaneDegraded,
+    settingsPaused: client.settings.paused === true,
+    sharingHeld: sharingHeld,
+    anyAppEnabled: anyAppEnabled,
+    serviceActive: typeof serviceState.active === "string" ? serviceState.active : ""
+  })
+  readonly property bool ready: statusState.ready
+  readonly property bool paused: statusState.paused
+  readonly property bool loading: statusState.loading
+  readonly property string statusLabel: statusState.label
+  readonly property var mode: statusState.mode
   readonly property bool controlsBusy: action.running || client.mutating
   readonly property bool canChange: client.canMutateSettings && !action.running
-  readonly property string statusLabel: !client.brokerReachable
-    ? (serviceState.active === "active" ? "Model starting or unavailable" : "Model offline")
-    : client.controlPlaneDegraded ? "Settings need attention"
-    : paused && sharingHeld && client.settings.paused !== true ? "Held while the screen is shared"
-    : paused ? "Predictions paused"
-    : !anyAppEnabled ? "Applications disabled" : "Model ready"
   // Apps and sites snoozed now (badi snooze or its shortcut; runtime only),
   // each a settings identity and the milliseconds left.
   readonly property var snoozes: Array.isArray(client.broker.snoozes)
@@ -148,9 +157,6 @@ Item {
     return client.objectValue(modelAdvice, "recommended")
   }
   readonly property string modelName: typeof activeModel.name === "string" ? activeModel.name : ""
-  // The service runs but the broker does not answer yet: the model loads.
-  readonly property bool loading: !client.brokerReachable
-    && (serviceState.active === "active" || serviceState.active === "activating")
   // What is happening right now, for the activity line; empty when idle.
   readonly property string busyVerb: client.mutating ? "Saving"
     : action.running ? actionVerb
@@ -180,6 +186,7 @@ Item {
   function statsLeaders(count) {
     var names = {}
     supportedApps.forEach(function(app) { names[app.appId] = app.name })
+    SettingsModel.BROWSERS.forEach(function(browser) { names[browser.appId] = browser.name })
     return StatsModel.leaders(statsSummary, names, count)
   }
 
@@ -201,13 +208,7 @@ Item {
   }
 
   function appRule(appId) {
-    var subjects = client.settings.subjects || []
-    for (var i = 0; i < subjects.length; i++) {
-      var entry = subjects[i]
-      if (entry.identity.kind === "linux_app" && entry.identity.adapter === appAdapter(appId) && entry.identity.app_id === appId)
-        return entry
-    }
-    return null
+    return SettingsModel.appRule(client.settings, appId)
   }
 
   // Context is off for this app (badi context app ID off).
@@ -220,43 +221,25 @@ Item {
   }
 
   function allows(permissions) {
-    return permissions.context_read === "allow" && permissions.suggest === "allow" && permissions.display === "allow"
+    return SettingsModel.allows(permissions)
   }
 
   // The effective state: an exact rule, else the list mode (never for manual apps).
   function appEnabled(appId) {
-    var rule = appRule(appId)
-    if (rule) return allows(rule.permissions)
-    var app = supportedApps.find(function(item) { return item.appId === appId })
-    return appsBlocklist && !(app && app.manual)
+    return SettingsModel.appEnabled(client.settings, supportedApps, appId)
   }
 
   function siteRules() {
-    var subjects = client.settings.subjects || []
-    var rules = []
-    for (var i = 0; i < subjects.length; i++) {
-      var identity = subjects[i].identity
-      if (identity.kind !== "browser_origin") continue
-      var standard = identity.scheme === "https" ? 443 : 80
-      rules.push({identity: identity, allowed: allows(subjects[i].permissions),
-        origin: identity.scheme + "://" + identity.host + (identity.port === standard ? "" : ":" + identity.port)})
-    }
-    return rules
+    return SettingsModel.siteRules(client.settings)
   }
 
   // A supported app's name, another app's id, or a site's origin.
   function identityLabel(identity) {
-    if (identity.kind === "linux_app") {
-      var app = supportedApps.find(function(item) { return item.appId === identity.app_id })
-      return app ? app.name : identity.app_id
-    }
-    var standard = identity.scheme === "https" ? 443 : 80
-    return identity.scheme + "://" + identity.host + (identity.port === standard ? "" : ":" + identity.port)
+    return SettingsModel.identityLabel(identity, supportedApps)
   }
 
   function appAdapter(appId) {
-    return appId === "obsidian" ? "obsidian" : appId === "bash" ? "shell" : appId === "nvim" ? "neovim"
-      : appId === "libreoffice-writer" ? "libreoffice" : "fcitx"
+    return SettingsModel.appAdapter(appId)
   }
 
   // Every write: a fresh clone of the coherent document, changed, then
@@ -301,7 +284,7 @@ Item {
     }, "Suggestions: " + lengthLabel(length).toLowerCase())
   }
 
-  readonly property var spellingOrder: ["en", "de", "fr", "es", "it", "nl", "pl"]
+  readonly property var spellingOrder: SettingsModel.SPELLING_ORDER
 
   function spellingLanguages() {
     var languages = client.settings.spelling_languages
@@ -310,18 +293,16 @@ Item {
 
   // `list` with `code` turned on or off, in the broker's `order`.
   function withLanguage(list, order, code, on) {
-    return order.filter(function(item) { return item === code ? on : list.indexOf(item) >= 0 })
+    return SettingsModel.withLanguage(list, order, code, on)
   }
 
   // Each language list, omitted at its default as the broker writes it.
   function putSpelling(document, languages) {
-    if (languages.join() === "en") delete document.spelling_languages
-    else document.spelling_languages = languages
+    SettingsModel.putSpelling(document, languages)
   }
 
   function putWriting(document, languages) {
-    if (languages.join() === "en,de") delete document.writing_languages
-    else document.writing_languages = languages
+    SettingsModel.putWriting(document, languages)
   }
 
   function setSpelling(code, on) {
@@ -332,7 +313,7 @@ Item {
 
   // The broker's canonical order; Persian keeps its place so a terminal
   // choice survives panel writes.
-  readonly property var writingOrder: ["en", "de", "fa", "fr", "es", "pt"]
+  readonly property var writingOrder: SettingsModel.WRITING_ORDER
 
   function writingLanguages() {
     var languages = client.settings.writing_languages
@@ -423,11 +404,7 @@ Item {
   // `document` with the exact rule for `identity` replaced, or removed for a
   // null decision, in the broker's identity order.
   function putRule(document, identity, decision) {
-    document.subjects = document.subjects.filter(function(item) { return client.compareIdentities(item.identity, identity) !== 0 })
-    if (decision !== null)
-      document.subjects.push({identity: identity, permissions: {context_read: decision, display: decision,
-        suggest: decision, learn: "block", retention: {mode: "none"}}})
-    document.subjects.sort(function(a, b) { return client.compareIdentities(a.identity, b.identity) })
+    SettingsModel.putRule(document, identity, decision)
   }
 
   function writeRule(identity, decision) {
@@ -438,11 +415,7 @@ Item {
 
   // An exact http(s) origin, as `badi site` accepts it (ASCII hosts only here).
   function siteIdentity(text) {
-    var match = /^(https?):\/\/([a-z0-9.-]+)(?::([0-9]{1,5}))?\/?$/.exec(text.trim().toLowerCase())
-    if (!match) return null
-    var port = match[3] ? Number(match[3]) : (match[1] === "https" ? 443 : 80)
-    if (port < 1 || port > 65535 || match[2].length > 253) return null
-    return {kind: "browser_origin", adapter: "chromium", scheme: match[1], host: match[2], port: port}
+    return SettingsModel.siteIdentity(text)
   }
 
   function setSite(text, decision) {
@@ -460,7 +433,7 @@ Item {
   }
 
   function appIdentity(appId) {
-    return {kind: "linux_app", adapter: appAdapter(appId), app_id: appId}
+    return SettingsModel.appIdentity(appId)
   }
 
   function toggleApp(appId) {
@@ -468,6 +441,30 @@ Item {
     actionMessage = ""
     var enabled = !appEnabled(appId)
     client.replaceSettings(writeRule(appIdentity(appId), enabled ? "allow" : "block"), enabled ? "App allowed" : "App blocked")
+  }
+
+  function toggleStyleTarget(target) {
+    var nextDays = target.learning ? null : target.days
+    change(function(document) {
+      SettingsModel.setSubjectLearning(document, target.identity, nextDays, supportedApps)
+    }, nextDays ? target.label + ": style samples kept for " + nextDays + " days"
+      : target.label + ": style learning off · samples deleted")
+  }
+
+  function setAppLanguage(appId, label, code) {
+    change(function(document) {
+      SettingsModel.setLanguageOverride(document, appId, code)
+    }, code === "auto" ? label + ": language automatic" : label + ": " + languageInfo(code).english)
+  }
+
+  function appLanguageDetail(override, writing) {
+    if (override === "") return "Detects the language from the field"
+    if (override === "fa") return "Set to Persian in terminal · Auto restores field detection"
+    var info = languageInfo(override)
+    if (writing.indexOf(override) < 0)
+      return "⚠ " + info.english + " suggestions are off · turn on in Languages"
+    return "Always suggests in " + info.english
+      + (["fr", "es", "pt"].indexOf(override) >= 0 ? " · experimental" : "")
   }
 
   // The places question's answer so far: the pick over the current settings.
@@ -630,7 +627,7 @@ Item {
       .filter(function(row) { return row !== undefined })
     list.forEach(function(row) { row.section = "" })
     list.push({key: "all_settings", section: "", kind: "action", label: "All settings",
-      detail: "Model, apps, sites, spelling and system · a", enabled: true,
+      detail: "Model, apps, sites, style, spelling and system · a", enabled: true,
       activate: function() { root.showAll = true }})
     return list
   }
@@ -755,6 +752,43 @@ Item {
           })
         }})
     }
+
+    // Opt-in style learning: `badi style on` ensures and delivers the keyring
+    // key; turning it off and every per-subject toggle write compare-and-swap
+    // directly; terminals and shells never appear or learn.
+    var styleOn = client.settings.style_learning === true
+    var learningTargets = SettingsModel.styleTargets(client.settings, supportedApps)
+    var anySubjectLearning = learningTargets.some(function(target) { return target.learning })
+    list.push({key: "style", section: "Style learning", kind: "toggle", label: "Style learning",
+      detail: styleOn
+        ? (learningTargets.length > 0
+          ? "Sealed in your keyring · choose apps and sites below · not in prompts yet"
+          : "On · allow an app or add a site in Websites to learn there")
+        : "Off · keep sealed sentences per app or site; terminals never learn",
+      checked: styleOn, enabled: canChange,
+      activate: function() {
+        if (styleOn) root.setFlag("style_learning", false, "Style learning off")
+        else root.runAction(["style", "on"], "Turning style learning on", "Style learning on")
+      }})
+    if (styleOn || anySubjectLearning) {
+      learningTargets.forEach(function(target) {
+        list.push({key: target.key, section: "Style learning", kind: "toggle", label: target.label,
+          detail: target.learning
+            ? (styleOn
+              ? "Sentences kept for " + target.days + " days · turning off deletes them"
+              : "Paused · kept for " + target.days + " days when style learning is on")
+            : "Off here",
+          checked: target.learning, enabled: canChange,
+          activate: function() { root.toggleStyleTarget(target) }})
+      })
+      list.push({key: "style_forget", section: "Style learning", kind: "action", label: "Forget style samples",
+        detail: "Deletes every style sample and removes the keyring key", enabled: reachable && !controlsBusy,
+        activate: function() {
+          root.confirm("Forget every style sample? This cannot be undone.", "Forget", function() {
+            root.runAction(["style", "forget"], "Forgetting style samples", "Style samples deleted")
+          })
+        }})
+    }
     var length = client.settings.suggestion_length || "normal"
     list.push({key: "suggestion_length", section: "Writing", kind: "choice", label: "Suggestion length",
       detail: lengthLabel(length) + " · Tab takes a word, Ctrl+→ all of it",
@@ -800,6 +834,18 @@ Item {
         options: [{value: "off", label: "Off"}, {value: "auto", label: "Auto"},
           {value: "heal", label: "Heal"}, {value: "plain", label: "Keep space"}],
         choose: function(next) { if (next !== value) root.setWriting(code, next) }})
+    })
+
+    var overrideOptions = [{value: "auto", label: "Auto"}].concat(
+      SettingsModel.PANEL_WRITING_ORDER.map(function(code) {
+        return {value: code, label: languageInfo(code).name}
+      }))
+    SettingsModel.languageOverrideTargets(client.settings, supportedApps, installedDesktopIds).forEach(function(target) {
+      var value = target.override === "" ? "auto" : target.override === "fa" ? "" : target.override
+      list.push({key: target.key, section: "App languages", kind: "choice", label: target.label,
+        detail: appLanguageDetail(target.override, writing),
+        value: value, enabled: canChange, options: overrideOptions,
+        choose: function(next) { if (next !== value) root.setAppLanguage(target.appId, target.label, next) }})
     })
 
     var chosen = spellingLanguages()

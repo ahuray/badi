@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "SettingsModel.js" as SettingsModel
 
 Scope {
   id: root
@@ -60,210 +61,39 @@ Scope {
     && !mutating
 
   function isObject(value) {
-    return value !== null && typeof value === "object" && !Array.isArray(value)
+    return SettingsModel.isObject(value)
   }
 
   function objectValue(parent, key) {
-    return isObject(parent) && isObject(parent[key]) ? parent[key] : ({})
+    return SettingsModel.objectValue(parent, key)
   }
 
   function hasBoolean(parent, key) {
-    return isObject(parent) && typeof parent[key] === "boolean"
+    return SettingsModel.hasBoolean(parent, key)
   }
 
   function boolValue(parent, key, fallback) {
-    return hasBoolean(parent, key) ? parent[key] : fallback
+    return SettingsModel.boolValue(parent, key, fallback)
   }
 
   function integerValue(parent, key, fallback) {
-    return isObject(parent) && Number.isSafeInteger(parent[key]) ? parent[key] : fallback
-  }
-
-  function hasExactKeys(value, keys) {
-    if (!isObject(value)) return false
-    var actual = Object.keys(value).sort()
-    var expected = keys.slice().sort()
-    if (actual.length !== expected.length) return false
-    for (var index = 0; index < expected.length; index += 1) {
-      if (actual[index] !== expected[index]) return false
-    }
-    return true
-  }
-
-  function isDecision(value) {
-    return value === "allow" || value === "block"
-  }
-
-  function isRetention(value) {
-    if (!isObject(value) || typeof value.mode !== "string") return false
-    if (value.mode === "none") return hasExactKeys(value, ["mode"])
-    return value.mode === "bounded"
-      && hasExactKeys(value, ["mode", "days"])
-      && Number.isSafeInteger(value.days)
-      && value.days >= 1
-      && value.days <= 90
-  }
-
-  function isBrowserIdentity(value) {
-    return hasExactKeys(value, ["kind", "adapter", "scheme", "host", "port"])
-      && value.kind === "browser_origin"
-      && value.adapter === "chromium"
-      && (value.scheme === "http" || value.scheme === "https")
-      && typeof value.host === "string"
-      && value.host.length > 0
-      && value.host.length <= 253
-      && /^[a-z0-9.:-]+$/.test(value.host)
-      && Number.isSafeInteger(value.port)
-      && value.port >= 1
-      && value.port <= 65535
-  }
-
-  function isLinuxIdentity(value) {
-    return hasExactKeys(value, ["kind", "adapter", "app_id"])
-      && value.kind === "linux_app"
-      && (value.adapter === "fcitx" || value.adapter === "obsidian" || value.adapter === "shell"
-        || value.adapter === "neovim" || value.adapter === "libreoffice")
-      && typeof value.app_id === "string"
-      && /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(value.app_id)
-      && value.app_id.length <= 128
+    return SettingsModel.integerValue(parent, key, fallback)
   }
 
   function isIdentity(value) {
-    return isBrowserIdentity(value) || isLinuxIdentity(value)
-  }
-
-  function isPermissions(value) {
-    if (!hasExactKeys(value,
-        ["suggest", "display", "context_read", "learn", "retention"])) return false
-    if (!isDecision(value.suggest)
-        || !isDecision(value.display)
-        || !isDecision(value.context_read)
-        || !isDecision(value.learn)
-        || !isRetention(value.retention)) return false
-    if (value.suggest === "allow"
-        && (value.display !== "allow" || value.context_read !== "allow")) return false
-    if (value.learn === "allow"
-        && (value.suggest !== "allow"
-          || value.display !== "allow"
-          || value.context_read !== "allow")) return false
-    return value.retention.mode !== "bounded" || value.learn === "allow"
+    return SettingsModel.isIdentity(value)
   }
 
   function isTerminalIdentity(value) {
-    return value.kind === "linux_app"
-      && (value.adapter === "shell"
-        || (value.adapter === "fcitx"
-          && (value.app_id === "com.mitchellh.ghostty"
-            || value.app_id === "foot"
-            || value.app_id === "org.codeberg.dnkl.foot")))
-  }
-
-  function isSubject(value) {
-    return hasExactKeys(value, ["identity", "permissions"])
-      && isIdentity(value.identity)
-      && isPermissions(value.permissions)
-      && (!isTerminalIdentity(value.identity) || value.permissions.learn === "block")
+    return SettingsModel.isTerminalIdentity(value)
   }
 
   function compareIdentities(left, right) {
-    var kindOrder = {"browser_origin": 0, "linux_app": 1}
-    var leftKind = kindOrder[left.kind]
-    var rightKind = kindOrder[right.kind]
-    if (leftKind !== rightKind) return leftKind - rightKind
-    var fields = left.kind === "browser_origin"
-      ? ["adapter", "scheme", "host"]
-      : ["adapter", "app_id"]
-    for (var index = 0; index < fields.length; index += 1) {
-      var field = fields[index]
-      if (left[field] < right[field]) return -1
-      if (left[field] > right[field]) return 1
-    }
-    return left.kind === "browser_origin" ? left.port - right.port : 0
-  }
-
-  // Codes in `order` without repeats, in that order.
-  function isOrderedCodes(value, order) {
-    if (!Array.isArray(value)) return false
-    for (var index = 0; index < value.length; index += 1) {
-      var position = order.indexOf(value[index])
-      if (position < 0 || (index > 0 && position <= order.indexOf(value[index - 1]))) return false
-    }
-    return true
-  }
-
-  // Whether `value` is one the settings schema
-  // (broker/schemas/badi.settings.v2.schema.json) allows for the optional
-  // key `key`. Producers omit a key at its default. A key this panel does
-  // not know fails the whole document, so the panel never writes over a
-  // setting it cannot see; run-client-lifecycle.sh keeps this list equal to
-  // the schema's.
-  function isOptionalSetting(key, value) {
-    var writingCodes = ["en", "de", "fa", "fr", "es", "pt"]
-    switch (key) {
-    case "all_web_origins":
-    case "all_linux_apps":
-    case "mid_line":
-    case "style_learning":
-    case "context_words":
-    case "languages_chosen":
-    case "places_chosen":
-      return typeof value === "boolean"
-    case "escape_quiet_seconds":
-      return Number.isSafeInteger(value) && value >= 1 && value <= 3600
-    case "battery_mode":
-      return ["normal", "quiet", "explicit"].indexOf(value) >= 0
-    case "screen_share":
-      return value === "hold" || value === "suggest"
-    case "suggestion_length":
-      return value === "short" || value === "normal"
-    case "spelling_languages":
-      return isOrderedCodes(value, ["en", "de", "fr", "es", "it", "nl", "pl"])
-    case "writing_languages":
-      return isOrderedCodes(value, writingCodes)
-    case "trailing_space_healing":
-      return isObject(value) && Object.keys(value).every(function(code) {
-        return writingCodes.indexOf(code) >= 0 && typeof value[code] === "boolean"
-      })
-    case "writing_model":
-      return typeof value === "string" && /^[a-z0-9.-]{1,64}$/.test(value)
-    case "context_words_off":
-      // In the broker's identity order.
-      if (!Array.isArray(value) || value.length === 0 || value.length > 64) return false
-      for (var index = 0; index < value.length; index += 1) {
-        if (!isIdentity(value[index])
-            || (index > 0 && compareIdentities(value[index - 1], value[index]) >= 0)) return false
-      }
-      return true
-    case "language_overrides":
-      return isObject(value) && Object.keys(value).length <= 64 && Object.keys(value).every(function(app) {
-        return app.length <= 128 && /^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)*$/.test(app)
-          && writingCodes.indexOf(value[app]) >= 0
-      })
-    default:
-      return false
-    }
+    return SettingsModel.compareIdentities(left, right)
   }
 
   function isSettingsDocument(value) {
-    if (!isObject(value)) return false
-    var required = ["schema", "revision", "paused", "subjects"]
-    var keys = Object.keys(value)
-    for (var key = 0; key < keys.length; key += 1) {
-      if (required.indexOf(keys[key]) < 0 && !isOptionalSetting(keys[key], value[keys[key]])) return false
-    }
-    if (value.schema !== "badi.settings.v2"
-        || !Number.isSafeInteger(value.revision)
-        || value.revision < 0
-        || typeof value.paused !== "boolean"
-        || !Array.isArray(value.subjects)
-        || value.subjects.length > 64) return false
-    for (var index = 0; index < value.subjects.length; index += 1) {
-      if (!isSubject(value.subjects[index])) return false
-      if (index > 0 && compareIdentities(
-          value.subjects[index - 1].identity,
-          value.subjects[index].identity) >= 0) return false
-    }
-    return true
+    return SettingsModel.isSettingsDocument(value)
   }
 
   function cloneSettings() {

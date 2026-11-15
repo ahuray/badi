@@ -45,15 +45,8 @@ Item {
 
   implicitHeight: header.implicitHeight + Style.space(12) + list.implicitHeight + Style.space(12) + footer.implicitHeight
 
-  // The mode, as a glyph and a word, like a status chip.
-  readonly property var mode: controller.loading ? {glyph: "◌", text: "Loading", tone: "dim"}
-    : !client.brokerReachable ? {glyph: "○", text: "Model offline", tone: "dim"}
-    : client.controlPlaneDegraded ? {glyph: "!", text: "Settings need attention", tone: "urgent"}
-    : controller.paused && controller.sharingHeld && client.settings.paused !== true
-      ? {glyph: "⏸", text: "Held · screen shared", tone: "dim"}
-    : controller.paused ? {glyph: "⏸", text: "Paused", tone: "dim"}
-    : !controller.anyAppEnabled ? {glyph: "◇", text: "No app allowed", tone: "dim"}
-    : {glyph: "⏵⏵", text: "Suggesting", tone: "accent"}
+  // Hero mode from SettingsModel.status (Suggesting, Paused, Held · screen shared, ...).
+  readonly property var mode: controller.mode
 
   function reset() {
     controller.confirmation = null
@@ -470,7 +463,7 @@ Item {
                 wrapMode: rowItem.modelData.key === "model" ? Text.WordWrap : Text.NoWrap
                 textFormat: Text.PlainText
                 text: (rowItem.hasCursor ? "h/l · " : "") + rowItem.modelData.detail
-                color: view.dim
+                color: rowItem.modelData.detail.indexOf("⚠") >= 0 ? Commons.Color.urgent : view.dim
                 font.family: view.fontFamily
                 font.pixelSize: Style.font.caption
               }

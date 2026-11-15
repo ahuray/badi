@@ -13,6 +13,7 @@ harness_dir="$test_root/harness"
 panel_dir="$test_root/panel"
 settings_extra="$test_root/settings-extra.json"
 overview_extra="$test_root/overview-extra.json"
+state_file="$test_root/state.json"
 runtime_dir="$test_root/runtime"
 call_log="$test_root/badictl.calls"
 action_log="$test_root/desktop-actions.calls"
@@ -55,10 +56,10 @@ for entry in omawrite org.telegram.desktop discord obsidian org.gnome.Calculator
 done
 chmod 700 "$runtime_dir" "$test_root/config"
 cp -- "$harness_source" "$harness_dir/shell.qml"
-cp -- "$artifact_dir/BadiClient.qml" "$harness_dir/BadiClient.qml"
+cp -- "$artifact_dir/BadiClient.qml" "$artifact_dir/SettingsModel.js" "$harness_dir/"
 cp -- "$tests_dir/panel-harness/shell.qml" "$panel_dir/shell.qml"
 cp -- "$artifact_dir/BadiClient.qml" "$artifact_dir/DesktopPanel.qml" \
-  "$artifact_dir/KeyModel.js" "$artifact_dir/StatsModel.js" "$panel_dir/"
+  "$artifact_dir/KeyModel.js" "$artifact_dir/SettingsModel.js" "$artifact_dir/StatsModel.js" "$panel_dir/"
 
 runtime_env=(
   env
@@ -82,6 +83,7 @@ runtime_env=(
   "BADI_FAKE_FAIL_OVERVIEW=$test_root/fail-overview"
   "BADI_FAKE_SETTINGS=$settings_extra"
   "BADI_FAKE_OVERVIEW=$overview_extra"
+  "BADI_FAKE_STATE_FILE=$state_file"
   "BADI_FAKE_ACTION_LOG=$action_log"
   "BADI_FAKE_FAIL_ACTION=$test_root/fail-action"
   "BADI_FAKE_HOLD_ACTION=$test_root/hold-action"
@@ -737,6 +739,223 @@ jq -e 'any(.[]; .key == "revision" and (.enabled | not)
 cp -- "$tests_dir/model-stats.json" "$overview_extra"
 ipc refresh >/dev/null
 wait_for_call_count 33
+wait_until_idle
+
+# Stateful compare-and-swap lifecycle for style learning, per-app language
+# overrides, terminal exclusion, poll survival and revision conflicts.
+jq -n '{
+  schema: "badi.overview.v2",
+  broker: {
+    reachable: true,
+    provider: "phrase_v1",
+    paused: false,
+    authority_epoch: 11,
+    settings_revision: 20,
+    control_plane_degraded: false,
+    sessions: 0,
+    socket_mode: "0600",
+    max_frame_bytes: 65536
+  },
+  settings: {
+    schema: "badi.settings.v2",
+    revision: 20,
+    paused: false,
+    all_web_origins: true,
+    languages_chosen: true,
+    places_chosen: true,
+    language_overrides: {"brave-origin": "de", "telegram": "fa"},
+    subjects: [
+      {
+        identity: {kind: "browser_origin", adapter: "chromium", scheme: "https", host: "example.com", port: 443},
+        permissions: {suggest: "allow", display: "allow", context_read: "allow", learn: "block", retention: {mode: "none"}}
+      },
+      {
+        identity: {kind: "linux_app", adapter: "fcitx", app_id: "com.mitchellh.ghostty"},
+        permissions: {suggest: "allow", display: "allow", context_read: "allow", learn: "block", retention: {mode: "none"}}
+      },
+      {
+        identity: {kind: "linux_app", adapter: "fcitx", app_id: "foot"},
+        permissions: {suggest: "allow", display: "allow", context_read: "allow", learn: "block", retention: {mode: "none"}}
+      },
+      {
+        identity: {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"},
+        permissions: {suggest: "allow", display: "allow", context_read: "allow", learn: "block", retention: {mode: "none"}}
+      },
+      {
+        identity: {kind: "linux_app", adapter: "fcitx", app_id: "org.codeberg.dnkl.foot"},
+        permissions: {suggest: "allow", display: "allow", context_read: "allow", learn: "block", retention: {mode: "none"}}
+      },
+      {
+        identity: {kind: "linux_app", adapter: "libreoffice", app_id: "libreoffice-writer"},
+        permissions: {suggest: "allow", display: "allow", context_read: "allow", learn: "block", retention: {mode: "none"}}
+      },
+      {
+        identity: {kind: "linux_app", adapter: "shell", app_id: "bash"},
+        permissions: {suggest: "allow", display: "allow", context_read: "allow", learn: "block", retention: {mode: "none"}}
+      }
+    ]
+  }
+}' >"$state_file"
+ipc refresh >/dev/null
+wait_for_call_count 34
+wait_until_idle
+state=$(ipc state)
+jq -e '
+  .settingsDocumentValid and .canChange and .ready and (.paused | not) and (.loading | not)
+  and .statusLabel == "Model ready"
+  and .mode == {glyph: "⏵⏵", text: "Suggesting", tone: "accent"}
+  and .settingsRevision == 20
+' <<<"$state" >/dev/null || fail "unexpected ready status state: $state"
+rows=$(ipc rows)
+jq -e '
+  any(.[]; .key == "style" and .section == "Style learning" and (.checked | not))
+  and all(.[]; (.key | startswith("style_app_") or startswith("style_site_")) | not)
+  and any(.[]; .key == "app_language_brave-origin" and .section == "App languages" and .value == "de"
+    and (.options | map(.value) == ["auto", "en", "de", "fr", "es", "pt"]))
+  and any(.[]; .key == "app_language_telegram" and .value == ""
+    and (.detail | contains("Set to Persian in terminal")))
+  and any(.[]; .key == "app_language_omawrite" and .value == "auto")
+' <<<"$rows" >/dev/null || fail "unexpected initial style or app-language rows: $rows"
+
+# An unchanged poll keeps the rendered rows equal and preserves cursor tracking.
+captured=$(ipc captureRows app_language_omawrite)
+[[ $(jq -r '.cursorKey' <<<"$captured") == app_language_omawrite ]] || fail "cursor did not land on app_language_omawrite"
+ipc refresh >/dev/null
+wait_for_call_count 35
+wait_until_idle
+survival=$(ipc checkPollSurvival)
+jq -e '.same and .cursorKey == "app_language_omawrite"' <<<"$survival" >/dev/null ||
+  fail "unchanged poll rebuilt rows or lost cursor: $survival"
+
+# A keyring failure during `style on` reports the helper error and keeps style off.
+touch "$test_root/fail-action"
+ipc activateRow style >/dev/null
+wait_for_call_count 36
+wait_until_idle
+jq -e '.actionFailed and .actionMessage == "The keyring could not provide a style key; style learning stays off."' \
+  <<<"$(ipc state)" >/dev/null || fail "failed style on did not report keyring error"
+jq -e 'any(.[]; .key == "style" and (.checked | not))' <<<"$(ipc rows)" >/dev/null ||
+  fail "failed style on flipped the toggle"
+rm -- "$test_root/fail-action"
+
+# Turning style learning on expands per-subject toggles above App languages
+# without offering any terminal, shell or UNO spelling row, and cursor follows.
+ipc activateRow style >/dev/null
+wait_for_call_count 37
+wait_until_idle
+[[ $(tail -n 1 "$action_log") == 'style on' ]] || fail "style on action argv differs"
+survival=$(ipc checkPollSurvival)
+jq -e '(.same | not) and .cursorKey == "app_language_omawrite"' <<<"$survival" >/dev/null ||
+  fail "cursor lost app_language_omawrite when style rows expanded: $survival"
+rows=$(ipc rows)
+jq -e '
+  any(.[]; .key == "style" and .checked)
+  and any(.[]; .key == "style_app_omawrite" and (.checked | not) and .enabled)
+  and any(.[]; .key == "style_site_https://example.com" and (.checked | not) and .enabled)
+  and any(.[]; .key == "style_forget" and .enabled)
+  and all(.[]; .key != "style_app_com.mitchellh.ghostty"
+    and .key != "style_app_foot"
+    and .key != "style_app_org.codeberg.dnkl.foot"
+    and .key != "style_app_bash"
+    and .key != "style_app_libreoffice-writer")
+' <<<"$rows" >/dev/null || fail "style learning rows leaked a terminal or missed targets: $rows"
+
+# Per-subject style toggles mutate settings via compare-and-swap, and Forget
+# requires confirmation before dispatching `style forget`.
+ipc activateRow style_app_omawrite >/dev/null
+wait_for_call_count 39
+wait_until_idle
+[[ $(sed -n '38p' "$call_log") == 'settings replace --if-revision 21 --json -' ]] ||
+  fail "style_app_omawrite did not use compare-and-swap at revision 21"
+jq -e '
+  .settings.revision == 22
+  and .settings.language_overrides == {"brave-origin": "de", "telegram": "fa"}
+  and any(.settings.subjects[]; .identity.app_id == "omawrite"
+    and .permissions.learn == "allow" and .permissions.retention == {mode: "bounded", days: 30})
+' "$state_file" >/dev/null || fail "style_app_omawrite write differs: $(cat -- "$state_file")"
+
+ipc activateRow "style_site_https://example.com" >/dev/null
+wait_for_call_count 41
+wait_until_idle
+jq -e '
+  .settings.revision == 23
+  and any(.settings.subjects[]; .identity.host == "example.com"
+    and .permissions.learn == "allow" and .permissions.retention == {mode: "bounded", days: 30})
+' "$state_file" >/dev/null || fail "style_site write differs: $(cat -- "$state_file")"
+
+previous_actions=$(wc -l <"$action_log")
+ipc activateRow style_forget >/dev/null
+[[ $(jq '.confirming' <<<"$(ipc state)") == true ]] || fail "style_forget skipped confirmation"
+ipc confirm false >/dev/null
+[[ $(wc -l <"$action_log") == "$previous_actions" ]] || fail "canceling style_forget dispatched an action"
+ipc activateRow style_forget >/dev/null
+ipc confirm true >/dev/null
+wait_for_call_count 42
+wait_until_idle
+[[ $(tail -n 1 "$action_log") == 'style forget' ]] || fail "style_forget command differs"
+
+# Turning global style learning off uses compare-and-swap directly while keeping
+# active per-subject grants visible so they can still be revoked.
+ipc activateRow style >/dev/null
+wait_for_call_count 44
+wait_until_idle
+jq -e '.settings.revision == 24 and (.settings | has("style_learning") | not)' "$state_file" >/dev/null ||
+  fail "turning style learning off left style_learning set"
+jq -e 'any(.[]; .key == "style_app_omawrite" and .checked and (.detail | contains("Paused")))' <<<"$(ipc rows)" >/dev/null ||
+  fail "active subject learning grant disappeared while paused"
+
+# Per-app language overrides warn when a chosen writing language is off,
+# preserve terminal Persian on untouched apps, and omit language_overrides once empty.
+ipc chooseRow app_language_omawrite fr >/dev/null
+wait_for_call_count 46
+wait_until_idle
+jq -e '.settings.revision == 25 and .settings.language_overrides == {"brave-origin": "de", "omawrite": "fr", "telegram": "fa"}' \
+  "$state_file" >/dev/null || fail "app_language_omawrite fr write differs"
+jq -e 'any(.[]; .key == "app_language_omawrite" and .value == "fr"
+  and (.detail | contains("⚠ French suggestions are off")))' <<<"$(ipc rows)" >/dev/null ||
+  fail "disabled writing language override did not warn"
+
+ipc chooseRow app_language_brave-origin auto >/dev/null
+wait_for_call_count 48
+wait_until_idle
+ipc chooseRow app_language_omawrite auto >/dev/null
+wait_for_call_count 50
+wait_until_idle
+ipc chooseRow app_language_telegram auto >/dev/null
+wait_for_call_count 52
+wait_until_idle
+jq -e '.settings.revision == 28 and (.settings | has("language_overrides") | not)' "$state_file" >/dev/null ||
+  fail "clearing every language override kept an empty map: $(cat -- "$state_file")"
+
+# A concurrent terminal write that advances the revision makes a stale panel
+# write fail visibly without clobbering the newer settings, then refreshes.
+jq '
+  .broker.settings_revision = 29
+  | .settings.revision = 29
+  | .settings.language_overrides = {"zen": "es"}
+' "$state_file" >"${state_file}.next"
+mv -- "${state_file}.next" "$state_file"
+ipc chooseRow app_language_omawrite de >/dev/null
+wait_for_call_count 54
+wait_until_idle
+state=$(ipc state)
+jq -e '
+  .messageTone == "danger"
+  and .message == "badictl: settings revision conflict (expected 28, current 29)"
+  and .settingsRevision == 29
+  and .canChange
+' <<<"$state" >/dev/null || fail "CAS conflict did not report and recover cleanly: $state"
+jq -e '.settings.revision == 29 and .settings.language_overrides == {"zen": "es"}' "$state_file" >/dev/null ||
+  fail "stale panel write overwrote concurrent settings"
+ipc chooseRow app_language_omawrite de >/dev/null
+wait_for_call_count 56
+wait_until_idle
+jq -e '.settings.revision == 30 and .settings.language_overrides == {"omawrite": "de", "zen": "es"}' "$state_file" >/dev/null ||
+  fail "retry on refreshed revision lost concurrent settings"
+[[ $(jq -r '.message' <<<"$(ipc state)") == 'Omawrite: German' ]] || fail "retry message differs"
+rm -- "$state_file"
+ipc refresh >/dev/null
+wait_for_call_count 57
 wait_until_idle
 touch "$test_root/hold-action"
 previous_actions=$(wc -l <"$action_log")

@@ -46,6 +46,10 @@ if [[ ${1:-} == overview && ${2:-} == --json ]]; then
   if [[ -n ${BADI_FAKE_OVERVIEW:-} && -f $BADI_FAKE_OVERVIEW ]]; then
     overview_extra=$(cat -- "$BADI_FAKE_OVERVIEW")
   fi
+  if [[ -n ${BADI_FAKE_STATE_FILE:-} && -f $BADI_FAKE_STATE_FILE ]]; then
+    jq --argjson overview_extra "$overview_extra" '. + $overview_extra' "$BADI_FAKE_STATE_FILE"
+    exit 0
+  fi
 
   jq -n --argjson all_web_origins "$all_web_origins" --argjson extra "$extra" \
     --argjson overview_extra "$overview_extra" '
@@ -118,6 +122,21 @@ if [[ ${1:-} == settings && ${2:-} == replace ]]; then
     and any(.subjects[];
       .identity == {kind: "linux_app", adapter: "fcitx", app_id: "omawrite"})
   ' <<<"$replacement" >/dev/null
+  if [[ -n ${BADI_FAKE_STATE_FILE:-} && -f $BADI_FAKE_STATE_FILE ]]; then
+    current_rev=$(jq -r '.broker.settings_revision' "$BADI_FAKE_STATE_FILE")
+    if [[ $4 != "$current_rev" ]]; then
+      printf 'badictl: settings revision conflict (expected %s, current %s)\n' "$4" "$current_rev" >&2
+      exit 1
+    fi
+    next_rev=$((current_rev + 1))
+    jq -e --argjson rev "$next_rev" '.revision == $rev' <<<"$replacement" >/dev/null
+    jq --argjson rev "$next_rev" --argjson replacement "$replacement" '
+      .broker.settings_revision = $rev
+      | .broker.paused = ($replacement.paused == true)
+      | .settings = $replacement
+    ' "$BADI_FAKE_STATE_FILE" >"${BADI_FAKE_STATE_FILE}.next"
+    mv -- "${BADI_FAKE_STATE_FILE}.next" "$BADI_FAKE_STATE_FILE"
+  fi
   exit 0
 fi
 

@@ -8,6 +8,12 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Added Omarchy panel rows for per-app European writing-language overrides and
+  opt-in style learning (keeping terminals and shells fail-closed and using
+  compare-and-swap settings writes), and extracted the panel's settings
+  validation, policy mutations and single status ladder into a tested
+  `SettingsModel.js`.
+
 - Typing in a field Badi can edit, or an explicit request from the input
   method, Obsidian, Neovim, Bash or Writer, starts the local model when it is
   not already running. Logging in does not unless `badi autostart on` is set,

@@ -15,7 +15,7 @@ scripts=(
   "$tests_dir/fake-bin/badi-desktop"
   "$tests_dir/fake-bin/term-ignoring-group"
 )
-# key-model.test.mjs and stats-model.test.mjs are Node, run below when Node is present.
+# key-model.test.mjs, settings-model.test.mjs and stats-model.test.mjs are Node, run below when Node is present.
 
 for command_name in jq ps setsid shellcheck; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -29,7 +29,7 @@ bash "$tests_dir/check-source.sh"
 bash "$tests_dir/check-term-ignoring.sh"
 bash "$tests_dir/check-process-group.sh"
 if command -v node >/dev/null 2>&1; then
-  node --test "$tests_dir/key-model.test.mjs" "$tests_dir/stats-model.test.mjs"
+  node --test "$tests_dir/key-model.test.mjs" "$tests_dir/settings-model.test.mjs" "$tests_dir/stats-model.test.mjs"
 else
   echo "Badi Omarchy keyboard and statistics models not run (Node unavailable; the repository job runs them)"
 fi

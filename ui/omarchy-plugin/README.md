@@ -9,6 +9,7 @@ The Omarchy plugin `io.github.ahuray.badi`:
 | `DesktopPanel.qml` | State and actions without visuals: the client, helper processes, every settings change and the typed rows |
 | `SettingsView.qml` | The popout's content |
 | `KeyModel.js` | The keyboard model (j/k, h/l, Enter, x, search, the cursor following its row) without QML, tested by `tests/key-model.test.mjs` |
+| `SettingsModel.js` | Settings validation, the single status ladder, app/site rule mutations, style-learning targets and per-app language overrides without QML, tested by `tests/settings-model.test.mjs` |
 | `StatsModel.js` | The history's numbers (the week's bars, the leading apps) without QML, tested by `tests/stats-model.test.mjs` |
 | `BadiClient.qml` | The shared `badictl` client |
 
@@ -44,8 +45,9 @@ Every open starts compact, and search always covers every setting. From the
 top:
 
 - **Hero:** the mark, the model as a pill, Badi's mode as a glyph and word
-  (`⏵⏵ Suggesting`, `⏸ Paused`, `⏸ Held · screen shared`, `◌ Loading`,
-  `○ Model offline`, `◇ No app allowed`) and a switch that pauses or
+  (`⏵⏵ Suggesting`, `⏸ Paused`, `⏸ Held · screen shared`, `! Settings need attention`, `◌ Loading`,
+  `○ Model offline`, `◇ No app allowed`, from one status ladder in
+  `SettingsModel.js`) and a switch that pauses or
   resumes. While the screen-share hold is on (the session helper's report in
   `badictl overview`, [runbook](../../adapters/session/README.md#screen-sharing)),
   the status reads "Held while the screen is shared"; the switch stays on,
@@ -80,10 +82,18 @@ top:
   Turn on and Not now; afterwards a switch, and while it is on a row per
   allowed app and Forget learned words, each running `badi context`, which
   also hands the keyring key over; Forget asks first in Omarchy's own
-  confirm dialog, with Cancel selected), Writing (suggestion length: Short or Normal, as `badi length` sets it; mid-sentence, Escape quiet, battery; while sharing the screen: Hold or Suggest, as `badi screen-share` sets it), Suggestions (each
+  confirm dialog, with Cancel selected), Style learning (a switch that runs
+  `badi style on` when turning on so the keyring key is ensured and delivered
+  and writes compare-and-swap directly when turning off; while on or while any
+  subject learns, a compare-and-swap switch per allowed non-terminal app and
+  listed website — terminals and shells never appear or learn — plus Forget
+  style samples through the same confirm dialog), Writing (suggestion length: Short or Normal, as `badi length` sets it; mid-sentence, Escape quiet, battery; while sharing the screen: Hold or Suggest, as `badi screen-share` sets it), Suggestions (each
   European language: Off, Auto (heal as the running model's review decided), Heal or
   Keep space, as `badi suggest` sets them; French, Spanish and Portuguese are
-  marked experimental), Spelling (each language and its dictionary, naming the package when one is
+  marked experimental), App languages (per-app writing-language overrides for
+  browsers when websites are enabled, allowed writing apps and any overridden
+  app: Auto or each European writing language, warning when that language's
+  suggestions are off), Spelling (each language and its dictionary, naming the package when one is
   missing), Apps (the list mode and each supported app), Websites (the list
   mode, each rule, an add field: Enter allows, Shift+Enter blocks),
   Statistics (Forget usage statistics, which runs `badi stats forget` after
@@ -112,8 +122,9 @@ is open, so every `badi` settings write, snooze and snooze end calls its
 `refresh()` (`omarchy-shell -q badi-writing refresh`, quiet where Omarchy is
 not running): a pause from a shortcut or a terminal dims the mark at once. The terminal equivalents are in
 the [README](../../README.md#choose-where-badi-writes).
-Per-app language overrides and style learning are currently set from the
-terminal. Panel writes validate and preserve them.
+Persian writing (`fa`) and custom style-retention day counts (`1`–`90` days;
+the panel enables `30` days and preserves custom counts) stay terminal-only,
+and panel writes validate and preserve them.
 
 ## Install and update
 
@@ -230,7 +241,7 @@ bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
 ```
 
 - **`omarchy:check`** runs ShellCheck, the JSON and source contracts, the
-  keyboard and statistics models under Node, and process-group escalation
+  keyboard, settings and statistics models under Node, and process-group escalation
   against a fake `badictl` that ignores TERM. A stopped-parent fixture proves
   that a terminated zombie differs from a live child: container PID 1 may
   postpone reaping after group teardown. When `qs` is present it also
@@ -252,7 +263,12 @@ bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
   confirmation, and cover unavailable statistics and older overviews.
   Revision setup checks missing, present, damaged, unavailable and no-fit
   states, exact install arguments, failure and retry, duplicate activation
-  denial and cleanup during a held action. Controller tests cover same-size
+  denial and cleanup during a held action. Stateful compare-and-swap checks
+  cover style learning (`style on`, keyring failure, per-app and per-site
+  toggles, terminal exclusion, `style forget` confirmation), per-app language
+  overrides (European choices, disabled-language warnings, terminal Persian
+  preservation and reset), poll survival (`KeyModel.sameRows` and cursor
+  tracking) and revision-conflict refusal and recovery. Controller tests cover same-size
   corruption, concurrent private staging, symlink refusal, failed repairs,
   SIGTERM cleanup and metadata-only polling.
 - **`tests/check-host.sh`** is CI's strict lane. It runs against an exact
