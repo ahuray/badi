@@ -15,7 +15,8 @@ if [[ ${1:-} == service && ${2:-} == status ]]; then
 fi
 if [[ ${1:-} == model && ${2:-} == use && $# -ge 3 && $# -le 4 ]] ||
     [[ ${1:-} == revise && ${2:-} == install && $# == 2 ]] ||
-    [[ ${1:-} == stats && ${2:-} == forget && $# == 2 ]]; then
+    [[ ${1:-} == stats && ${2:-} == forget && $# == 2 ]] ||
+    [[ ${1:-} == style && ( ${2:-} == on || ${2:-} == forget ) && $# == 2 ]]; then
   printf '%s\n' "$*" >>"${BADI_FAKE_ACTION_LOG:?}"
   if [[ -n ${BADI_FAKE_HOLD_ACTION:-} && -f $BADI_FAKE_HOLD_ACTION ]]; then
     printf '%s\n' "$$" >>"${BADI_FAKE_PID_LOG:?}"
@@ -27,6 +28,10 @@ if [[ ${1:-} == model && ${2:-} == use && $# -ge 3 && $# -le 4 ]] ||
       printf 'Revision model download failed; the existing file was kept\n' >&2
       exit 1
     fi
+    if [[ $1 == style && $2 == on ]]; then
+      printf 'The keyring could not provide a style key; style learning stays off.\n' >&2
+      exit 1
+    fi
     printf 'Model download failed; the current model is unchanged\n' >&2
     exit 1
   fi
@@ -35,6 +40,15 @@ if [[ ${1:-} == model && ${2:-} == use && $# -ge 3 && $# -le 4 ]] ||
     jq '.desktop.revision.file_state = "present" | .desktop.revision.installed = true' \
       "${BADI_FAKE_OVERVIEW:?}" >"${BADI_FAKE_OVERVIEW}.next"
     mv -- "${BADI_FAKE_OVERVIEW}.next" "$BADI_FAKE_OVERVIEW"
+  fi
+  if [[ $1 == style && $2 == on && -n ${BADI_FAKE_STATE_FILE:-} && -f $BADI_FAKE_STATE_FILE ]]; then
+    jq '
+      (.broker.settings_revision + 1) as $rev
+      | .broker.settings_revision = $rev
+      | .settings.revision = $rev
+      | .settings.style_learning = true
+    ' "$BADI_FAKE_STATE_FILE" >"${BADI_FAKE_STATE_FILE}.next"
+    mv -- "${BADI_FAKE_STATE_FILE}.next" "$BADI_FAKE_STATE_FILE"
   fi
   exit 0
 fi

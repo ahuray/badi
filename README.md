@@ -297,7 +297,8 @@ other setting, the acceptance meter and the apps that saved the most
 
 A language override takes precedence over detection and the adapter's hint
 without granting access to an app or website. `badi language APP reset`
-restores automatic selection. For longer text, Badi conservatively detects
+restores automatic selection, and the panel's **App languages** rows offer the
+same European choices and **Auto**. For longer text, Badi conservatively detects
 English, German, Persian, French, Spanish or Portuguese from the authorized
 field; short or uncertain text keeps the app or keyboard hint. Badi suggests
 only in the languages you choose (`badi languages`, the panel, or one at a
@@ -373,7 +374,10 @@ badi style status | export | forget
 
 When on, each accepted suggestion in a learning app or site keeps the sentence
 you wrote before it, sealed with a key in your desktop keyring; sentences with
-digits, email addresses or links are skipped. Desktop suggestions do not use
+digits, email addresses or links are skipped. The panel's **Style learning**
+section offers the global switch, per-app and per-site switches (30-day
+retention; custom 1–90 day counts stay in `badi style`) and **Forget style
+samples**. Desktop suggestions do not use
 the samples yet: the Lab offers [three style strengths](evaluation/writing/README.md#style-comparison)
 for comparing explicitly supplied examples against style off.
 `badi style forget` deletes them and the key. Terminals and shells never learn

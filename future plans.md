@@ -681,8 +681,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Terminals other than Ghostty and foot (kitty, Alacritty) on the typed-line
       path ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)),
       each after a live trial of its app id and `commitString`.
-- [ ] Panel rows for per-app language overrides and style learning, which
-      are terminal-only today.
 - [ ] Later: a standard tray (other desktops are step 6) and personal snippets.
       Emoji stays with Fcitx: QuickPhrase and the Emoji module, not a Badi
       colon shortcode.
@@ -698,11 +696,8 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Structure left by the review, each only when its file is next touched:
       the Fcitx `Binding` (about 50 fields, one expiry timer for notices,
       suggestions and revisions) as small reset-able parts and one retire
-      function for authority change and disconnect; a shared stdio and
-      idle-exit module for the Bash and Neovim bridges; and a tested
-      `SettingsModel.js` with one status ladder for the panel (new files
-      need the installers' and the PKGBUILD's lists, which a test now
-      compares).
+      function for authority change and disconnect; and a shared stdio and
+      idle-exit module for the Bash and Neovim bridges.
 
 - [ ] Broker structure left by the review: move the remaining inline
       tests into `<module>/tests.rs` when those files are next touched.

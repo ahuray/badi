@@ -11,6 +11,8 @@ The **b** mark on the Omarchy bar opens Badi's settings and shows whether sugges
 - `panel-search` filters rows from `/`.
 - `panel-length` sets Short or Normal on Suggestion length.
 - `panel-snooze` shows a Snoozed row while an app or site is quiet, and Enter ends every snooze.
+- `panel-app-languages` sets Auto or a European writing language per enabled browser or app under App languages, warns when that language's suggestions are off, and keeps Persian terminal-only.
+- `panel-style-learning` turns opt-in style learning on or off, toggles allowed non-terminal apps and listed websites via compare-and-swap (never offering terminals or shells), and asks Omarchy to confirm Forget style samples.
 - `panel-stats` shows seven-day bars and today's and the week's word counts in the History header. The leading-apps line and Forget usage statistics appear only after All settings. Forget asks Omarchy to confirm.
 
 ## How to get to it (user POV)

@@ -4,8 +4,8 @@ set -euo pipefail
 
 artifact_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 qml_files=("$artifact_dir/BadiClient.qml" "$artifact_dir/BarWidget.qml" "$artifact_dir/BadiMark.qml" "$artifact_dir/DesktopPanel.qml" "$artifact_dir/SettingsView.qml")
-# Every installed source, QML and its JavaScript library, for the text gates.
-source_files=("${qml_files[@]}" "$artifact_dir/KeyModel.js" "$artifact_dir/StatsModel.js")
+# Every installed source, QML and its JavaScript libraries, for the text gates.
+source_files=("${qml_files[@]}" "$artifact_dir/KeyModel.js" "$artifact_dir/SettingsModel.js" "$artifact_dir/StatsModel.js")
 compatibility="$artifact_dir/compatibility.json"
 omarchy_root=${BADI_OMARCHY_ROOT:-/usr/share/omarchy}
 require_host_checks=${BADI_OMARCHY_REQUIRE_HOST_CHECKS:-0}
@@ -91,14 +91,17 @@ grep -F 'if (disposed || !active) return' "$artifact_dir/BadiClient.qml" >/dev/n
 grep -F 'Component.onDestruction: root.dispose()' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'client.activate()' "$artifact_dir/DesktopPanel.qml" >/dev/null
 grep -F 'client.dispose()' "$artifact_dir/DesktopPanel.qml" >/dev/null
-grep -F 'value.schema !== "badi.settings.v2"' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'value.schema !== "badi.settings.v2"' "$artifact_dir/SettingsModel.js" >/dev/null
 grep -F 'parsed.schema !== "badi.overview.v2"' "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'value.kind === "linux_app"' "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'value.adapter === "fcitx"' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'SettingsModel.isSettingsDocument(' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'SettingsModel.status(' "$artifact_dir/DesktopPanel.qml" >/dev/null
+grep -F 'readonly property var mode: controller.mode' "$artifact_dir/SettingsView.qml" >/dev/null
+grep -F 'value.kind === "linux_app"' "$artifact_dir/SettingsModel.js" >/dev/null
+grep -F 'value.adapter === "fcitx"' "$artifact_dir/SettingsModel.js" >/dev/null
 # A neovim rule must not make the panel reject the whole settings document.
-grep -F 'value.adapter === "neovim"' "$artifact_dir/BadiClient.qml" >/dev/null
-grep -F 'appId === "nvim" ? "neovim"' "$artifact_dir/DesktopPanel.qml" >/dev/null
-grep -F 'return isBrowserIdentity(value) || isLinuxIdentity(value)' "$artifact_dir/BadiClient.qml" >/dev/null
+grep -F 'value.adapter === "neovim"' "$artifact_dir/SettingsModel.js" >/dev/null
+grep -F 'appId === "nvim" ? "neovim"' "$artifact_dir/SettingsModel.js" >/dev/null
+grep -F 'return isBrowserIdentity(value) || isLinuxIdentity(value)' "$artifact_dir/SettingsModel.js" >/dev/null
 
 validator="$omarchy_root/bin/omarchy-plugin-validate"
 if [[ -x $validator ]]; then
