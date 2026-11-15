@@ -41,7 +41,10 @@ The page has two tabs that keep each other's drafts:
    protocol before inference, review every outcome, then **assess**. A seen
    development run cannot become confirmation.
 6. **Measure runtime behavior** for 30 seconds, five minutes or the 30-minute
-   sustained gate. Selecting a model never means it is recommended.
+   sustained gate. Selecting a model never means it is recommended. Only a
+   streamed mode such as `healed` can be measured: `production_boundary`, the
+   style arms and `vocabulary` answer through the broker provider without
+   stream counters, so diagnostics refuse them before any load.
 
 **Discovery** sends only your search terms and public metadata requests to the
 Hub: no credential, hosted inference or repository code, and never drafts,
@@ -544,6 +547,39 @@ instruction setting. Evidence, full prompts, frozen protocol, every reviewed
 addition and cleanup verification: `output/writing/2026-11-12-qwen06-instructions/`.
 A stronger instruction candidate needs separate development and held-out
 review before promotion.
+
+Qwen3.5-0.8B (`unsloth/Qwen3.5-0.8B-GGUF` at `6ab4614`, Q4_K_M, 532,517,120
+bytes, SHA-256 `bd258782…`, Apache-2.0) passed every boundary before
+inference on 2026-11-13: discovery download and hash check, the same
+hybrid-state result from the downloaded GGUF's own metadata as from the
+upstream estimate, a formatter probe showing
+`enable_thinking=false` closing the default open thinking block (a top-level
+flag is ignored), and a 30-second `healed` diagnostic. That diagnostic
+measured a 933 ms cold start, 0.98 GB peak runtime RSS (estimate 1.40 GB),
+English p95 337 ms, prompt reuse, cancellation recovery and verified cleanup.
+It then ran the same eight probes and settings as above, followed by a
+same-session Qwen3 0.6B rerun as the reference: AC, performance profile,
+four threads, eight matched pairs per arm, zero unpaired, and all 64 owned
+runtimes challenged and reaped.
+
+| Model / arm | Control passes / 8 | Instruction passes / 8 | Matched gains / losses | Instruction passes within 550 ms / 8 |
+| --- | --- | --- | --- | --- |
+| Qwen3.5 0.8B / production | 1 | 1 | 0 / 0 | 1 |
+| Qwen3.5 0.8B / native | 1 | 3 | 2 / 0 | 0 |
+| Qwen3 0.6B / production | 1 | 1 | 0 / 0 | 1 |
+| Qwen3 0.6B / native | 1 | 4 | 3 / 0 | 1 |
+
+On full review Qwen3.5 had no useful addition in either arm (production: 4
+unhelpful, 12 abstentions; native: 5 unhelpful, 11 late) and no harmful one.
+Even without the latency bar, only its French and Spanish instructed
+additions were coherent and rule-compatible, and neither carries the
+required words. It copied prompt wording into the draft (`assistant
+message.`, `dich, informell zu sprechen.`). Qwen3 0.6B again had one useful
+instructed addition (`folder.`). The preregistered development gate (at
+least 5 of 8 timely, useful, compliant instructed additions, no harm) failed,
+so no held-out set was built and no instruction setting exists. Evidence,
+frozen plan and protocol, scripts, every reviewed addition and cleanup:
+`output/writing/2026-11-13-qwen35-trial/`.
 
 ### Window context
 

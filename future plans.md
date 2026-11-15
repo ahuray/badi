@@ -228,13 +228,20 @@ publish need the user's go-ahead first; the rest can start at once.
      Qwen3 0.6B screen corrected its native non-thinking prefix and reached
      4/8 lexical passes, but no instructed addition met timely full-usefulness
      criteria ([evidence](evaluation/writing/README.md#instruction-adherence)).
-     The Lab now estimates Qwen3.5's hybrid memory under the pinned CPU
-     runtime, with independent downloaded-metadata checks. Its actual
-     artifact download, runtime load and instruction trial remain unverified;
-     work stopped at the user's request before that trial.
-     Remaining work: screen a stronger instruction candidate, then use a
-     separate held-out set with full-addition review; repeat for a 1c
-     candidate when available.
+     The post-trained Qwen3.5-0.8B then passed every Lab boundary
+     (pinned download and hash, GGUF state from its own metadata, native
+     non-thinking template, load, 0.98 GB peak against the 1.40 GB estimate,
+     cancellation and cleanup) but failed the preregistered development
+     gate on 2026-11-13. It had 3/8 lexical passes, none within 550 ms, no
+     useful addition, and it copied prompt wording into drafts; a
+     same-session Qwen3 0.6B rerun reached 4/8
+     ([evidence](evaluation/writing/README.md#instruction-adherence-tested-with)).
+     Neither screened sub-1B instruct model qualifies; do not rescreen
+     them on this suite without a new prompt or decoding idea.
+     Remaining work: screen a stronger instruction candidate (Qwen3.5-2B
+     thinks by default and its base model missed 550 ms in 234 of 325
+     requests here, so a 1c machine is the likelier route), then use a
+     separate held-out set with full-addition review.
      (ii) Only for a model that
      follows instructions without a useful/harmful
      regression, add bounded instruction fields to settings v2 (global,

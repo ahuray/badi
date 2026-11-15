@@ -156,7 +156,10 @@ uses float32 for both, multiplied by parallel sequences; the estimate adds
 0.8B layout (six attention and eighteen recurrent layers), 2048 tokens, one
 sequence and float16 KV, the state estimate is 45,514,752 bytes including
 alignment allowances. This neither measures runtime allocation nor qualifies
-the model's writing quality.
+the model's writing quality. For the downloaded Q4_K_M artifact (2026-11-13)
+the GGUF's own metadata gave the same layout. The estimate charged 1.40 GB,
+and a 30-second Lab diagnostic measured 0.98 GB peak runtime RSS
+([Lab](../../evaluation/writing/README.md#instruction-adherence-tested-with)).
 
 ## Stages and gates
 

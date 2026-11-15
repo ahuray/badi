@@ -17,6 +17,12 @@ const RUNTIME_KEYS = ['launch_contract_id', 'binary_sha256', 'runtime_bundle_man
   'gpu_layers', 'batch_size', 'ubatch_size', 'memory_map', 'full_swa_cache'];
 const hash = value => createHash('sha256').update(JSON.stringify(Object.fromEntries(
   RUNTIME_KEYS.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])))).digest('hex');
+// These modes answer through the broker's provider (the worker's baseline
+// path), which reports no stream terminal, cache or first-token counters, so a
+// diagnostic of them could never show the model loaded and exercised.
+const UNSTREAMED_MODES = new Set(['production_boundary', 'vocabulary', 'style_gentle', 'style_balanced', 'style_strong']);
+export const diagnosableMode = mode => typeof mode === 'string' && !UNSTREAMED_MODES.has(mode);
+export const UNSTREAMED_DIAGNOSTICS_MESSAGE = 'Measure runtime behavior with a streamed mode such as healed: production-path modes report no stream counters.';
 const percentile = (values, p) => values.length ? [...values].sort((a, b) => a - b)[Math.ceil(values.length * p) - 1] : null;
 const realClock = {
   now: () => performance.now(),
@@ -65,6 +71,7 @@ export async function runDiagnostics({ worker, cases, config, makeRequest, signa
     || typeof makeRequest !== 'function' || !config || !integer(config.budget_ms) || config.budget_ms < 1 || config.budget_ms > 5000) {
     throw new Error('Use 1–512 explicit cases and a diagnostic duration of 30, 300 or 1800 seconds.');
   }
+  if (!diagnosableMode(config.mode)) throw new Error(UNSTREAMED_DIAGNOSTICS_MESSAGE);
   config = structuredClone(config);
   const inputs = cases.map(validateCase);
   if (new Set(inputs.map(row => row.id)).size !== inputs.length

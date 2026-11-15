@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createEvidence, reviewTargets, registerConfirmation, evidenceDigest, EvidenceStore } from './qualification-evidence.mjs';
-import { runDiagnostics } from './qualification-diagnostics.mjs';
+import { diagnosableMode, runDiagnostics, UNSTREAMED_DIAGNOSTICS_MESSAGE } from './qualification-diagnostics.mjs';
 import { fromLabPage, readJSON, sendJSON, setSecurityHeaders } from './http.mjs';
 
 const PREFIX = '/api/qualification/';
@@ -206,6 +206,10 @@ export function createQualificationHandler({ origin, capability, qualification, 
             extra.loaded_evidence = true;
           } else if (operation === 'diagnose') {
             if (!fresh.load_allowed) throw failure('Current resources do not permit diagnostics.', 422);
+            // Refuse before superseding earlier measurements of this run.
+            if (!diagnosableMode(run.configs.find(value => value.id === input.config_id)?.mode)) {
+              throw failure(UNSTREAMED_DIAGNOSTICS_MESSAGE, 422);
+            }
             // A new lifecycle trial supersedes prior passing runtime measurements.
             // Keep the full-addition reviews so quality can be aggregated again.
             run.diagnostics.clear(); run.evidence.clear(); run.saved.clear(); run.diagnosticReports.clear();
