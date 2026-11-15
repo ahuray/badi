@@ -38,8 +38,8 @@ hashbrown 0.17.1  MIT OR Apache-2.0  https://github.com/rust-lang/hashbrown
 hybrid-array 0.4.14  MIT OR Apache-2.0  https://github.com/RustCrypto/hybrid-array
 inout 0.2.5  MIT OR Apache-2.0  https://github.com/RustCrypto/utils
 itoa 1.0.18  MIT OR Apache-2.0  https://github.com/dtolnay/itoa
-jiff 0.2.38  Unlicense OR MIT  https://github.com/BurntSushi/jiff
-jiff-core 0.1.1  Unlicense OR MIT  https://github.com/BurntSushi/jiff
+jiff 0.2.42  Unlicense OR MIT  https://github.com/BurntSushi/jiff
+jiff-core 0.1.5  Unlicense OR MIT  https://github.com/BurntSushi/jiff
 libc 0.2.189  MIT OR Apache-2.0  https://github.com/rust-lang/libc
 linux-raw-sys 0.12.1  Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  https://github.com/sunfishcode/linux-raw-sys
 memchr 2.8.3  Unlicense OR MIT  https://github.com/BurntSushi/memchr
@@ -59,7 +59,7 @@ thiserror 2.0.21  MIT OR Apache-2.0  https://github.com/dtolnay/thiserror
 tokio 1.54.1  MIT  https://github.com/tokio-rs/tokio
 tokio-util 0.7.20  MIT  https://github.com/tokio-rs/tokio
 typenum 1.20.1  MIT OR Apache-2.0  https://github.com/paholg/typenum
-unicode-script 0.5.8  MIT OR Apache-2.0  https://github.com/unicode-rs/unicode-script
+unicode-script 0.5.9  MIT OR Apache-2.0  https://github.com/unicode-rs/unicode-script
 unicode-segmentation 1.13.3  MIT OR Apache-2.0  https://github.com/unicode-rs/unicode-segmentation
 universal-hash 0.6.1  MIT OR Apache-2.0  https://github.com/RustCrypto/traits
 uuid 1.26.1  Apache-2.0 OR MIT  https://github.com/uuid-rs/uuid
@@ -1420,13 +1420,13 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-==> jiff 0.2.38 (COPYING), jiff-core 0.1.1 (COPYING), memchr 2.8.3 (COPYING)
+==> jiff 0.2.42 (COPYING), jiff-core 0.1.5 (COPYING), memchr 2.8.3 (COPYING)
 
 This project is dual-licensed under the Unlicense and MIT licenses.
 
 You may use this code under the terms of either license.
 
-==> jiff 0.2.38 (LICENSE-MIT), jiff-core 0.1.1 (LICENSE-MIT), memchr 2.8.3 (LICENSE-MIT)
+==> jiff 0.2.42 (LICENSE-MIT), jiff-core 0.1.5 (LICENSE-MIT), memchr 2.8.3 (LICENSE-MIT)
 
 The MIT License (MIT)
 
@@ -1450,7 +1450,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-==> jiff 0.2.38 (UNLICENSE), jiff-core 0.1.1 (UNLICENSE), memchr 2.8.3 (UNLICENSE)
+==> jiff 0.2.42 (UNLICENSE), jiff-core 0.1.5 (UNLICENSE), memchr 2.8.3 (UNLICENSE)
 
 This is free and unencumbered software released into the public domain.
 
@@ -2685,7 +2685,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-==> unicode-script 0.5.8 (LICENSE-APACHE)
+==> unicode-script 0.5.9 (LICENSE-APACHE)
 
                               Apache License
                         Version 2.0, January 2004
@@ -2889,7 +2889,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-==> unicode-script 0.5.8 (LICENSE-MIT)
+==> unicode-script 0.5.9 (LICENSE-MIT)
 
 MIT License
 
