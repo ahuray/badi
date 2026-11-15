@@ -5,7 +5,7 @@
 //   vocabulary   the Lab calls badi_broker::vocabulary::complete
 //   notices      THIRD-PARTY-NOTICES.txt lists the Cargo.lock versions
 //   feature-map  verify-badi quotes panel copy the QML actually shows
-//   arch         CI installs Arch packages through scripts/ci-arch-snapshot.sh
+//   arch         CI installs Arch packages through BADI_ARCH_SNAPSHOT in ci.yml
 //
 //   node scripts/check-agent-rules.mjs [--only changelog|documents|vocabulary|notices|feature-map|arch] [--rev SHA]
 import { spawnSync } from "node:child_process";
@@ -16,7 +16,6 @@ import process from "node:process";
 
 const repository = path.resolve(import.meta.dirname, "..");
 const CHECKS = ["changelog", "documents", "vocabulary", "notices", "feature-map", "arch"];
-const ARCH_SCRIPT = "scripts/ci-arch-snapshot.sh";
 const ARCH_KEY = "  BADI_ARCH_SNAPSHOT: |";
 const FEATURE_MAP = ".cursor/skills/verify-badi/";
 const NOTICES_FIX = "Run python3 scripts/third-party-notices.py and commit THIRD-PARTY-NOTICES.txt.";
@@ -40,14 +39,19 @@ export function isProductPath(file) {
   return /^scripts\/(?:badi-desktop|badi_install|install-[^/]+)\.py$/u.test(file);
 }
 
+// docs/ holds architecture notes, ADRs and the images they cite. Anything
+// else there has been a parallel report: docs/reports/, docs/plan/,
+// docs/delivery/ and docs/ttr/ (PR 180) all were.
+const DOCS_HOMES = ["docs/architecture/", "docs/decisions/"];
+
 export function parallelDocuments(files) {
   return files.filter((file) => {
     const base = file.split("/").pop().toLowerCase();
+    const evidence = file.startsWith("docs/evidence/") && !base.endsWith(".md");
+    const strayDoc = file.startsWith("docs/") && !evidence
+      && !DOCS_HOMES.some((home) => file.startsWith(home));
     return file === "next steps.md"
-      || file === "docs/parity-status.md"
-      || file.startsWith("docs/reports/")
-      || file.startsWith("docs/plan/")
-      || file.startsWith("docs/delivery/")
+      || strayDoc
       || base.includes("handoff");
   });
 }
@@ -362,12 +366,8 @@ function noticesAt(rev) {
   return noticesProblems(lock, notices);
 }
 
-function normalizeScript(text) {
-  return `${text.replace(/\s+$/u, "")}\n`;
-}
-
-// The snapshot helper is inlined into the workflow because the Arch image
-// has no git until pacman has run. The block is the lines indented under
+// The snapshot script is a workflow env value because the Arch image has no
+// git until pacman has run. The block is the lines indented under
 // BADI_ARCH_SNAPSHOT, which is the script with a four-space indent.
 export function embeddedSnapshot(ciText) {
   const lines = ciText.split("\n");
@@ -401,41 +401,35 @@ export function barePacmanLines(ciText) {
   const found = [];
   lines.forEach((line, index) => {
     if (start !== -1 && index > start && index < end) return;
+    if (line.trimStart().startsWith("#")) return;
     if (/pacman\s+-S/u.test(line)) found.push(`${index + 1}: ${line.trim()}`);
   });
   return found;
 }
 
-export function archSnapshotProblems(ciText, scriptText) {
+const ARCH_FIX = 'Run bash -c "$BADI_ARCH_SNAPSHOT" arch-snapshot YYYY/MM/DD PACKAGE... instead; it sets DisableDownloadTimeout and retries.';
+
+export function archSnapshotProblems(ciText) {
   const problems = [];
   const bare = barePacmanLines(ciText);
   if (bare.length > 0) {
     problems.push(
-      `.github/workflows/ci.yml installs packages with pacman directly:\n  ${bare.join("\n  ")}\narchive.archlinux.org stalls these jobs ("Operation too slow"; runs 38242538936, 38684819408, 39558825776). Call ${ARCH_SCRIPT}. Before checkout, pipe BADI_ARCH_SNAPSHOT, which must be a copy of that script. It sets DisableDownloadTimeout and retries.`,
+      `.github/workflows/ci.yml installs packages with pacman directly:\n  ${bare.join("\n  ")}\narchive.archlinux.org stalls these jobs ("Operation too slow"; runs 38242538936, 38684819408, 39558825776). ${ARCH_FIX}`,
     );
   }
-  if (scriptText === null) return problems;
   const embedded = embeddedSnapshot(ciText);
   if (embedded === null) {
-    problems.push(
-      `.github/workflows/ci.yml has no BADI_ARCH_SNAPSHOT block. Paste ${ARCH_SCRIPT} there. The Arch image has no git until that script has run.`,
-    );
-  } else if (embedded !== normalizeScript(scriptText)) {
-    problems.push(
-      `BADI_ARCH_SNAPSHOT in .github/workflows/ci.yml is not ${ARCH_SCRIPT}. Paste the script into that block. The job container cannot read the file until pacman has installed git.`,
-    );
-  }
-  if (!scriptText.includes("DisableDownloadTimeout") || !scriptText.includes("pacman_retry")) {
-    problems.push(`${ARCH_SCRIPT} must set DisableDownloadTimeout and retry pacman.`);
+    problems.push(".github/workflows/ci.yml has no BADI_ARCH_SNAPSHOT block in its top-level env. Restore it; every Arch job installs through it.");
+  } else if (!embedded.includes("DisableDownloadTimeout") || !embedded.includes("pacman_retry")) {
+    problems.push("BADI_ARCH_SNAPSHOT in .github/workflows/ci.yml must set DisableDownloadTimeout and retry pacman.");
   }
   return problems;
 }
 
 function archAt(rev) {
   const ci = textAt(rev, ".github/workflows/ci.yml");
-  const script = textAt(rev, ARCH_SCRIPT);
   if (ci === null) return [".github/workflows/ci.yml is missing."];
-  return archSnapshotProblems(ci, script);
+  return archSnapshotProblems(ci);
 }
 
 function selected() {
@@ -463,7 +457,7 @@ function run() {
     const found = parallelDocuments(treeFiles(rev));
     if (found.length > 0) {
       problems.push(
-        `Parallel planning or report document:\n  ${found.join("\n  ")}\nfuture plans.md is the only backlog. Put the decision there, the contract in the runbook, and the trial in the pull request, then delete the file.`,
+        `Parallel planning or report document:\n  ${found.join("\n  ")}\nfuture plans.md is the only backlog. Put the decision there, the contract in the runbook, and the trial in the pull request, then delete the file. docs/ holds only docs/architecture/, docs/decisions/ and the images in docs/evidence/.`,
       );
     }
   }

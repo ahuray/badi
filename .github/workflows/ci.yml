@@ -15,26 +15,27 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # The Arch image has no git until pacman runs, so the first install cannot
-  # read scripts/ci-arch-snapshot.sh. This block is that file. The agent-rules
-  # check fails when the two differ, and when a step installs packages itself.
+  # Every Arch job installs packages with this script, before and after
+  # checkout: the image has no git until pacman runs, so the script lives here
+  # rather than in scripts/. Run it as
+  #   bash -c "$BADI_ARCH_SNAPSHOT" arch-snapshot YYYY/MM/DD [package ...]
+  # The agent-rules check rejects any other pacman -S in this file and runs
+  # this block against a fake pacman.
   BADI_ARCH_SNAPSHOT: |
-    #!/usr/bin/env bash
     # Point pacman at one dated archive.archlinux.org snapshot and retry.
     #
     # That host drops connections and aborts a download at under 1 byte/s for
     # 10 seconds. CI runs 38242538936, 38684819408 and 39558825776 failed that
     # way. DisableDownloadTimeout removes the abort. The loop covers a refused
-    # connect. Jobs have no git until this runs, so .github/workflows/ci.yml
-    # keeps a copy in BADI_ARCH_SNAPSHOT. The agent-rules check requires that
-    # copy to match this file and rejects a direct pacman -S.
+    # connect. The database syncs once per job: a later call for the same
+    # snapshot only installs.
     set -euo pipefail
 
-    date_path="${1:?usage: ci-arch-snapshot.sh YYYY/MM/DD [package ...]}"
+    date_path="${1:?usage: arch-snapshot YYYY/MM/DD [package ...]}"
     shift
 
     if [[ ! "$date_path" =~ ^[0-9]{4}/[0-9]{2}/[0-9]{2}$ ]]; then
-      echo "ci-arch-snapshot: date must be YYYY/MM/DD, got ${date_path}" >&2
+      echo "arch-snapshot: date must be YYYY/MM/DD, got ${date_path}" >&2
       exit 2
     fi
 
@@ -43,16 +44,13 @@ env:
     pause="${BADI_ARCH_RETRY_SLEEP:-5}"
 
     if [[ ! -f "$conf" ]]; then
-      echo "ci-arch-snapshot: no pacman.conf at ${conf}" >&2
+      echo "arch-snapshot: no pacman.conf at ${conf}" >&2
       exit 2
     fi
 
     if ! grep -q '^DisableDownloadTimeout$' "$conf"; then
       sed -i '/^\[options\]/a DisableDownloadTimeout' "$conf"
     fi
-
-    # $repo and $arch are pacman mirror placeholders.
-    printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "$date_path" > "$mirror"
 
     pacman_retry() {
       local attempt
@@ -61,14 +59,20 @@ env:
           return 0
         fi
         if [[ "$attempt" -eq 5 ]]; then
-          echo "ci-arch-snapshot: pacman failed after 5 attempts because archive.archlinux.org was too slow or unreachable. Keep scripts/ci-arch-snapshot.sh; do not call pacman -S directly or use a rolling mirror." >&2
+          echo "arch-snapshot: pacman failed after 5 attempts because archive.archlinux.org was too slow or unreachable. Keep BADI_ARCH_SNAPSHOT; do not call pacman -S directly or use a rolling mirror." >&2
           return 1
         fi
         sleep "$pause"
       done
     }
 
-    pacman_retry pacman -Syyu --noconfirm
+    # $repo and $arch are pacman mirror placeholders.
+    # shellcheck disable=SC2016
+    server="$(printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch' "$date_path")"
+    if ! grep -qxF "$server" "$mirror" 2>/dev/null; then
+      printf '%s\n' "$server" > "$mirror"
+      pacman_retry pacman -Syyu --noconfirm
+    fi
     if [[ "$#" -gt 0 ]]; then
       pacman_retry pacman -S --needed --noconfirm "$@"
     fi
@@ -136,9 +140,7 @@ jobs:
     steps:
       - name: Configure the dated Arch package snapshot
         run: |
-          # No git in this image yet. BADI_ARCH_SNAPSHOT is scripts/ci-arch-snapshot.sh.
-          set -o pipefail
-          printf '%s\n' "$BADI_ARCH_SNAPSHOT" | bash -s -- 2026/10/18 ca-certificates git
+          bash -c "$BADI_ARCH_SNAPSHOT" arch-snapshot 2026/10/18 ca-certificates git
       - name: Check out Badi
         uses: actions/checkout@v7
         with:
@@ -152,7 +154,7 @@ jobs:
           persist-credentials: false
       - name: Install the reviewed QML runtime and test tools
         run: |
-          bash scripts/ci-arch-snapshot.sh 2026/10/18 \
+          bash -c "$BADI_ARCH_SNAPSHOT" arch-snapshot 2026/10/18 \
             jq procps-ng 'qt6-declarative=6.12.0-1' \
             'quickshell=0.3.2-1' shellcheck util-linux
           pacman -Q quickshell qt6-declarative
@@ -173,9 +175,7 @@ jobs:
     steps:
       - name: Configure the dated Arch package snapshot
         run: |
-          # No git in this image yet. BADI_ARCH_SNAPSHOT is scripts/ci-arch-snapshot.sh.
-          set -o pipefail
-          printf '%s\n' "$BADI_ARCH_SNAPSHOT" | bash -s -- 2026/10/19 base-devel ca-certificates git namcap sudo
+          bash -c "$BADI_ARCH_SNAPSHOT" arch-snapshot 2026/10/19 base-devel ca-certificates git namcap sudo
       - name: Check out source with history for pkgver
         uses: actions/checkout@v7
         with:
@@ -185,7 +185,7 @@ jobs:
         run: |
           # makepkg refuses root; its dependencies come from the PKGBUILD itself.
           source packaging/aur/PKGBUILD
-          bash scripts/ci-arch-snapshot.sh 2026/10/19 "${makedepends[@]}" "${depends[@]}"
+          bash -c "$BADI_ARCH_SNAPSHOT" arch-snapshot 2026/10/19 "${makedepends[@]}" "${depends[@]}"
           useradd --create-home builder
           git config --system --add safe.directory '*'
       - name: Check .SRCINFO matches the PKGBUILD
@@ -266,9 +266,7 @@ jobs:
     steps:
       - name: Configure the dated Arch package snapshot
         run: |
-          # No git in this image yet. BADI_ARCH_SNAPSHOT is scripts/ci-arch-snapshot.sh.
-          set -o pipefail
-          printf '%s\n' "$BADI_ARCH_SNAPSHOT" | bash -s -- 2026/08/31 \
+          bash -c "$BADI_ARCH_SNAPSHOT" arch-snapshot 2026/08/31 \
             at-spi2-core ca-certificates cmake dbus fcitx5 gcc git gnome-keyring libsecret ninja nlohmann-json python python-gobject
           pacman -Q at-spi2-core cmake dbus fcitx5 gcc gnome-keyring libsecret ninja nlohmann-json python python-gobject
       - name: Check out source
@@ -312,9 +310,7 @@ jobs:
     steps:
       - name: Configure the dated Arch package snapshot
         run: |
-          # No git in this image yet. BADI_ARCH_SNAPSHOT is scripts/ci-arch-snapshot.sh.
-          set -o pipefail
-          printf '%s\n' "$BADI_ARCH_SNAPSHOT" | bash -s -- 2026/08/31 ca-certificates gcc git neovim nodejs
+          bash -c "$BADI_ARCH_SNAPSHOT" arch-snapshot 2026/08/31 ca-certificates gcc git neovim nodejs
           pacman -Q neovim nodejs
       - name: Check out source
         uses: actions/checkout@v7
@@ -343,9 +339,7 @@ jobs:
     steps:
       - name: Configure the dated Arch package snapshot
         run: |
-          # No git in this image yet. BADI_ARCH_SNAPSHOT is scripts/ci-arch-snapshot.sh.
-          set -o pipefail
-          printf '%s\n' "$BADI_ARCH_SNAPSHOT" | bash -s -- 2026/10/18 ca-certificates gcc git hunspell-en_us libreoffice-fresh python
+          bash -c "$BADI_ARCH_SNAPSHOT" arch-snapshot 2026/10/18 ca-certificates gcc git hunspell-en_us libreoffice-fresh python
           pacman -Q libreoffice-fresh python
           soffice --version
       - name: Check out source

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { archSnapshotProblems, changelogProblems, cargoLockVersions, diffAddsUnderNewestHeading, featureMapProblems, isProductPath, noticesProblems, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
+import { archSnapshotProblems, changelogProblems, cargoLockVersions, diffAddsUnderNewestHeading, embeddedSnapshot, featureMapProblems, isProductPath, noticesProblems, parallelDocuments, pushRange, vocabularyProblems } from "./check-agent-rules.mjs";
 
 const lookup = "evaluation/writing/lab-worker/src/context_lookup.rs";
 
@@ -33,15 +33,28 @@ test("parallel documents are the extra backlog, not the runbooks", () => {
     "docs/reports/2026-10-13-overnight-audit.md",
     "docs/parity-status.md",
     "docs/handoff-preview.md",
+    "docs/ttr/2026-Q4.md",
+    "docs/status/latest.json",
+    "docs/evidence/trial-notes.md",
     "future plans.md",
     "docs/decisions/0003-ime-parity-append-only.md",
+    "docs/architecture/model-selection.md",
+    "docs/evidence/neovim-revision-applied.png",
     "AGENTS.md",
   ]), [
     "next steps.md",
     "docs/reports/2026-10-13-overnight-audit.md",
     "docs/parity-status.md",
     "docs/handoff-preview.md",
+    "docs/ttr/2026-Q4.md",
+    "docs/status/latest.json",
+    "docs/evidence/trial-notes.md",
   ]);
+});
+
+test("this tree has no parallel document", () => {
+  const run = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "documents"], { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
 });
 
 test("a Lab word scan fails and a call to the broker passes", () => {
@@ -121,13 +134,16 @@ test("the feature map before PR 179 fails, and current main passes", () => {
   assert.equal(passed.status, 0, passed.stderr);
 });
 
-test("the Arch snapshot helper retries, and a direct pacman install fails the rule", () => {
+test("the workflow's Arch snapshot script syncs once, retries, and a direct pacman install fails the rule", () => {
+  const script = embeddedSnapshot(readFileSync(".github/workflows/ci.yml", "utf8"));
+  assert.ok(script, "ci.yml has a BADI_ARCH_SNAPSHOT block");
   const root = mkdtempSync(`${tmpdir()}/badi-arch-`);
   const bin = `${root}/bin`;
   const conf = `${root}/pacman.conf`;
   const mirror = `${root}/mirrorlist`;
   writeFileSync(conf, "[options]\nHoldPkg = pacman\n");
-  spawnSync("mkdir", ["-p", bin]);
+  writeFileSync(mirror, "Server = https://geo.mirror.pkgbuild.com/$repo/os/$arch\n");
+  mkdirSync(bin);
   writeFileSync(`${bin}/pacman`, "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$BADI_PACMAN_LOG\"\ncount=$(wc -l < \"$BADI_PACMAN_LOG\")\nif [[ \"$count\" -lt 3 ]]; then echo 'Operation too slow' >&2; exit 1; fi\nexit 0\n");
   chmodSync(`${bin}/pacman`, 0o755);
   const env = {
@@ -138,31 +154,46 @@ test("the Arch snapshot helper retries, and a direct pacman install fails the ru
     BADI_ARCH_RETRY_SLEEP: "0",
     BADI_PACMAN_LOG: `${root}/log`,
   };
+  const snapshot = (...args) => spawnSync("bash", ["-c", script, "arch-snapshot", ...args], { env, encoding: "utf8" });
   writeFileSync(env.BADI_PACMAN_LOG, "");
-  const ok = spawnSync("bash", ["scripts/ci-arch-snapshot.sh", "2026/10/18", "git"], { env, encoding: "utf8" });
+  const ok = snapshot("2026/10/18", "git");
   assert.equal(ok.status, 0, ok.stderr);
   assert.match(readFileSync(conf, "utf8"), /^DisableDownloadTimeout$/m);
-  const calls = readFileSync(env.BADI_PACMAN_LOG, "utf8").trim().split("\n");
+  assert.equal(readFileSync(mirror, "utf8"), "Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch\n");
+  let calls = readFileSync(env.BADI_PACMAN_LOG, "utf8").trim().split("\n");
   assert.equal(calls.length, 4, calls.join(" | "));
   assert.match(calls[2], /^-Syyu/);
   assert.match(calls[3], /^-S --needed --noconfirm git$/);
 
+  // A later step for the same snapshot installs without a second sync.
+  writeFileSync(env.BADI_PACMAN_LOG, "x\nx\n");
+  const again = snapshot("2026/10/18", "jq");
+  assert.equal(again.status, 0, again.stderr);
+  calls = readFileSync(env.BADI_PACMAN_LOG, "utf8").trim().split("\n").slice(2);
+  assert.deepEqual(calls, ["-S --needed --noconfirm jq"]);
+
   writeFileSync(env.BADI_PACMAN_LOG, "");
   writeFileSync(`${bin}/pacman`, "#!/bin/bash\necho 'Failed to connect' >&2\nexit 1\n");
   chmodSync(`${bin}/pacman`, 0o755);
-  const failed = spawnSync("bash", ["scripts/ci-arch-snapshot.sh", "2026/08/31", "git"], { env, encoding: "utf8" });
+  const failed = snapshot("2026/08/31", "git");
   assert.equal(failed.status, 1);
   assert.match(failed.stderr, /failed after 5 attempts/);
+  assert.equal(snapshot("latest").status, 2);
 
-  const direct = "jobs:\n  arch:\n    steps:\n      - run: pacman -Syyu --noconfirm\n";
-  assert.match(archSnapshotProblems(direct, null)[0], /pacman -Syyu/);
-  assert.match(archSnapshotProblems(direct, null)[0], /scripts\/ci-arch-snapshot\.sh/);
+  const shellcheck = spawnSync("shellcheck", ["-S", "warning", "-s", "bash", "-"], { input: script, encoding: "utf8" });
+  if (!shellcheck.error) assert.equal(shellcheck.status, 0, shellcheck.stdout);
+
+  const direct = "env:\n  BADI_ARCH_SNAPSHOT: |\n    DisableDownloadTimeout\n    pacman_retry pacman -S x\njobs:\n  arch:\n    steps:\n      - run: pacman -Syyu --noconfirm\n";
+  assert.equal(archSnapshotProblems(direct).length, 1);
+  assert.match(archSnapshotProblems(direct)[0], /8: - run: pacman -Syyu/);
+  assert.match(archSnapshotProblems(direct)[0], /BADI_ARCH_SNAPSHOT/);
+  assert.match(archSnapshotProblems("jobs: {}\n")[0], /no BADI_ARCH_SNAPSHOT block/);
 });
 
-test("the Arch workflow that timed out fails, and this tree's helper matches", () => {
+test("the Arch workflow that timed out fails, and this tree passes", () => {
   // The Actions runs that stalled (161351c and the others) predate the 0.2.0
   // root, so a normal clone has no such object. c948ffd is that root, and
-  // 972c5a5 is current main: both still call pacman directly.
+  // 972c5a5 is the main this rule was written on: both call pacman directly.
   for (const rev of ["c948ffd92efda219ad54d0ee3fbd879869db9ec1", "972c5a52900a8ceec57528664734c7ae0ee31180"]) {
     const run = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "arch", "--rev", rev], { encoding: "utf8" });
     assert.equal(run.status, 1, `${rev}\n${run.stderr}`);
