@@ -114,12 +114,16 @@ bool BadiAddon::safeToObserve(const Binding &binding) const {
 }
 
 std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding) const {
-    return currentContext(binding, binding.observedFocus);
+    auto context = rawContext(binding, binding.observedFocus);
+    if (context && binding.zenCommit.active()) {
+        (void)binding.zenCommit.applyToCorroborated(binding.state.appId(), *context, binding.observedFocus);
+    }
+    return context;
 }
 
 // `observed` is the observer snapshot Writer's trailing spaces may come from:
 // the one being checked, not an older one.
-std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding, const Json &observed) const {
+std::optional<ContextWindow> BadiAddon::rawContext(const Binding &binding, const Json &observed) const {
     if (!contextReadable(binding)) return std::nullopt;
     auto &input = *binding.inputContext;
     if (binding.state.editPath() == NativeEditPath::TypedLine) {
@@ -254,6 +258,7 @@ void BadiAddon::hidePreview() {
 // Fence callbacks before the active IME can consume the key. A foreign
 // composition need not publish surrounding text or reach our post hook.
 void BadiAddon::cancelForInput(Binding &binding) {
+    binding.zenCommit.clear();
     dropHeldTab(binding);
     ++binding.observationGeneration;
     if (binding.observeTimer) binding.observeTimer->setEnabled(false);

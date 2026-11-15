@@ -2,6 +2,7 @@
 
 #include "sanitizer.h"
 
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -212,6 +213,130 @@ bool observerAgrees(const Json &observed, const ContextWindow &context) {
 
 bool observerCorroborates(const Json &captured, const Json &observed, const ContextWindow &context) {
     return matchesObservedFocus(captured, observed, true) && observerAgrees(observed, context);
+}
+
+bool zenPostCommitApp(std::string_view appId) {
+    return appId == "zen" || appId == "zen-twilight";
+}
+
+void ZenPendingCommit::clear() {
+    active_ = false;
+    field_ = nullptr;
+    preCommit_ = ContextWindow{};
+    committed_.clear();
+    committedScalars_ = 0;
+    expectedBefore_.clear();
+}
+
+bool ZenPendingCommit::sameField(const Json &focus) const {
+    return active_ && sameObservedFieldIdentity(field_, focus) &&
+           focus.value("purpose", Json()) == "plain_text" &&
+           focus.value("selection_count", Json()) == 0;
+}
+
+bool ZenPendingCommit::matchesFcitx(const ContextWindow &rawFcitx) const {
+    return active_ && rawFcitx.identityKnown &&
+           rawFcitx.before == preCommit_.before &&
+           rawFcitx.after == preCommit_.after &&
+           rawFcitx.paragraphEnd == preCommit_.paragraphEnd &&
+           rawFcitx.anchor == preCommit_.anchor &&
+           rawFcitx.head == preCommit_.head &&
+           rawFcitx.language == preCommit_.language;
+}
+
+void ZenPendingCommit::record(std::string_view appId, const Json &observedField,
+                              const ContextWindow &rawFcitx, std::string_view committed) {
+    if (!zenPostCommitApp(appId) || committed.empty() || !rawFcitx.identityKnown ||
+        !matchesObservedFocus(observedField, observedField, true)) {
+        clear();
+        return;
+    }
+    const auto addedScalars = decodeUtf8(committed);
+    if (!addedScalars || addedScalars->empty() || !validContextText(committed)) {
+        clear();
+        return;
+    }
+    Json baselineField;
+    ContextWindow baselineContext;
+    std::string nextCommitted;
+    std::size_t nextScalars = 0;
+    if (active_ && matchesFcitx(rawFcitx) && sameField(observedField)) {
+        auto corroborated = rawFcitx;
+        if (!applyToCorroborated(appId, corroborated, observedField)) {
+            clear();
+            return;
+        }
+        baselineField = field_;
+        baselineContext = preCommit_;
+        nextCommitted = committed_;
+        nextCommitted.append(committed);
+        nextScalars = committedScalars_ + addedScalars->size();
+    } else {
+        if (!observerAgrees(observedField, rawFcitx)) {
+            clear();
+            return;
+        }
+        baselineField = observedField;
+        baselineContext = rawFcitx;
+        nextCommitted = std::string(committed);
+        nextScalars = addedScalars->size();
+    }
+    if (nextScalars > kMaxBeforeScalars) {
+        clear();
+        return;
+    }
+    const auto preScalars = decodeUtf8(baselineContext.before);
+    if (!preScalars) {
+        clear();
+        return;
+    }
+    const std::string combined = baselineContext.before + nextCommitted;
+    const auto windowed = scalarWindow(combined, preScalars->size() + nextScalars, kMaxBeforeScalars, 0);
+    if (!windowed || windowed->before.empty()) {
+        clear();
+        return;
+    }
+    active_ = true;
+    field_ = std::move(baselineField);
+    preCommit_ = std::move(baselineContext);
+    committed_ = std::move(nextCommitted);
+    committedScalars_ = nextScalars;
+    expectedBefore_ = std::string(windowed->before);
+}
+
+bool ZenPendingCommit::applyToCorroborated(std::string_view appId, ContextWindow &context,
+                                           const Json &observed) const {
+    if (!active_ || !zenPostCommitApp(appId) || !matchesFcitx(context) || !sameField(observed) ||
+        !observed.value("scope", Json()).is_null() ||
+        !observed.value("caret", Json()).is_number_integer() ||
+        !observed.value("total_chars", Json()).is_number_integer()) {
+        return false;
+    }
+    const auto baseCaret = field_["caret"].get<std::int64_t>();
+    const auto baseTotal = field_["total_chars"].get<std::int64_t>();
+    const auto caret = observed["caret"].get<std::int64_t>();
+    const auto total = observed["total_chars"].get<std::int64_t>();
+    const auto delta = static_cast<std::int64_t>(committedScalars_);
+    if (baseCaret < 0 || baseTotal < baseCaret ||
+        baseCaret > std::numeric_limits<std::int64_t>::max() - delta ||
+        baseTotal > std::numeric_limits<std::int64_t>::max() - delta ||
+        caret != baseCaret + delta || total != baseTotal + delta) {
+        return false;
+    }
+    auto expected = context;
+    expected.before = expectedBefore_;
+    expected.anchor += committedScalars_;
+    expected.head += committedScalars_;
+    if (!observerAgrees(observed, expected)) return false;
+    context = std::move(expected);
+    return true;
+}
+
+bool ZenPendingCommit::corroborate(std::string_view appId, ContextWindow &context,
+                                   const Json &observed) {
+    if (applyToCorroborated(appId, context, observed)) return true;
+    clear();
+    return false;
 }
 
 std::optional<std::string_view> automaticQuietReason(const Json &observed) {

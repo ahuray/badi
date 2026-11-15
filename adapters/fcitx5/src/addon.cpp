@@ -188,6 +188,7 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     const auto digest = surroundingDigest(inputContext.surroundingText());
     if (digest != binding->surroundingDigest) {
         binding->surroundingDigest = digest;
+        binding->zenCommit.clear();
         // The observer may skip an intermediate edit during a fast
         // delete/retype. This ends only the local until-edit decline;
         // the broker still enforces timed quiet and fresh edit authority.
@@ -201,6 +202,9 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
         }
         binding->heldSuggestion.reset();
         if (binding->holdTimer) binding->holdTimer->setEnabled(false);
+    } else if (binding->zenCommit.active()) {
+        const auto raw = rawContext(*binding, binding->observedFocus);
+        if (!raw || !binding->zenCommit.matchesFcitx(*raw)) binding->zenCommit.clear();
     }
     // Unavailable apps never hold editing context. Toolkit publication must
     // not erase their explicit, timed unavailable notice. Classify the app
@@ -247,6 +251,7 @@ void BadiAddon::capabilityChanged(::fcitx::InputContext &inputContext, ::fcitx::
     }
     debug_.record("authority", app, "capabilities_changed");
     if (!binding || app.empty()) return;
+    binding->zenCommit.clear();
     // Capability changes can leave the previous widget's buffer cached.
     binding->surroundingFreshness.capabilityChanged();
     invalidateChangedContext(*binding);
@@ -257,6 +262,7 @@ void BadiAddon::foreignUiUpdated(::fcitx::InputContext &input) {
     auto *binding = bindingFor(input);
     if (!binding || !input.hasFocus() || !binding->state.focused()) return;
     if (foreignImeActive(*binding)) {
+        binding->zenCommit.clear();
         if (binding->state.lastContext() || binding->overlayOwned || !binding->ownedAuxiliary.empty()) {
             binding->waitingForForeignUi = true;
             cancelForInput(*binding);

@@ -8,6 +8,13 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- In Zen (`zen` and `zen-twilight`), the Fcitx addon now corroborates exact
+  `fcitx_before + committed_suffix` immediately after Badi's own append-only
+  `commitString` while Gecko leaves Fcitx's surrounding text at the
+  pre-commit snapshot, so a Tab-accepted word's remainder displays, cycles
+  alternatives, and accepts back-to-back Tabs without waiting for the next
+  keystroke while any altered or dropped commit still fails closed.
+
 - Retired the on-disk `badi.settings.v1` migration and schema ([ADR 0007](docs/decisions/0007-retire-protocol-v1.md) step 4); an unrecognized settings schema on disk now fails broker startup closed as a configuration error reported by `badi doctor`.
 
 - The Fcitx addon's request ids now carry their session, so a broker refusal

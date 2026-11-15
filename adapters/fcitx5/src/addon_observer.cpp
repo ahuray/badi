@@ -76,7 +76,7 @@ void BadiAddon::inspected(Binding &binding, const Json &reply) {
     const auto editTarget = inspectedEditTarget(focus, binding.state.appId());
     binding.inspection.found(editTarget.has_value());
     if (!editTarget) return denyEditing(binding);
-    const bool unchanged = !binding.observationExplicit && binding.observed() &&
+    const bool unchanged = !binding.observationExplicit && !binding.zenCommit.active() && binding.observed() &&
         matchesObservedFocus(binding.observedFocus, focus) &&
         matchesCapturedContext(binding.state.lastContext(), currentContext(binding));
     if (unchanged) return;
@@ -96,6 +96,7 @@ void BadiAddon::bindObservedField(Binding &binding, const Json &focus, NativeEdi
     const auto session = randomUuid();
     const auto salt = randomSalt();
     if (!session || !salt) return;
+    if (!binding.zenCommit.sameField(focus)) binding.zenCommit.clear();
     if (!sameObservedFieldIdentity(binding.fieldVisit, focus)) {
         binding.fieldVisit = focus;
         binding.fieldVisitId = *session;
@@ -108,6 +109,7 @@ void BadiAddon::bindObservedField(Binding &binding, const Json &focus, NativeEdi
                                editTarget, NativeEditPath::Observed)) return;
     binding.observedFocus = focus;
     if (!binding.state.editingAvailable()) {
+        binding.zenCommit.clear();
         debug_.record("request_blocked", appId, editingUnavailableReason(appId, binding.observed()));
         return;
     }
@@ -115,6 +117,7 @@ void BadiAddon::bindObservedField(Binding &binding, const Json &focus, NativeEdi
 }
 
 void BadiAddon::denyEditing(Binding &binding) {
+    binding.zenCommit.clear();
     binding.fieldVisit = nullptr;
     binding.fieldVisitId.clear();
     closeBrokerSession(binding);
@@ -129,6 +132,7 @@ void BadiAddon::denyEditing(Binding &binding) {
 // IME-parity has no manual fallback, so an explicit request says why the
 // observer produced no field: the field's own purpose, or no observer.
 void BadiAddon::observerUnavailable(Binding &binding, const Json &error) {
+    binding.zenCommit.clear();
     binding.inspection.found(false);
     binding.fieldVisit = nullptr;
     binding.fieldVisitId.clear();
@@ -147,6 +151,7 @@ void BadiAddon::observerInvalidated(const Json &event) {
     for (auto &[_, binding] : bindings_) {
         if (!binding.state.focused() || !invalidates(event, binding.state.appId())) continue;
         debug_.record("observer", binding.state.appId(), "observer_invalidated");
+        if (!fieldChanged) binding.zenCommit.clear();
         // A revision's own inspection is binding the focused field: the
         // observer may first retire the field it tracked before. Its reply
         // must still arrive.
@@ -180,6 +185,7 @@ void BadiAddon::retireObservedField(Binding &binding) {
 }
 
 void BadiAddon::stopObserving(Binding &binding) {
+    binding.zenCommit.clear();
     binding.fieldVisit = nullptr;
     binding.fieldVisitId.clear();
     ++binding.observationGeneration;
@@ -222,6 +228,7 @@ void BadiAddon::requestObservedContext(Binding &binding, bool rediscover) {
                 return;
             }
             if (!observerAnswered(reply)) {
+                current->zenCommit.clear();
                 const auto error = reply.value("error", Json());
                 debug_.record("request_blocked", current->state.appId(), snapshotFailureReason(error));
                 // The accessible changed under a keystroke. Inspect once to
@@ -243,6 +250,7 @@ void BadiAddon::publishObservedContext(Binding &binding, const Json &focus, cons
                                        bool caretMayMove, bool windowAsked) {
     const auto &app = binding.state.appId();
     if (!observerAnswered(reply)) {
+        binding.zenCommit.clear();
         return debug_.record("request_blocked", app, snapshotFailureReason(reply.value("error", Json())));
     }
     const auto &observed = reply["focus"];
@@ -253,6 +261,7 @@ void BadiAddon::publishObservedContext(Binding &binding, const Json &focus, cons
     const bool samePosition = caretMayMove ? continuedFieldSnapshot(focus, observed)
                                            : matchesObservedFocus(focus, observed, true);
     if (!samePosition) {
+        binding.zenCommit.clear();
         return debug_.record("request_blocked", app, "observer_context_mismatch");
     }
     // The visit's window text, kept even when this context asks nothing (an
@@ -261,8 +270,15 @@ void BadiAddon::publishObservedContext(Binding &binding, const Json &focus, cons
         binding.windowVisitId = binding.fieldVisitId;
         binding.windowText = observedWindowText(observed);
     }
-    auto context = currentContext(binding, observed);
-    if (!context) return debug_.record("request_blocked", app, unavailableContextReason(binding));
+    auto context = rawContext(binding, observed);
+    if (!context) {
+        binding.zenCommit.clear();
+        return debug_.record("request_blocked", app, unavailableContextReason(binding));
+    }
+    if (binding.zenCommit.active() && !binding.zenCommit.corroborate(app, *context, observed)) {
+        return debug_.record("request_blocked", app, "observer_context_mismatch",
+                             context->before.size(), observedAfter(*context).size());
+    }
     // Escape declines one context. Deleting that text, including clearing
     // the field, ends the decline. An empty field still does not request.
     if (binding.dismissedContext == *context) return;

@@ -212,9 +212,12 @@ In this module that means:
   counts as denied (`app_rule_required`) until it gets an exact rule.
 - **Snapshot agreement.** Before publication, display and `commitString`, a
   fresh observer snapshot must equal Fcitx's live text, caret and document
-  length. Otherwise it fails closed as `observer_context_mismatch`,
-  `observer_display_mismatch`, `observer_display_unavailable`,
-  `observer_dispatch_mismatch` or `observer_dispatch_unavailable`.
+  length (or, in `zen` and `zen-twilight` immediately after Badi's own
+  append-only commit, Fcitx's pre-commit snapshot plus that exact committed
+  suffix; see [Observed fields](#observed-fields)). Otherwise it fails closed
+  as `observer_context_mismatch`, `observer_display_mismatch`,
+  `observer_display_unavailable`, `observer_dispatch_mismatch` or
+  `observer_dispatch_unavailable`.
 
 Unavailable apps are never read or inspected. Ctrl+Shift+Space there reaches
 the app; `badi debug` records `no_edit_path`.
@@ -310,11 +313,29 @@ provides an editor transaction.
   broker suggests only what fits before it, and Tab inserts at the caret. The
   manual Tab-request path still requires the end of the field, so Tab keeps its
   meaning inside native text.
-- **Agreement** is exact with two equivalences: an empty Fcitx `after` matches
-  an observed block end alone, and a `scope: "block"` snapshot (an opaque list,
-  quote, table or inline-markup paragraph in the window) matches when Fcitx's
-  `before` ends with its block text right after a line break and Fcitx's
-  `after` begins with its rest of block and block end.
+- **Agreement** is exact with two rich-editor equivalences and one Zen
+  post-commit rule ([ADR 0003](../../docs/decisions/0003-ime-parity-append-only.md)):
+  an empty Fcitx `after` matches an observed block end alone; a `scope: "block"`
+  snapshot (an opaque list, quote, table or inline-markup paragraph in the
+  window) matches when Fcitx's `before` ends with its block text right after a
+  line break and Fcitx's `after` begins with its rest of block and block end;
+  and in `zen` and `zen-twilight` only, immediately after Badi itself
+  dispatches an append-only `commitString` while Gecko still reports the
+  pre-commit surrounding text to Fcitx, `ZenPendingCommit` (`observation.h`)
+  corroborates the same plain-text field within the same focus and authority
+  epoch if and only if the observer's whole-field `before` equals exact
+  `fcitx_before + committed_suffix` (accumulating back-to-back word commits
+  while Fcitx's snapshot stays unchanged), `caret` and `total_chars` advance by
+  that suffix's scalar count, and `after` still agrees. That corroborated
+  `before` and caret become the field's context so the remainder displays,
+  offers alternatives, and can be accepted; spelling replacement is withheld
+  (`replacement_unavailable`) until Fcitx's surrounding text catches up. Badi's
+  consumed acceptance and alternative-selection keys on a shown remainder keep
+  the pending suffix; focus loss, another field, an authority or connection
+  reset, a changed Fcitx snapshot, any key reaching the app, Escape, explicit
+  invoke, selection revision, a refused request, or any difference (including a
+  dropped commit that left the field at `fcitx_before`) clears the pending
+  suffix and fails closed.
 
 ## Tested with
 
@@ -329,7 +350,7 @@ toolkit in general.
 | Chromium 154 (2026-10-19/20), 155 (2026-10-23/24) | text-input-v3 (`wayland_v2`); observed, IME-parity | On 155 (2026-10-24): a textarea, a contenteditable after a trailing space, Quill, ProseMirror and Lexical on their own sites, a typo fix, a selection revision, and a password field and search boxes refused. With inspection on the keystroke, a textarea showed 8/8 inline in 189–308 ms after the last key on a fresh focus (median 215, against 276 before). The installed-flow matrix below; as an Omarchy web app (`chrome-<site>__-Default`) 4/4 inline in 168–321 ms, with window words. On 155, `adress ` showed `→ address`; Tab corrected it, the read-back confirmed it and one Ctrl+Z restored the typo. A page that moves focus on the deletion split it, and the notice named it ([ADR 0011](../../docs/decisions/0011-checked-corrections-in-append-only-apps.md)) | Page fields carry no purpose hints, so the observer's checks deny passwords; the omnibox's `Url` purpose is denied before any observer request. Needs Fcitx 5.1.23 |
 | Brave Origin 1.97 (2026-10-20), 1.98 (2026-10-24) | as above | On 1.98: a textarea, a contenteditable and a confirmed typo fix; a password field sent nothing. On 1.97: 5/5 in a textarea, 3/3 in a contenteditable, 4/4 as an `--app` web app; Ctrl+→ takes all, Escape hides without editing | as above |
 | Zen 1.23.3b, Gecko 158 (2026-10-20) | `wayland_v2`, `zen` | Suggestions and window words | The urlbar shares the page's context with no `Url` hint, so the observer denies it. Gecko sends only the caret's paragraph. One Ctrl+Z undoes an acceptance alone. A fresh profile once showed the suggestion in Fcitx's candidate box |
-| Zen Twilight 1.24t (2026-10-24) | `wayland_v2`, `zen-twilight` | A textarea and a contenteditable suggested; a typo fix was confirmed by read-back; chatgpt.com's composer suggested and Tab committed a word, Google's search box was refused | As Zen: the observer denies the urlbar; password and search fields refused. After Tab accepts a word the rest shows only after the next key: Gecko keeps Fcitx's text at the pre-commit text, which the observer's read no longer matches |
+| Zen Twilight 1.24t (2026-10-24) | `wayland_v2`, `zen-twilight` | A textarea and a contenteditable suggested; a typo fix was confirmed by read-back; chatgpt.com's composer suggested and Tab committed a word, Google's search box was refused | As Zen: the observer denies the urlbar; password and search fields refused. In that 2026-10-24 trial (before the 2026-11-15 post-commit agreement rule), the rest after Tab showed only after the next key because Gecko kept Fcitx's text at the pre-commit text; live re-trial of the post-commit rule pending |
 | VS Code 1.142 (2026-10-20), 1.143 (2026-10-24) | as Chromium | 3/3; the saved file read back exactly; on 1.143 a markdown buffer suggested and Tab committed a word | Needs `"editor.editContext": false`; its default EditContext sends corrupted text, which fails closed. `wtype` trials need `"keyboard.dispatch": "keyCode"` |
 | LibreOffice Writer 26.8.1, GTK 3 (2026-10-20/24) | observed sentence | 2/3 inline in 169 and 241 ms; Tab commits one word; on 2026-10-24 inline again, and Alt+F7 turned `lsit` into `list`, undone by one Ctrl+Z; with inspection on the keystroke, 8/8 inline in 216–300 ms after the last key (median 241, against 359 before) | Writer sends only the caret's sentence. Spelling goes through the [extension](../libreoffice/README.md): Alt+F7 replaces, one Ctrl+Z restores |
 | Ghostty 1.3.1 (2026-10-20/24) | typed line ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)) | 3/3 in the panel; one word per Tab; corrections erase the typo with DELs (`teh → the` on 2026-10-24) | Exact opt-in rule |
@@ -489,9 +510,9 @@ other difference is known; neither older version has run in a live session.
 
 | Command | Covers |
 | --- | --- |
-| `npm run fcitx5:check` | Build plus deterministic suites: app classes and ids (and their agreement with the observer, `tests/observer-identities.py`), key, Tab, literal-Tab, invoke and inspection decisions, type-through, word acceptance and the held Tab, binding and sanitization, framing and strict wire shapes, broker refusals, one-shot commits, foreign-IME yield, debug snapshots, reconnect, the revision core and its observer gates, and the broker and observer sockets |
+| `npm run fcitx5:check` | Build plus deterministic suites: app classes and ids (and their agreement with the observer, `tests/observer-identities.py`), key, Tab, literal-Tab, invoke and inspection decisions, type-through, word acceptance and the held Tab, Zen post-commit agreement and its revocation gates, binding and sanitization, framing and strict wire shapes, broker refusals, one-shot commits, foreign-IME yield, debug snapshots, reconnect, the revision core and its observer gates, and the broker and observer sockets |
 | `npm run fcitx5:integration` | Also needs Cargo and Python 3. The shipped transport against a real broker in temporary roots: context, accept, report, dismiss, a type-through and word-acceptance scenario that must generate once, and recovery after a broker restart |
-| `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/observed-desktop.py` | The real addon in a private D-Bus session with its own Fcitx, broker and a synthetic observer: every app class, denials, panel and preview display, disagreement at request, display and dispatch, type-through with Tab, the held Tab and Ctrl+Right, a Ghostty typed line with quiet automatic misses, the Zen urlbar, foreign preedit, paragraph ends, recovery, the literal Tab with and without a grant, a stream moving from the panel to the preview, a refused acceptance, and a revision applied once despite a second Tab. Proves transport and state, not app behavior. Each run writes `output/observed-desktop/observed-dbus-*/` with `result.json`, the broker and Fcitx logs and the session's own output (`session.log`), even when the session dies before its logs open; it needs a python3 that imports PyGObject |
+| `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/observed-desktop.py` | The real addon in a private D-Bus session with its own Fcitx, broker and a synthetic observer: every app class, denials, panel and preview display, disagreement at request, display and dispatch, type-through with Tab, the held Tab and Ctrl+Right, Zen post-Tab remainder and chained Tab agreement while Fcitx stays at pre-commit text, a Ghostty typed line with quiet automatic misses, the Zen urlbar, foreign preedit, paragraph ends, recovery, the literal Tab with and without a grant, a stream moving from the panel to the preview, a refused acceptance, and a revision applied once despite a second Tab. Proves transport and state, not app behavior. Each run writes `output/observed-desktop/observed-dbus-*/` with `result.json`, the broker and Fcitx logs and the session's own output (`session.log`), even when the session dies before its logs open; it needs a python3 that imports PyGObject |
 | `PYTHONDONTWRITEBYTECODE=1 python3 adapters/fcitx5/tests/desktop-tab.py` | Opt-in, after installation: synthetic contexts drive the installed addon and model through Tab request, accept and denials; run it while not typing elsewhere |
 
 A staged install leaves the live Fcitx alone:
