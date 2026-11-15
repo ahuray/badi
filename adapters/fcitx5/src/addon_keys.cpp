@@ -26,16 +26,17 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     const auto app = binding && !binding->state.appId().empty() ? binding->state.appId()
                                                                 : canonicalProgram(*event.inputContext());
     debug_.record(tab ? "tab" : "input", app,
-                  app.empty() && !(binding && binding->unnamedIbus) ? "unidentified_app" : "input_received");
+                  app.empty() && !(binding && binding->observation.unnamedIbus) ? "unidentified_app"
+                                                                                : "input_received");
     if (!binding || !binding->state.focused()) return;
-    if (revisionActive(*binding) && revisionKey(event, *binding)) return;
-    if (!key.isModifier()) binding->inspection.input(monotonicUs());
+    if (binding->revisionActive() && revisionKey(event, *binding)) return;
+    if (!key.isModifier()) binding->observation.schedule.input(monotonicUs());
     const bool literalChord = isLiteralTabChord(event.key());
-    if (binding->literalTabs && !literalChord) {
+    if (binding->literalTab.count && !literalChord) {
         // A key after the chord's modifiers came up, even a modifier whose
         // own update follows it, lets the waiting Tabs go first; another key
         // pressed while they are still down drops them.
-        if (binding->literalTabTimer && binding->literalTabTimer->isEnabled()) sendLiteralTabs(*binding);
+        if (binding->literalTab.timer && binding->literalTab.timer->isEnabled()) sendLiteralTabs(*binding);
         else if (!key.isModifier()) dropLiteralTabs(*binding);
     }
     if (!binding->state.editingAvailable()) {
@@ -47,12 +48,12 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     const auto typed = typedText(key);
     // Copied: retiring the candidate below releases its text.
     const std::string expected(binding->state.suggestionVisible() ? binding->state.visibleText()
-                                                                  : binding->typeThroughRest);
+                                                                  : binding->typeThrough.rest);
     // Only the literal-Tab chord asks whether Tab would be taken; the manual
     // path's answer reads Fcitx's text, so other keys skip it.
     const bool tabTaken = literalChord && unclaimed &&
-        (binding->heldTab ||
-         tabMayHoldForRest(!binding->typeThroughRest.empty(), binding->typeThroughAutomatic,
+        (binding->typeThrough.heldTab ||
+         tabMayHoldForRest(!binding->typeThrough.rest.empty(), binding->typeThrough.automatic,
                            hasForeignImeUi(panel), binding->state.suggestionVisible()) ||
          manualTabRequests(binding->state.editPath(), binding->state.editingAvailable(),
                            binding->broker.policyAllowed,
@@ -72,9 +73,9 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     // line could record the digit as text; no other key is captured.
     if (binding->state.alternativeList() && !hasForeignImeUi(panel) && unclaimed) {
         if (pressed.escape) {
-            binding->zenCommit.clear();
+            binding->observation.zenCommit.clear();
             binding->state.clearAlternativeList();
-            clearOwnedPanel(*binding);
+            clearSuggestionUi(*binding);
             event.filterAndAccept();
             return;
         }
@@ -94,7 +95,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
             }
         }
     }
-    const auto action = decidePreKey(pressed, binding->state.editingAvailable(), !binding->ownedAuxiliary.empty(),
+    const auto action = decidePreKey(pressed, binding->state.editingAvailable(), binding->noticeShown(),
                                      binding->state.suggestionVisible(), panel);
     // A password field's keys leave no line at all: even without text,
     // their count and timing would describe the password.
@@ -105,13 +106,13 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     // apps and unnamed GNOME IBus contexts defer the start until async inspect
     // confirms an editable field, so password fields and urlbars never wake it.
     if (sensitive) {
-        binding->pendingBrokerStart = false;
+        binding->observation.pendingBrokerStart = false;
     } else if (!pressed.modifier && !pressed.repeat) {
         if (binding->state.editingAvailable()) {
-            binding->pendingBrokerStart = false;
+            binding->observation.pendingBrokerStart = false;
             ensureBroker();
         } else if (binding->observationCandidate()) {
-            binding->pendingBrokerStart = true;
+            binding->observation.pendingBrokerStart = true;
         }
     }
     if (!pressed.modifier && !sensitive) {
@@ -132,18 +133,18 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     // have retired the observed field until it is bound again. At most one
     // Tab is held; further Tabs while held are swallowed with it. Any
     // other key drops the held Tab and keeps its own meaning.
-    if (pressed.tab && binding->heldTab) {
+    if (pressed.tab && binding->typeThrough.heldTab) {
         event.filterAndAccept();
         return;
     }
     if (pressed.tab &&
-        tabMayHoldForRest(!binding->typeThroughRest.empty(), binding->typeThroughAutomatic,
+        tabMayHoldForRest(!binding->typeThrough.rest.empty(), binding->typeThrough.automatic,
                           hasForeignImeUi(panel), binding->state.suggestionVisible())) {
         holdTab(*binding);
         event.filterAndAccept();
         return;
     }
-    if (!pressed.modifier && !pressed.tab) dropHeldTab(*binding);
+    if (!pressed.modifier && !pressed.tab) binding->typeThrough.dropHeldTab();
     // Every key the terminal receives edits Badi's record of its line.
     const bool reachesApp = !pressed.chord && action != PreKeyAction::Tab && action != PreKeyAction::Dismiss &&
                             action != PreKeyAction::AcceptAll && action != PreKeyAction::LiteralTab;
@@ -155,25 +156,25 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
               binding->state.suggestionVisible() && panel.candidatesOwnedByBadi && hasOwnedCandidate(panel) &&
               !hasForeignImeUi(panel) &&
               (key.check(acceptChord()) || (key.check(invokeChord()) && binding->broker.policyAllowed)))) {
-            binding->zenCommit.clear();
+            binding->observation.zenCommit.clear();
         }
         return;
     case PreKeyAction::CancelDeclining:
         declineContext(*binding);
         [[fallthrough]];
     case PreKeyAction::Cancel:
-        clearTypeThrough(*binding);
-        cancelForInput(*binding);
+        binding->typeThrough.clearCarry();
+        retire(*binding, RetireReason::InputChanged);
         return;
     case PreKeyAction::CancelTypingThrough: {
-        if (binding->typeThroughBase.empty()) {
+        if (binding->typeThrough.base.empty()) {
             if (const auto previous = binding->state.lastContext())
-                binding->typeThroughBase = previous->context.before;
+                binding->typeThrough.base = previous->context.before;
         }
-        cancelForInput(*binding);
-        binding->typedThrough = true;
-        binding->typeThroughTyped += std::string(typed);
-        binding->typeThroughRest = expected.substr(typed.size());
+        retire(*binding, RetireReason::InputChanged);
+        binding->typeThrough.active = true;
+        binding->typeThrough.typed += std::string(typed);
+        binding->typeThrough.rest = expected.substr(typed.size());
         debug_.record("input", app, "typed_through");
         return;
     }
@@ -181,9 +182,9 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         tabKey(event, *binding, panel);
         return;
     case PreKeyAction::CloseNotice:
-        binding->zenCommit.clear();
+        binding->observation.zenCommit.clear();
         binding->state.invalidateContext();
-        clearOwnedPanel(*binding);
+        clearNotice(*binding);
         return;
     case PreKeyAction::Dismiss:
         dismissSuggestion(*binding, panel);
@@ -198,42 +199,32 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     event.filterAndAccept();
 }
 
-void BadiAddon::clearTypeThrough(Binding &binding) {
-    binding.typedThrough = false;
-    binding.typeThroughAutomatic = false;
-    binding.typeThroughRest.clear();
-    binding.typeThroughBase.clear();
-    binding.typeThroughTyped.clear();
-    binding.typeThroughWaits = 0;
-}
-
 // Ctrl+Shift+Tab where Badi would take Tab: the suggestion retires like it
 // would for any edit, and the app gets a real Tab once the chord's
 // modifiers are up (see lastModifierReleased).
 void BadiAddon::literalTab(Binding &binding, int code) {
-    clearTypeThrough(binding);
-    cancelForInput(binding);
+    binding.typeThrough.clearCarry();
+    retire(binding, RetireReason::InputChanged);
     // A Tab may complete or indent invisibly; follow what comes next.
-    binding.typedLine.clear();
-    binding.literalTabs = std::min(binding.literalTabs + 1, kMaxLiteralTabs);
-    binding.literalTabOnKeyRelease = !heldModifierKeys_.testAny(literalTabChord().states());
-    binding.literalTabCode = code;
+    binding.terminal.clear();
+    binding.literalTab.count = std::min(binding.literalTab.count + 1, kMaxLiteralTabs);
+    binding.literalTab.onKeyRelease = !heldModifierKeys_.testAny(literalTabChord().states());
+    binding.literalTab.code = code;
     debug_.record("decision", binding.state.appId(), "literal_tab_waiting");
 }
 
 void BadiAddon::literalTabRelease(::fcitx::KeyEvent &event) {
     auto *binding = bindingFor(*event.inputContext());
-    if (!binding || binding->literalTabs == 0) return;
+    if (!binding || binding->literalTab.count == 0) return;
     const auto &released = event.rawKey();
-    if (binding->literalTabOnKeyRelease ? released.isModifier() : !lastModifierReleased(released)) return;
-    binding->literalTabTimer = oneShot(kLiteralTabDelayUs, [this, context = binding->inputContext] {
+    if (binding->literalTab.onKeyRelease ? released.isModifier() : !lastModifierReleased(released)) return;
+    binding->literalTab.timer = oneShot(kLiteralTabDelayUs, [this, context = binding->inputContext] {
         if (auto *current = bindingFor(*context)) sendLiteralTabs(*current);
     });
 }
 
 void BadiAddon::sendLiteralTabs(Binding &binding) {
-    const auto count = std::exchange(binding.literalTabs, 0U);
-    if (binding.literalTabTimer) binding.literalTabTimer->setEnabled(false);
+    const auto count = binding.literalTab.take();
     if (count == 0) return;
     if (!binding.state.focused() || !binding.inputContext->hasFocus()) {
         debug_.record("decision", binding.state.appId(), "literal_tab_dropped");
@@ -243,44 +234,37 @@ void BadiAddon::sendLiteralTabs(Binding &binding) {
     // Without the chord's keycode it would look Tab up under the modifier
     // state it last heard, where Shift turns Tab into ISO_Left_Tab.
     const bool pressReleases = binding.inputContext->frontendName() == "wayland_v2";
-    const ::fcitx::Key tab(FcitxKey_Tab, ::fcitx::KeyStates(), binding.literalTabCode);
+    const ::fcitx::Key tab(FcitxKey_Tab, ::fcitx::KeyStates(), binding.literalTab.code);
     for (unsigned int sent = 0; sent < count; ++sent) {
         binding.inputContext->forwardKey(tab, false);
         if (!pressReleases) binding.inputContext->forwardKey(tab, true);
     }
     // A suggestion shown again while the Tab waited is for the field as it
     // was; the Tab changes it, so retire it like any edit.
-    clearTypeThrough(binding);
-    cancelForInput(binding);
-    binding.typedLine.clear();
+    binding.typeThrough.clearCarry();
+    retire(binding, RetireReason::InputChanged);
+    binding.terminal.clear();
     debug_.record("decision", binding.state.appId(), "literal_tab_sent");
 }
 
 void BadiAddon::dropLiteralTabs(Binding &binding) {
-    if (binding.literalTabTimer) binding.literalTabTimer->setEnabled(false);
-    if (std::exchange(binding.literalTabs, 0U) == 0) return;
+    if (binding.literalTab.take() == 0) return;
     debug_.record("decision", binding.state.appId(), "literal_tab_dropped");
 }
 
 void BadiAddon::holdTab(Binding &binding) {
-    binding.heldTab = true;
-    binding.heldTabRest = binding.typeThroughRest;
+    binding.typeThrough.heldTab = true;
+    binding.typeThrough.heldTabRest = binding.typeThrough.rest;
     debug_.record("decision", binding.state.appId(), "tab_held");
-    binding.heldTabTimer = oneShot(kHeldTabTimeoutUs, [this, context = binding.inputContext] {
+    binding.typeThrough.heldTabTimer = oneShot(kHeldTabTimeoutUs, [this, context = binding.inputContext] {
         if (auto *current = bindingFor(*context)) {
             debug_.record("decision", current->state.appId(), "tab_held_dropped");
             // At most one hold per word acceptance: the wait is over, so
             // the next Tab reaches the application.
-            current->typeThroughAutomatic = false;
-            dropHeldTab(*current);
+            current->typeThrough.automatic = false;
+            current->typeThrough.dropHeldTab();
         }
     });
-}
-
-void BadiAddon::dropHeldTab(Binding &binding) {
-    binding.heldTab = false;
-    binding.heldTabRest.clear();
-    if (binding.heldTabTimer) binding.heldTabTimer->setEnabled(false);
 }
 
 // Plain Tab is claimed before Fcitx's candidate navigation only to accept
@@ -302,9 +286,9 @@ void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelOb
         invoke(binding);
         break;
     case TabAction::PassThrough:
-        cancelForInput(binding);
+        retire(binding, RetireReason::InputChanged);
         // Completion rewrites the line invisibly; follow what comes next.
-        binding.typedLine.clear();
+        binding.terminal.clear();
         return;
     }
     event.filterAndAccept();
@@ -319,19 +303,19 @@ void BadiAddon::lineKey(Binding &binding, const ::fcitx::Key &key, std::string_v
     // the line restarts at every key and is followed from where it is once
     // the policy allows it, as a line that had text at focus is.
     if (!binding.broker.policyAllowed) {
-        binding.typedLine.clear();
+        binding.terminal.clear();
         return;
     }
-    binding.typedLine.apply(lineEditFor(key, typed), typed);
+    binding.terminal.line.apply(lineEditFor(key, typed), typed);
     requestLineAfterPause(binding);
 }
 
 void BadiAddon::requestLineAfterPause(Binding &binding) {
-    if (binding.lineTimer) binding.lineTimer->setEnabled(false);
-    if (!binding.typedLine.tracking() || !binding.typedLine.prose()) return;
-    const auto pause = binding.typedThrough ? InspectionSchedule::kTypeThroughPauseUs
-                                            : InspectionSchedule::kTypingPauseUs;
-    binding.lineTimer = oneShot(pause, [this, context = binding.inputContext] {
+    binding.terminal.stopTimer();
+    if (!binding.terminal.line.tracking() || !binding.terminal.line.prose()) return;
+    const auto pause = binding.typeThrough.active ? InspectionSchedule::kTypeThroughPauseUs
+                                                  : InspectionSchedule::kTypingPauseUs;
+    binding.terminal.timer = oneShot(pause, [this, context = binding.inputContext] {
         if (auto *current = bindingFor(*context)) requestTypedLine(*current, false);
     });
 }
@@ -341,23 +325,26 @@ void BadiAddon::requestLineAfterPause(Binding &binding) {
 void BadiAddon::requestTypedLine(Binding &binding, bool explicitRequest) {
     const auto &app = binding.state.appId();
     if (explicitRequest) {
-        clearOwnedPanel(binding);
+        clearAllUi(binding);
         ensureBroker();
         queryPolicy(binding);
         if (const auto waiting = manualRequestNotice(requestFacts(binding))) return showNotice(binding, *waiting);
     }
     auto context = currentContext(binding);
-    if (!context || context->before.empty() || (!explicitRequest && !binding.typedLine.prose())) {
-        debug_.record("request_blocked", app, binding.typedLine.tracking() ? "context_unavailable" : "line_unknown");
-        if (explicitRequest) showNotice(binding, binding.typedLine.tracking() ? notice::kFieldUnreadable
-                                                                               : notice::kLineUnknown);
+    if (!context || context->before.empty() || (!explicitRequest && !binding.terminal.line.prose())) {
+        debug_.record("request_blocked", app,
+                      binding.terminal.line.tracking() ? "context_unavailable" : "line_unknown");
+        if (explicitRequest) {
+            showNotice(binding, binding.terminal.line.tracking() ? notice::kFieldUnreadable
+                                                                 : notice::kLineUnknown);
+        }
         return;
     }
     context->explicitRequest = explicitRequest;
     const auto update = binding.state.updateContext(*context);
     if (!update || !open(binding) || !transport_.publishContext(*update)) return;
     binding.broker.coordinates = update->coordinates;
-    binding.requestExplicit = update->context.explicitRequest;
+    binding.suggestion.requestExplicit = update->context.explicitRequest;
     debug_.record("request", app, explicitRequest ? "terminal_explicit_request" : "terminal_line_request",
                   context->before.size());
 }
@@ -370,7 +357,7 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
     if (event.isVirtual()) return;
     const auto key = event.key().normalize();
     if (event.filtered() || event.accepted()) {
-        if (!key.isModifier()) binding->zenCommit.clear();
+        if (!key.isModifier()) binding->observation.zenCommit.clear();
         return;
     }
     const auto panel = observePanel(*binding);
@@ -378,7 +365,7 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
     const bool foreignIme = hasForeignImeUi(panel);
     // On a selection the chord asks for a revision of it (ADR 0012).
     if (invokeChordPressed && !foreignIme && revisionChord(*binding)) {
-        binding->zenCommit.clear();
+        binding->observation.zenCommit.clear();
         event.filterAndAccept();
         return;
     }
@@ -394,7 +381,7 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
                       binding->state.editingAvailable() ? "app_disabled" : "no_edit_path");
     }
     if (!binding->state.editingAvailable()) {
-        if (!key.isModifier()) binding->zenCommit.clear();
+        if (!key.isModifier()) binding->observation.zenCommit.clear();
         return;
     }
     // Escape, Tab and Ctrl+Right were decided before the input method.
@@ -408,12 +395,12 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
         requestAcceptance(*binding);
         break;
     case LocalAction::PassThrough:
-        if (!key.isModifier()) binding->zenCommit.clear();
+        if (!key.isModifier()) binding->observation.zenCommit.clear();
         if ((liveOwnedCandidate ||
              (binding->state.alternativeList() && panel.candidatesOwnedByBadi)) &&
             !key.isModifier()) {
             binding->state.invalidateContext();
-            clearOwnedPanel(*binding);
+            clearSuggestionUi(*binding);
         }
         return;
     }
@@ -422,7 +409,7 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
 
 // Explicit requests.
 void BadiAddon::invoke(Binding &binding) {
-    binding.zenCommit.clear();
+    binding.observation.zenCommit.clear();
     if (binding.state.editingAvailable() && binding.state.editPath() == NativeEditPath::TypedLine)
         return requestTypedLine(binding, true);
     switch (routeInvoke(binding.state.appId(), binding.state.editingAvailable(), binding.observed())) {
@@ -443,13 +430,13 @@ void BadiAddon::invoke(Binding &binding) {
 void BadiAddon::inspectOnRequest(Binding &binding) {
     debug_.record("observer", binding.state.appId(), "explicit_inspect_requested");
     if (const auto blocked = inspectionNotice(requestFacts(binding))) return showNotice(binding, *blocked);
-    clearOwnedPanel(binding);
+    clearAllUi(binding);
     ensureBroker();
     observeLater(binding, true);
 }
 
 void BadiAddon::requestManually(Binding &binding) {
-    clearOwnedPanel(binding);
+    clearAllUi(binding);
     ensureBroker();
     queryPolicy(binding);
     if (const auto waiting = manualRequestNotice(requestFacts(binding))) return showNotice(binding, *waiting);
@@ -463,7 +450,7 @@ void BadiAddon::requestManually(Binding &binding) {
     if (!update) return;
     if (!open(binding)) return showNotice(binding, authorityPaused_ ? notice::kPaused : notice::kModelNotConnected);
     if (!transport_.publishContext(*update)) return showNotice(binding, notice::kRequestFailed);
-    binding.requestExplicit = update->context.explicitRequest;
+    binding.suggestion.requestExplicit = update->context.explicitRequest;
     debug_.record("request", binding.state.appId(), "sent_to_model", context->before.size());
     binding.broker.coordinates = update->coordinates;
     showNotice(binding, notice::kThinking);
@@ -477,13 +464,12 @@ void BadiAddon::requestAcceptance(Binding &binding, bool word) {
         ? binding.state.requestAcceptance(transport_.nowMs(), observePanel(binding), word)
         : std::nullopt;
     if (!request || !transport_.requestAcceptance(*request)) {
-        binding.zenCommit.clear();
-        return clearOwnedPanel(binding);
+        binding.observation.zenCommit.clear();
+        return clearSuggestionUi(binding);
     }
     // Retain local ownership until the grant is checked, but stop painting
     // extensions once the user has chosen this immutable candidate.
-    binding.heldSuggestion.reset();
-    if (binding.holdTimer) binding.holdTimer->setEnabled(false);
+    binding.suggestion.clearHeld();
     hidePreview();
 }
 
@@ -491,23 +477,23 @@ bool BadiAddon::requestAlternative(Binding &binding, const PanelObservation &pan
     const auto request = binding.state.requestAlternative(transport_.nowMs(), panel);
     if (!request || !transport_.requestAlternative(*request)) return false;
     // A press that finds nothing new says so, as any explicit request.
-    binding.requestExplicit = true;
+    binding.suggestion.requestExplicit = true;
     debug_.record("request", binding.state.appId(), "alternative_requested");
     return true;
 }
 
 void BadiAddon::dismissSuggestion(Binding &binding, const PanelObservation &panel) {
-    binding.zenCommit.clear();
+    binding.observation.zenCommit.clear();
     if (const auto request = binding.state.requestDismissal(transport_.nowMs(), panel)) {
-        ++binding.observationGeneration;
+        ++binding.observation.generation;
         declineContext(binding);
         transport_.requestDismissal(*request);
     }
-    clearOwnedPanel(binding);
+    clearSuggestionUi(binding);
 }
 
 void BadiAddon::declineContext(Binding &binding) {
-    if (const auto &captured = binding.state.lastContext()) binding.dismissedContext = captured->context;
+    if (const auto &captured = binding.state.lastContext()) binding.suggestion.dismissedContext = captured->context;
 }
 
 } // namespace badi::fcitx5

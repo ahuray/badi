@@ -245,18 +245,31 @@ def session(root, report):
                 # Same field, caret and length; the observed prefix alone
                 # disagrees with Fcitx's live surrounding text.
                 response['focus']['before'] = 'observer disagrees'
+        if delayed_selection_inspect['enabled'] and op == 'inspect' and request.get('selection'):
+            response['_delay_selection_inspect'] = True
         return response
 
     daemon.observer.request = observer_request
     original_send = daemon.send
     delayed_preview = {'enabled': False, 'started': 0, 'sent': 0}
+    delayed_selection_inspect = {'enabled': False, 'started': 0, 'sent': 0}
     preview_fields = []
 
     def send(fd, document):
+        delay_selection = document.pop('_delay_selection_inspect', False)
         preview = 'rendered' in document.get('focus', {})
         if preview:
             preview_fields.append(document['focus']['binding']['path'])
-        if delayed_preview['enabled'] and preview:
+        if delay_selection:
+            delayed_selection_inspect['started'] += 1
+
+            def finish_selection():
+                delayed_selection_inspect['sent'] += 1
+                original_send(fd, document)
+                return False
+
+            GLib.timeout_add(150, finish_selection)
+        elif delayed_preview['enabled'] and preview:
             delayed_preview['started'] += 1
 
             def finish():
@@ -1907,6 +1920,145 @@ def session(root, report):
         assert fake.last('commit.result')['payload']['status'] == 'dispatched-unverified'
         assert context.commits()[-1:] == [revised]
         checks.append('A second Tab while a revision is being applied leaves it in flight; it is applied once')
+
+        # Separate notice/suggestion/revision timers and panel ownership keep
+        # stale suggestion clears off an active revision, expire the revision
+        # cleanly, and clear visible revision state when a commit grant fails.
+        context.text(revised)
+        context.text(PREFIX)
+        requests = fake.count('suggest.request')
+        assert context.key(desktop.TAB)
+        fake_wait(lambda: fake.count('suggest.request') > requests, 'manual Tab request before notice')
+        explicit_req = fake.last('suggest.request')
+        fake.respond(explicit_req, 'suggestion.clear', {'reason': 'no_suggestion'})
+        fake_wait(lambda: auxiliary() == 'Badi has no continuation \u2014 try a longer phrase',
+                  'explicit miss shows notice')
+        context.text(selected, len(selected), 0)
+        revisions = fake.count('revision.request')
+        assert context.key(ord(' '), CONTROL | SHIFT)
+        fake_wait(lambda: fake.count('revision.request') > revisions, 'revision request replaces notice')
+        rev_req = fake.last('revision.request')
+        fake.respond(rev_req, 'revision.show', {
+            'revision_id': 'r-isolated', 'mode': 'grammar', 'original': selected, 'text': revised,
+            'ttl_ms': 400, 'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() is not None and 'Grammar' in auxiliary(),
+                  'revision owns panel after notice')
+        fake.respond(explicit_req, 'suggestion.clear', {
+            'suggestion_id': 'stale-suggestion', 'reason': 'expired'})
+        fake_quiet(.08)
+        assert context.candidate() is not None and 'Grammar' in auxiliary(), \
+            'stale suggestion clear cannot clear revision-owned panel'
+        fake_wait(lambda: context.candidate() is None and auxiliary() == '',
+                  'revision expiry timer clears its own panel')
+        assert not context.key(desktop.TAB), 'expired revision passes Tab back to the app'
+
+        revisions = fake.count('revision.request')
+        assert context.key(ord(' '), CONTROL | SHIFT)
+        fake_wait(lambda: fake.count('revision.request') > revisions, 'second revision request for stale commit check')
+        rev_req = fake.last('revision.request')
+        fake.respond(rev_req, 'revision.show', {
+            'revision_id': 'r-stale-commit', 'mode': 'grammar', 'original': selected, 'text': revised,
+            'ttl_ms': 30000, 'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() is not None, 'second revision shows')
+        controls = fake.count('control.request')
+        assert context.key(desktop.TAB)
+        fake_wait(lambda: fake.count('control.request') > controls, 'Tab requests revision commit grant')
+        rev_accept = fake.last('control.request')
+        context.ic('SetCapability', '(t)', (desktop.CAPABILITIES & ~surrounding,))
+        results = fake.count('commit.result')
+        fake.respond(rev_accept, 'commit.prepare', {
+            'suggestion_id': 'r-stale-commit', 'text': revised, 'acceptance': 'all',
+            'replace_selection': rev_req['payload']['selection']})
+        fake_wait(lambda: fake.count('commit.result') > results, 'unverifiable revision commit reported stale')
+        assert fake.last('commit.result')['payload']['status'] == 'stale'
+        fake_wait(lambda: context.candidate() is None and auxiliary() == '',
+                  'failed revision commit clears revision UI')
+        context.ic('SetCapability', '(t)', (desktop.CAPABILITIES,))
+        assert not context.key(desktop.TAB), 'failed revision commit clears revision state so Tab reaches the app'
+
+        revisions = fake.count('revision.request')
+        assert context.key(ord(' '), CONTROL | SHIFT)
+        fake_wait(lambda: fake.count('revision.request') > revisions and 'Badi is checking' in auxiliary(),
+                  'third revision request waits for broker')
+        rev_req = fake.last('revision.request')
+        assert context.key(ord(' '), CONTROL | SHIFT), 'in-flight Ctrl+Shift+Space is absorbed during waiting revision'
+        fake_quiet(.05)
+        assert fake.count('revision.request') == revisions + 1 and 'Badi is checking' in auxiliary()
+        fake.respond(rev_req, 'revision.show', {
+            'revision_id': 'r-cap-retire', 'mode': 'grammar', 'original': selected, 'text': revised,
+            'ttl_ms': 30000, 'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() is not None and 'Grammar' in auxiliary(),
+                  'revision shows after in-flight chord press')
+        controls = fake.count('control.request')
+        context.ic('SetCapability', '(t)', (desktop.CAPABILITIES | password,))
+        fake_wait(lambda: fake.count('control.request') > controls and context.candidate() is None and
+                  auxiliary() == '', 'manual SetCapability during shown revision clears UI and dismisses revision')
+        assert fake.last('control.request')['payload']['action'] == 'dismiss'
+        context.ic('SetCapability', '(t)', (desktop.CAPABILITIES,))
+        assert not context.key(desktop.TAB), 'capability-retired revision passes Tab back to the app'
+        checks.append('Panel ownership and dedicated timers isolate notices, suggestions and revisions, '
+                      'in-flight Ctrl+Shift+Space presses preserve active revisions, and manual SetCapability '
+                      'or refused revision commits clear both UI and revision state')
+
+        # On an unobserved IME-parity field (!editingAvailable()), an in-flight
+        # Ctrl+Shift+Space while inspectForRevision runs preserves the waiting
+        # revision instead of hitting PreKeyAction::Cancel.
+        backend.browser, backend.uri = False, ALLOWED_URI
+        open_context('chatgpt')
+        backend.value = selected
+        context.text(selected, len(selected), 0)
+        delayed_selection_inspect['enabled'] = True
+        started = delayed_selection_inspect['started']
+        assert context.key(ord(' '), CONTROL | SHIFT)
+        fake_wait(lambda: delayed_selection_inspect['started'] > started and 'Badi is checking' in auxiliary(),
+                  'chatgpt selection revision waits on delayed observer inspect')
+        assert context.key(ord(' '), CONTROL | SHIFT), \
+            'in-flight Ctrl+Shift+Space on unobserved IME-parity field preserves waiting revision'
+        fake_quiet(.04)
+        assert 'Badi is checking' in auxiliary(), 'waiting revision notice survives until delayed inspect replies'
+        fake_wait(lambda: delayed_selection_inspect['sent'] >= delayed_selection_inspect['started'] and
+                  'Badi is checking' not in auxiliary(),
+                  'delayed selection inspect reply finishes waiting revision')
+        delayed_selection_inspect['enabled'] = False
+
+        # Unified retirement on authority pause and broker disconnect clears
+        # active type-through carry so Tab immediately reaches the app instead
+        # of being held for 700 ms.
+        for mode in ('pause', 'disconnect'):
+            req = fake_request()
+            fake.respond(req, 'suggestion.show', {
+                'suggestion_id': f'retire-{mode}', 'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 10000,
+                'provider': 'phrase_v1'})
+            fake_wait(lambda: context.candidate() == SHOWN, f'suggestion before {mode}')
+            controls, results = fake.count('control.request'), fake.count('commit.result')
+            assert context.key(desktop.TAB)
+            fake_wait(lambda: fake.count('control.request') > controls, f'word acceptance before {mode}')
+            fake.respond(fake.last('control.request'), 'commit.prepare', {
+                'suggestion_id': f'retire-{mode}', 'text': ' for', 'acceptance': 'word'})
+            fake_wait(lambda: fake.count('commit.result') > results, f'word commit reported before {mode}')
+            if mode == 'pause':
+                fake.epoch += 1
+                fake.send({'v': 2, 'type': 'authority.changed', 'mono_ms': 0, 'payload': {
+                    'authority_epoch': fake.epoch, 'settings_revision': 2, 'paused': True}})
+                fake_quiet(.1)
+                assert context.candidate() is None
+                assert not context.key(desktop.TAB), 'authority pause retires type-through carry so Tab is not held'
+                fake.epoch += 1
+                fake.send({'v': 2, 'type': 'authority.changed', 'mono_ms': 0, 'payload': {
+                    'authority_epoch': fake.epoch, 'settings_revision': 3, 'paused': False}})
+                fake_quiet(.05)
+            else:
+                prev_connections = fake.connections
+                fake.peer.close()
+                fake.peer = None
+                time.sleep(.05)
+                desktop.pump()
+                assert not context.key(desktop.TAB), 'broker disconnect retires type-through carry so Tab is not held'
+                fake_wait(lambda: fake.connections > prev_connections and fake.peer is not None and
+                          fake.count('authority.ack') >= fake.connections,
+                          'addon reconnects after peer disconnect')
+        checks.append('Unified retire clears pending type-through carry on authority pause and broker disconnect '
+                      'so Tab immediately reaches the app')
 
         # Any other refusal shape still closes the connection.
         closes = fake.client_closes

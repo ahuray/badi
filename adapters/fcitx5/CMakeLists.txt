@@ -16,6 +16,7 @@ endif()
 
 add_library(badi-fcitx5-core STATIC
     src/accessibility.cpp
+    src/binding.cpp
     src/debug.cpp
     src/observation.cpp
     src/revision.cpp
@@ -88,6 +89,11 @@ if(BUILD_TESTING)
     target_link_libraries(badi-fcitx5-revision-tests PRIVATE badi-fcitx5-core)
     target_compile_options(badi-fcitx5-revision-tests PRIVATE ${BADI_WARNINGS})
     add_test(NAME badi-fcitx5-revision-tests COMMAND badi-fcitx5-revision-tests)
+    add_executable(badi-fcitx5-binding-tests tests/binding.cpp)
+    target_compile_features(badi-fcitx5-binding-tests PRIVATE cxx_std_20)
+    target_link_libraries(badi-fcitx5-binding-tests PRIVATE badi-fcitx5-core)
+    target_compile_options(badi-fcitx5-binding-tests PRIVATE ${BADI_WARNINGS})
+    add_test(NAME badi-fcitx5-binding-tests COMMAND badi-fcitx5-binding-tests)
     add_executable(badi-fcitx5-tests tests/tests.cpp)
     target_compile_features(badi-fcitx5-tests PRIVATE cxx_std_20)
     target_link_libraries(badi-fcitx5-tests PRIVATE badi-fcitx5-core)

@@ -693,11 +693,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       (the trial machine still shows the first-run language question), rows
       and the site draft surviving a poll, and Writer superseding a slow
       spelling request.
-- [ ] Structure left by the review, each only when its file is next touched:
-      the Fcitx `Binding` (about 50 fields, one expiry timer for notices,
-      suggestions and revisions) as small reset-able parts and one retire
-      function for authority change and disconnect.
-
 - [ ] Broker structure left by the review: move the remaining inline
       tests into `<module>/tests.rs` when those files are next touched.
 

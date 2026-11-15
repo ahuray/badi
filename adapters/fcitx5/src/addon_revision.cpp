@@ -79,14 +79,10 @@ constexpr std::string_view waitingNotice(std::string_view mode) {
 
 } // namespace
 
-bool BadiAddon::revisionActive(const Binding &binding) const {
-    return binding.revisionWaiting || binding.state.revisionRequest();
-}
-
 // The selection Fcitx reports now, if a revision may read it.
 std::optional<SelectionWindow> BadiAddon::currentSelection(const Binding &binding) const {
     auto &input = *binding.inputContext;
-    if (!input.hasFocus() || !binding.state.focused() || !binding.surroundingFreshness.fresh() ||
+    if (!input.hasFocus() || !binding.state.focused() || !binding.surrounding.freshness.fresh() ||
         !allowsNativeContext(fieldCapabilities(binding)) || instance_->isComposing(&input)) {
         return std::nullopt;
     }
@@ -114,8 +110,8 @@ bool BadiAddon::revisionChord(Binding &binding) {
         startRevision(binding, std::move(selection), mode);
         return true;
     }
-    if (revisionActive(binding)) return true;
-    if (!binding.unnamedIbus) {
+    if (binding.revisionActive()) return true;
+    if (!binding.observation.unnamedIbus) {
         const auto kind = classifyNativeApp(app);
         if (kind == NativeAppClass::Terminal || kind == NativeAppClass::Unavailable) return false;
     } else if (!app.empty() && !unnamedIbusObservedApp(app)) {
@@ -131,8 +127,8 @@ bool BadiAddon::revisionChord(Binding &binding) {
         return true;
     }
     std::string mode = "grammar";
-    if (binding.revisionCycle) {
-        const auto &[cycledSelection, cycledMode] = *binding.revisionCycle;
+    if (binding.revision.cycle) {
+        const auto &[cycledSelection, cycledMode] = *binding.revision.cycle;
         if (cycledSelection.before == selection->before &&
             cycledSelection.selected == selection->selected &&
             cycledSelection.after == selection->after &&
@@ -141,7 +137,7 @@ bool BadiAddon::revisionChord(Binding &binding) {
             cycledSelection.language == selection->language) {
             mode = cycledMode;
         }
-        binding.revisionCycle.reset();
+        binding.revision.cycle.reset();
     }
     debug_.record("revision", app, mode + "_requested", selection->selected.size());
     startRevision(binding, std::move(*selection), mode);
@@ -149,20 +145,22 @@ bool BadiAddon::revisionChord(Binding &binding) {
 }
 
 void BadiAddon::startRevision(Binding &binding, SelectionWindow selection, std::string mode) {
-    binding.zenCommit.clear();
-    clearOwnedPanel(binding);
+    binding.observation.zenCommit.clear();
+    binding.typeThrough.reset();
+    clearAllUi(binding);
     binding.state.clearRevision();
     ensureBroker();
-    binding.revisionWaiting = std::make_pair(std::move(selection), std::move(mode));
-    binding.revisionRetries = 0;
-    showRevisionNotice(binding, waitingNotice(binding.revisionWaiting->second));
+    binding.revision.waiting = std::make_pair(std::move(selection), std::move(mode));
+    binding.revision.retries = 0;
+    binding.revision.retryStep = RevisionRetryStep::None;
+    showRevisionNotice(binding, waitingNotice(binding.revision.waiting->second));
     // A field Badi already holds for this selection goes on at once; any
     // other is bound through the observer, or the manual contract.
     if (binding.observed() && binding.broker.opened && binding.broker.policyAllowed &&
-        binding.observedFocus.value("selection_count", Json()) == 1) {
+        binding.observation.focus.value("selection_count", Json()) == 1) {
         return continueRevision(binding);
     }
-    if (!binding.unnamedIbus && !nativeObservationAvailable(binding.state.appId())) {
+    if (!binding.observation.unnamedIbus && !nativeObservationAvailable(binding.state.appId())) {
         return revisionByManualContract(binding);
     }
     inspectForRevision(binding);
@@ -172,37 +170,47 @@ void BadiAddon::startRevision(Binding &binding, SelectionWindow selection, std::
 // may be free, within the request's retry budget. One timer per binding is
 // re-armed in place: replacing it from its own callback would destroy the
 // closure that is running.
-bool BadiAddon::retryRevision(Binding &binding, void (BadiAddon::*step)(Binding &)) {
-    if (binding.revisionRetries++ >= kMaxRevisionRetries) return false;
-    binding.revisionStep = step;
-    if (!binding.revisionTimer) {
-        binding.revisionTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
+bool BadiAddon::retryRevision(Binding &binding, RevisionRetryStep step) {
+    if (binding.revision.retries++ >= kMaxRevisionRetries) return false;
+    binding.revision.retryStep = step;
+    if (!binding.revision.retryTimer) {
+        binding.revision.retryTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
             [this, context = binding.inputContext](::fcitx::EventSourceTime *, std::uint64_t) {
-                if (auto *current = bindingFor(*context); current && current->revisionWaiting && current->revisionStep)
-                    (this->*current->revisionStep)(*current);
+                auto *current = bindingFor(*context);
+                if (!current || !current->revision.waiting) return true;
+                switch (current->revision.retryStep) {
+                case RevisionRetryStep::None:
+                    break;
+                case RevisionRetryStep::Inspect:
+                    inspectForRevision(*current);
+                    break;
+                case RevisionRetryStep::Continue:
+                    continueRevision(*current);
+                    break;
+                }
                 return true;
             });
     }
-    binding.revisionTimer->setNextInterval(kRevisionRetryUs);
-    binding.revisionTimer->setOneShot();
+    binding.revision.retryTimer->setNextInterval(kRevisionRetryUs);
+    binding.revision.retryTimer->setOneShot();
     return true;
 }
 
 void BadiAddon::inspectForRevision(Binding &binding) {
     if (accessibility_->pending()) {
-        if (retryRevision(binding, &BadiAddon::inspectForRevision)) return;
+        if (retryRevision(binding, RevisionRetryStep::Inspect)) return;
         return endRevision(binding, notice::kObserverUnavailable, "observer_busy");
     }
     // The observer owns its reply callbacks and may run them after the input
     // context is gone, so they find the binding by session, never by pointer.
     const auto session = binding.state.coordinates().sessionId;
-    const auto generation = ++binding.observationGeneration;
-    const auto request = binding.unnamedIbus ? unnamedIbusInspectRequest(true)
-                                             : revisionInspectRequest(binding.state.appId());
+    const auto generation = ++binding.observation.generation;
+    const auto request = binding.observation.unnamedIbus ? unnamedIbusInspectRequest(true)
+                                                         : revisionInspectRequest(binding.state.appId());
     const bool sent = accessibility_->request(request,
         [this, session, generation](const Json &reply) {
             auto *current = bindingFor(session);
-            if (current && current->revisionWaiting && current->observationGeneration == generation)
+            if (current && current->revision.waiting && current->observation.generation == generation)
                 revisionInspected(*current, reply);
         });
     if (!sent) endRevision(binding, notice::kObserverUnavailable, "observer_unavailable");
@@ -212,7 +220,7 @@ void BadiAddon::revisionInspected(Binding &binding, const Json &reply) {
     std::string app = binding.state.appId();
     std::optional<NativeEditTarget> target;
     if (observerAnswered(reply)) {
-        if (binding.unnamedIbus) {
+        if (binding.observation.unnamedIbus) {
             if (const auto resolved = unnamedIbusEditTarget(reply["focus"], true)) {
                 app = resolved->first;
                 target = resolved->second;
@@ -225,30 +233,35 @@ void BadiAddon::revisionInspected(Binding &binding, const Json &reply) {
         // A native exact field the observer cannot read is still the user's
         // explicit request through the manual contract; IME-parity and
         // unnamed-IBus contexts have none.
-        if (!binding.unnamedIbus && classifyNativeApp(app) == NativeAppClass::NativeExact)
+        if (!binding.observation.unnamedIbus && classifyNativeApp(app) == NativeAppClass::NativeExact)
             return revisionByManualContract(binding);
-        if (binding.unnamedIbus && (binding.observed() || !binding.state.appId().empty()))
-            retireObservedField(binding);
-        if (binding.unnamedIbus && reply.value("error", Json()) == "unsupported_app")
+        if (binding.observation.unnamedIbus && (binding.observed() || !binding.state.appId().empty()))
+            retire(binding, RetireReason::ObservedFieldChanged);
+        if (binding.observation.unnamedIbus && reply.value("error", Json()) == "unsupported_app")
             return endRevision(binding, notice::kUnavailableApp, "unidentified_app");
         return endRevision(binding, notice::kRevisionSelection, "observer_field_denied");
     }
-    auto waiting = std::move(*binding.revisionWaiting);
+    auto waiting = std::move(*binding.revision.waiting);
     bindObservedField(binding, reply["focus"], *target, app);
     if (!binding.state.editingAvailable()) return endRevision(binding, notice::kUnavailableApp, "no_edit_path");
     // Binding opened a new field session; the selection waits for its policy.
     waiting.first.identityKnown = true;
-    binding.revisionWaiting = std::move(waiting);
-    showRevisionNotice(binding, waitingNotice(binding.revisionWaiting->second));
+    binding.revision.waiting = std::move(waiting);
+    showRevisionNotice(binding, waitingNotice(binding.revision.waiting->second));
     if (binding.broker.policyKnown) continueRevision(binding);
 }
 
 // An unobserved native field: the unknown-identity explicit contract.
 void BadiAddon::revisionByManualContract(Binding &binding) {
-    if (binding.unnamedIbus) return endRevision(binding, notice::kRevisionSelection, "observer_field_denied");
-    if (binding.observed()) retireObservedField(binding);
-    binding.revisionWaiting->first.identityKnown = false;
-    showRevisionNotice(binding, waitingNotice(binding.revisionWaiting->second));
+    if (binding.observation.unnamedIbus) return endRevision(binding, notice::kRevisionSelection, "observer_field_denied");
+    if (binding.observed()) {
+        auto waiting = std::move(*binding.revision.waiting);
+        retire(binding, RetireReason::ObservedFieldChanged);
+        if (!binding.state.focused()) return endRevision(binding, notice::kRequestFailed, "session_unavailable");
+        binding.revision.waiting = std::move(waiting);
+    }
+    binding.revision.waiting->first.identityKnown = false;
+    showRevisionNotice(binding, waitingNotice(binding.revision.waiting->second));
     if (!binding.broker.policyKnown) {
         queryPolicy(binding);
         return;
@@ -259,7 +272,7 @@ void BadiAddon::revisionByManualContract(Binding &binding) {
 // Policy is known for the field: open its session, confirm the selection
 // with the observer when it holds the field, and ask.
 void BadiAddon::continueRevision(Binding &binding) {
-    if (!binding.revisionWaiting) return;
+    if (!binding.revision.waiting) return;
     if (!binding.broker.policyAllowed) {
         return endRevision(binding, binding.broker.snoozed ? notice::kSnoozed : notice::kDisabled, "app_disabled");
     }
@@ -267,15 +280,15 @@ void BadiAddon::continueRevision(Binding &binding) {
                                            "session_unavailable");
     if (!binding.observed()) return sendRevision(binding, std::nullopt);
     if (accessibility_->pending()) {
-        if (retryRevision(binding, &BadiAddon::continueRevision)) return;
+        if (retryRevision(binding, RevisionRetryStep::Continue)) return;
         return endRevision(binding, notice::kObserverUnavailable, "observer_busy");
     }
     const auto session = binding.state.coordinates().sessionId;
-    const auto generation = binding.observationGeneration;
-    const bool sent = accessibility_->request(selectionSnapshotRequest(binding.observedFocus),
-        [this, session, generation, focus = binding.observedFocus](const Json &reply) {
+    const auto generation = binding.observation.generation;
+    const bool sent = accessibility_->request(selectionSnapshotRequest(binding.observation.focus),
+        [this, session, generation, focus = binding.observation.focus](const Json &reply) {
             auto *current = bindingFor(session);
-            if (!current || !current->revisionWaiting || current->observationGeneration != generation) return;
+            if (!current || !current->revision.waiting || current->observation.generation != generation) return;
             if (!observerAnswered(reply) || !sameSelectedField(focus, reply["focus"]))
                 return endRevision(*current, notice::kRevisionSelection, "observer_snapshot_denied");
             sendRevision(*current, reply["focus"]);
@@ -284,8 +297,8 @@ void BadiAddon::continueRevision(Binding &binding) {
 }
 
 void BadiAddon::sendRevision(Binding &binding, const std::optional<Json> &observed) {
-    auto [selection, mode] = std::move(*binding.revisionWaiting);
-    binding.revisionWaiting.reset();
+    auto [selection, mode] = std::move(*binding.revision.waiting);
+    binding.revision.waiting.reset();
     const auto &app = binding.state.appId();
     // The selection is still exactly the one asked about, and the observer
     // reads the same field text around it.
@@ -296,7 +309,7 @@ void BadiAddon::sendRevision(Binding &binding, const std::optional<Json> &observ
     if (observed && !observerAgreesSelection(*observed, selection)) {
         return endRevision(binding, notice::kRevisionSelection, "observer_selection_mismatch");
     }
-    if (observed) binding.observedFocus = *observed;
+    if (observed) binding.observation.focus = *observed;
     const auto update = binding.state.requestRevision(std::move(selection), std::move(mode));
     if (!update || !transport_.requestRevision(*update)) {
         return endRevision(binding, notice::kRequestFailed, "request_failed");
@@ -308,9 +321,9 @@ void BadiAddon::sendRevision(Binding &binding, const std::optional<Json> &observ
 
 // Ends a revision before the broker had it: say why, if the user should know.
 void BadiAddon::endRevision(Binding &binding, std::string_view message, std::string_view reason) {
-    binding.revisionWaiting.reset();
-    if (binding.revisionTimer) binding.revisionTimer->setEnabled(false);
+    binding.observation.zenCommit.clear();
     binding.state.clearRevision();
+    clearRevisionUi(binding);
     debug_.record("revision_blocked", binding.state.appId(), reason);
     showNotice(binding, message);
 }
@@ -328,10 +341,10 @@ void BadiAddon::onRevision(Revision revision) {
     }
     showRevisionCandidate(*binding, revision);
     const auto now = transport_.nowMs();
-    binding->expiryTimer = oneShot((revision.expiresAtMs > now ? revision.expiresAtMs - now : 0) * 1000,
+    binding->revision.expiryTimer = oneShot((revision.expiresAtMs > now ? revision.expiresAtMs - now : 0) * 1000,
         [this, coordinates = revision.coordinates, id = revision.revisionId] {
             auto *current = bindingFor(coordinates.sessionId);
-            if (current && current->state.clearRevisionIf(coordinates, id)) clearOwnedPanel(*current);
+            if (current && current->state.clearRevisionIf(coordinates, id)) clearRevisionUi(*current);
         });
     debug_.record("revision", binding->state.appId(), "revision_shown", revision.text.size());
     debug_.trace("revision shown", binding->state.appId(), {{"mode", revision.mode}, {"bytes", revision.text.size()}},
@@ -353,28 +366,39 @@ void BadiAddon::showRevisionCandidate(Binding &binding, const Revision &revision
             }));
     }
     list->setGlobalCursorIndex(-1);
+    clearSuggestionUi(binding);
+    clearNotice(binding);
+    hidePreview();
+    binding.panel.overlayOwned = false;
     auto &panel = binding.inputContext->inputPanel();
     // The candidate list replaces the waiting notice in place.
-    if (binding.revisionNoticeTimer) binding.revisionNoticeTimer->setEnabled(false);
-    binding.ownedAuxiliary = revisionHelp(revision.mode, revision.original);
-    panel.setAuxUp(::fcitx::Text(binding.ownedAuxiliary));
+    if (binding.revision.noticeTimer) binding.revision.noticeTimer->setEnabled(false);
+    binding.panel.owner = PanelOwner::Revision;
+    binding.panel.auxiliary = revisionHelp(revision.mode, revision.original);
+    panel.setAuxUp(::fcitx::Text(binding.panel.auxiliary));
     panel.setCandidateList(std::move(list));
-    binding.ownedCandidates = panel.candidateList();
+    binding.panel.candidates = panel.candidateList();
     binding.inputContext->updateUserInterface(::fcitx::UserInterfaceComponent::InputPanel);
 }
 
 // The waiting notice stays until the answer, unlike a timed notice.
 void BadiAddon::showRevisionNotice(Binding &binding, std::string_view message) {
     if (!binding.inputContext->hasFocus() || hasForeignImeUi(observePanel(binding))) return;
+    clearSuggestionUi(binding);
+    clearNotice(binding);
+    hidePreview();
+    binding.panel.overlayOwned = false;
     auto &panel = binding.inputContext->inputPanel();
-    if (binding.ownedCandidates && panel.candidateList().get() == binding.ownedCandidates.get())
+    if (binding.panel.candidates && panel.candidateList().get() == binding.panel.candidates.get())
         panel.setCandidateList(nullptr);
-    binding.ownedCandidates.reset();
-    binding.ownedAuxiliary = message;
-    panel.setAuxUp(::fcitx::Text(binding.ownedAuxiliary));
-    binding.revisionNoticeTimer = oneShot(kRevisionWaitUs, [this, context = binding.inputContext] {
+    binding.panel.candidates.reset();
+    binding.panel.owner = PanelOwner::Revision;
+    binding.panel.auxiliary = message;
+    panel.setAuxUp(::fcitx::Text(binding.panel.auxiliary));
+    if (binding.revision.expiryTimer) binding.revision.expiryTimer->setEnabled(false);
+    binding.revision.noticeTimer = oneShot(kRevisionWaitUs, [this, context = binding.inputContext] {
         auto *current = bindingFor(*context);
-        if (current && revisionActive(*current) && !current->state.visibleRevision()) cancelRevision(*current);
+        if (current && current->revisionActive() && !current->state.visibleRevision()) cancelRevision(*current);
     });
     binding.inputContext->updateUserInterface(::fcitx::UserInterfaceComponent::InputPanel);
 }
@@ -392,9 +416,9 @@ void BadiAddon::onRevisionClear(const RevisionClear &clear) {
         }
     }
     if (!binding->state.clearRevisionIf(clear.coordinates, clear.revisionId)) return;
-    binding->revisionCycle = std::move(cycle);
+    binding->revision.cycle = std::move(cycle);
     debug_.record("revision_clear", binding->state.appId(), clear.reason);
-    clearOwnedPanel(*binding);
+    clearRevisionUi(*binding);
     if (const auto text = revisionClearNotice(clear.reason)) showNotice(*binding, *text);
 }
 
@@ -412,12 +436,8 @@ void BadiAddon::acceptRevision(Binding &binding) {
 // Escape, or any key that edits the field: tell the broker and clear Badi's
 // panel. The key itself keeps its meaning.
 void BadiAddon::cancelRevision(Binding &binding) {
-    binding.zenCommit.clear();
-    binding.revisionCycle.reset();
-    if (binding.revisionWaiting) {
-        binding.revisionWaiting.reset();
-        if (binding.revisionTimer) binding.revisionTimer->setEnabled(false);
-    }
+    binding.observation.zenCommit.clear();
+    binding.revision.cycle.reset();
     if (binding.state.visibleRevision() && !binding.state.revisionAcceptancePending()) {
         if (const auto request = binding.state.requestRevisionDismissal(transport_.nowMs(), observePanel(binding)))
             transport_.requestDismissal(*request);
@@ -425,30 +445,41 @@ void BadiAddon::cancelRevision(Binding &binding) {
         transport_.cancelRequest(request->coordinates);
     }
     binding.state.clearRevision();
-    clearOwnedPanel(binding);
+    clearRevisionUi(binding);
 }
 
 // Keys while a revision waits or shows. True when the key was Badi's.
 bool BadiAddon::revisionKey(::fcitx::KeyEvent &event, Binding &binding) {
-    const auto key = event.key().normalize();
-    if (key.isModifier() || key.check(invokeChord())) return key.isModifier();
-    const bool unclaimed = !event.filtered() && !event.accepted();
-    if (key.check(::fcitx::Key(FcitxKey_Tab)) && unclaimed) {
-        // Tab applies a shown revision; one that is still coming is waited
-        // for, rather than letting Tab replace the selection.
-        if (binding.state.visibleRevision() && hasOwnedCandidate(observePanel(binding))) acceptRevision(binding);
+    const auto panel = observePanel(binding);
+    switch (classifyRevisionPreKey(event.key(), !event.filtered() && !event.accepted(),
+                                   hasForeignImeUi(panel))) {
+    case RevisionPreKey::YieldForeignIme:
+        debug_.record("revision", binding.state.appId(), "foreign_ime_active");
+        cancelRevision(binding);
+        return false;
+    case RevisionPreKey::KeepForModifier:
+    case RevisionPreKey::PassInvokeToPostInput:
+        return true;
+    case RevisionPreKey::FilterInvokeRepeat:
         event.filterAndAccept();
         return true;
-    }
-    if (key.check(::fcitx::Key(FcitxKey_Escape))) {
+    case RevisionPreKey::AcceptTab:
+        // Tab applies a shown revision; one that is still coming is waited
+        // for, rather than letting Tab replace the selection.
+        if (binding.state.visibleRevision() && hasOwnedCandidate(panel)) acceptRevision(binding);
+        event.filterAndAccept();
+        return true;
+    case RevisionPreKey::DismissEscape:
         debug_.record("revision", binding.state.appId(), "revision_dismissed");
         cancelRevision(binding);
         event.filterAndAccept();
         return true;
+    case RevisionPreKey::RetireByKey:
+        // Typing replaces the selection, as it would without Badi.
+        debug_.record("revision", binding.state.appId(), "revision_retired_by_key");
+        cancelRevision(binding);
+        return false;
     }
-    // Typing replaces the selection, as it would without Badi.
-    debug_.record("revision", binding.state.appId(), "revision_retired_by_key");
-    cancelRevision(binding);
     return false;
 }
 
@@ -473,8 +504,8 @@ bool BadiAddon::revisionCommit(const CommitPrepare &prepare) {
 // grant's deadline.
 void BadiAddon::corroborateRevisionCommit(Binding &binding, const CommitPrepare &prepare, std::uint64_t deadline) {
     if (accessibility_->pending()) {
-        if (monotonicUs() >= deadline) return refuseCommit(prepare, &binding);
-        binding.commitTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
+        if (monotonicUs() >= deadline) return refuseRevisionCommit(prepare, &binding);
+        binding.revision.commitTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
             [this, prepare, deadline](::fcitx::EventSourceTime *timer, std::uint64_t) {
                 if (accessibility_->pending() && monotonicUs() < deadline) {
                     timer->setNextInterval(kRevisionRetryUs);
@@ -487,24 +518,24 @@ void BadiAddon::corroborateRevisionCommit(Binding &binding, const CommitPrepare 
                 else reportStale(prepare);
                 return true;
             });
-        binding.commitTimer->setNextInterval(kRevisionRetryUs);
-        binding.commitTimer->setOneShot();
+        binding.revision.commitTimer->setNextInterval(kRevisionRetryUs);
+        binding.revision.commitTimer->setOneShot();
         return;
     }
-    const bool sent = accessibility_->request(selectionSnapshotRequest(binding.observedFocus),
-        [this, prepare, focus = binding.observedFocus, generation = binding.observationGeneration](const Json &reply) {
+    const bool sent = accessibility_->request(selectionSnapshotRequest(binding.observation.focus),
+        [this, prepare, focus = binding.observation.focus, generation = binding.observation.generation](const Json &reply) {
             auto *current = bindingFor(prepare.coordinates.sessionId);
             if (!current) return reportStale(prepare);
             const auto &request = current->state.revisionRequest();
-            if (current->observationGeneration != generation || !request || !observerAnswered(reply) ||
+            if (current->observation.generation != generation || !request || !observerAnswered(reply) ||
                 !sameSelectedField(focus, reply["focus"]) ||
                 !observerAgreesSelection(reply["focus"], request->selection)) {
                 debug_.record("commit_blocked", current->state.appId(), "observer_dispatch_mismatch");
-                return refuseCommit(prepare, current);
+                return refuseRevisionCommit(prepare, current);
             }
             applyRevision(*current, prepare);
         });
-    if (!sent) refuseCommit(prepare, &binding);
+    if (!sent) refuseRevisionCommit(prepare, &binding);
 }
 
 void BadiAddon::applyRevision(Binding &binding, const CommitPrepare &prepare) {
@@ -513,49 +544,57 @@ void BadiAddon::applyRevision(Binding &binding, const CommitPrepare &prepare) {
     if (!request || !binding.inputContext->hasFocus() || !current ||
         !sameSelection(*current, request->selection, true)) {
         debug_.record("commit_blocked", binding.state.appId(), "selection_changed");
-        return refuseCommit(prepare, &binding);
+        return refuseRevisionCommit(prepare, &binding);
     }
     const auto selection = request->selection;
     const auto dispatch = binding.state.authorizeRevisionCommit(prepare, transport_.nowMs(), observePanel(binding));
-    if (!dispatch) return refuseCommit(prepare, &binding);
-    clearOwnedPanel(binding);
+    if (!dispatch) return refuseRevisionCommit(prepare, &binding);
+    clearRevisionUi(binding);
     // One commit over the selection, as typing over it would (ADR 0012).
     // Fcitx cannot see the client apply it: dispatched, never applied.
     binding.inputContext->commitString(dispatch->text);
     debug_.record("commit", binding.state.appId(), "revision_dispatched_unverified");
     transport_.reportCommit(dispatch->coordinates, dispatch->controlId, dispatch->suggestionId,
                             "dispatched-unverified");
-    binding.revisionExpected = std::make_pair(selection, dispatch->text);
-    binding.revisionReadBackTimer = oneShot(kRevisionReadBackUs, [this, context = binding.inputContext] {
+    binding.readBack.revision = std::make_pair(selection, dispatch->text);
+    binding.readBack.revisionTimer = oneShot(kRevisionReadBackUs, [this, context = binding.inputContext] {
         auto *current = bindingFor(*context);
-        if (!current || !current->revisionExpected) return;
-        current->revisionExpected.reset();
+        if (!current || !current->readBack.revision) return;
+        current->readBack.revision.reset();
         debug_.record("commit", current->state.appId(), "revision_unconfirmed");
         if (current->inputContext->hasFocus()) showNotice(*current, notice::kRevisionUnconfirmed);
     });
     readBackRevision(binding);
 }
 
+void BadiAddon::refuseRevisionCommit(const CommitPrepare &prepare, Binding *binding) {
+    if (binding) {
+        binding->observation.zenCommit.clear();
+        binding->state.clearRevision();
+        clearRevisionUi(*binding);
+    }
+    reportStale(prepare);
+}
+
 void BadiAddon::readBackRevision(Binding &binding) {
-    if (!binding.revisionExpected) return;
+    if (!binding.readBack.revision) return;
     const auto &surrounding = binding.inputContext->surroundingText();
     if (!surrounding.isValid()) return;
     const auto window = captureContextWindow(surrounding.text(), surrounding.cursor(), surrounding.anchor(), false,
                                              "en");
-    const auto &[selection, revised] = *binding.revisionExpected;
+    const auto &[selection, revised] = *binding.readBack.revision;
     if (!window || !revisionLanded(window->before, window->after, selection, revised)) return;
-    binding.revisionExpected.reset();
-    if (binding.revisionReadBackTimer) binding.revisionReadBackTimer->setEnabled(false);
+    binding.readBack.clearRevision();
     debug_.record("commit", binding.state.appId(), "revision_confirmed");
 }
 
 // A field change while a revision waits or shows: the same selection keeps
 // it; anything else retires it.
 bool BadiAddon::revisionSurvives(Binding &binding) {
-    if (!revisionActive(binding)) return false;
+    if (!binding.revisionActive()) return false;
     const auto current = currentSelection(binding);
-    const auto *selection = binding.revisionWaiting ? &binding.revisionWaiting->first
-                                                    : &binding.state.revisionRequest()->selection;
+    const auto *selection = binding.revision.waiting ? &binding.revision.waiting->first
+                                                     : &binding.state.revisionRequest()->selection;
     if (current && sameSelection(*current, *selection, false)) return true;
     debug_.record("revision", binding.state.appId(), "revision_retired_by_edit");
     cancelRevision(binding);

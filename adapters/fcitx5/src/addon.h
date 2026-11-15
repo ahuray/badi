@@ -1,12 +1,13 @@
 #pragma once
 
 // The Fcitx addon instance: one binding per input context, the broker
-// transport and the accessibility observer. Method bodies live in
-// addon.cpp (lifecycle), addon_keys.cpp, addon_observer.cpp,
-// addon_broker.cpp (broker events and display), addon_session.cpp and
-// addon_revision.cpp (selection revision).
+// transport and the accessibility observer. Per-context state and retirement
+// live in binding.{h,cpp}; method bodies live in addon.cpp (lifecycle),
+// addon_keys.cpp, addon_observer.cpp, addon_broker.cpp (broker events and
+// display), addon_session.cpp and addon_revision.cpp (selection revision).
 
 #include "accessibility.h"
+#include "binding.h"
 #include "debug.h"
 #include "observation.h"
 #include "sanitizer.h"
@@ -40,122 +41,7 @@ public:
     ~BadiAddon() override;
 
 private:
-    struct Binding {
-        ::fcitx::InputContext *inputContext = nullptr;
-        SessionState state;
-        BrokerSession broker;
-        SurroundingFreshness surroundingFreshness;
-        SurroundingEcho surroundingEcho;
-        std::size_t surroundingDigest = 0;
-        // Badi's own panel content, and the timer that retires it.
-        std::shared_ptr<::fcitx::CandidateList> ownedCandidates;
-        std::string ownedAuxiliary;
-        bool overlayOwned = false;
-        std::unique_ptr<::fcitx::EventSourceTime> expiryTimer;
-        std::unique_ptr<::fcitx::EventSourceTime> commitTimer;
-        // A suggestion waiting for the observer before display.
-        std::optional<std::string> pendingSuggestion;
-        // The observed field. Replies of an older generation are ignored.
-        Json observedFocus;
-        // Zen's post-commit expectation while Fcitx's surrounding text stays at
-        // the pre-commit snapshot (ADR 0003).
-        ZenPendingCommit zenCommit;
-        // Identity for a field visit, used only to preserve broker quieting.
-        // Observation epochs and editing sessions still retire on every
-        // invalidation; this contains no text or reusable editing grant.
-        Json fieldVisit;
-        std::string fieldVisitId;
-        // The observer's window text for this field visit (ADR 0010): asked
-        // for once per visit while the broker says context_words.
-        std::string windowVisitId;
-        std::string windowText;
-        std::uint64_t observationGeneration = 0;
-        bool observationExplicit = false;
-        // The published request a broker clear would answer was explicit:
-        // only then may a miss show its notice. Automatic misses (a typed
-        // terminal line above all) stay quiet.
-        bool requestExplicit = false;
-        bool waitingForForeignUi = false;
-        InspectionSchedule inspection;
-        std::unique_ptr<::fcitx::EventSourceTime> observeTimer;
-        // Escape declined this context; it is not requested automatically again.
-        std::optional<ContextWindow> dismissedContext;
-        // The last key typed the suggestion's next characters, or a word was
-        // accepted: the broker may carry the remainder at once (ADR 0004), so
-        // the next inspection skips most of the typing pause.
-        bool typedThrough = false;
-        // The suggestion text not yet typed, until it is shown again: keys
-        // typed faster than the remainder returns still count as type-through.
-        std::string typeThroughRest;
-        // The field text the suggestion was shown for, plus the characters
-        // typed since. A snapshot from before those characters land must not
-        // ask the model; the broker can carry the remainder only once they
-        // are in the field.
-        std::string typeThroughBase;
-        std::string typeThroughTyped;
-        unsigned int typeThroughWaits = 0;
-        // The pending rest of a word acceptance returns on its own (it was
-        // accepted on an observed field or a typed line), so one Tab may be
-        // held for it; see tabMayHoldForRest.
-        bool typeThroughAutomatic = false;
-        // At most one Tab held for that rest, and the timer that drops it.
-        bool heldTab = false;
-        std::string heldTabRest;
-        std::unique_ptr<::fcitx::EventSourceTime> heldTabTimer;
-        // Ctrl+Shift+Tab presses that reach the app as plain Tabs once the
-        // chord's modifiers are up, and the timer that sends them.
-        unsigned int literalTabs = 0;
-        std::unique_ptr<::fcitx::EventSourceTime> literalTabTimer;
-        // The chord's modifiers were state, not keys: no modifier release
-        // will come, so the chord key's own release sends the Tab.
-        bool literalTabOnKeyRelease = false;
-        // The chord's Tab key in the sending keyboard's keymap, so the
-        // frontend need not look Tab up under modifiers still in effect.
-        int literalTabCode = 0;
-        // Show a suggestion that arrives during the typing pause only after
-        // that pause, and only if this keystroke is still the latest.
-        std::uint64_t showAfterUs = 0;
-        std::optional<Suggestion> heldSuggestion;
-        std::unique_ptr<::fcitx::EventSourceTime> holdTimer;
-        // A terminal's typed line and its typing-pause request.
-        TypedLine typedLine;
-        std::unique_ptr<::fcitx::EventSourceTime> lineTimer;
-        // An IME-parity correction's expected text before the caret, until
-        // the app's own text confirms it (ADR 0011), and the timer that
-        // gives up on it.
-        std::optional<std::string> correctionExpected;
-        std::unique_ptr<::fcitx::EventSourceTime> correctionTimer;
-        // An explicit revision on its way (ADR 0012): the selection and mode
-        // waiting for the observer's field, its policy or its session.
-        std::optional<std::pair<SelectionWindow, std::string>> revisionWaiting;
-        // The mode the chord asks next for this exact selection after a
-        // mode found nothing to change, so the cycle reaches synonyms
-        // for selections that are already correct (ADR 0013). An edit,
-        // Escape or a different selection starts over.
-        std::optional<std::pair<SelectionWindow, std::string>> revisionCycle;
-        // Retries of that request's observer steps while the observer is
-        // busy, the step to retry, and the timer that runs it.
-        unsigned int revisionRetries = 0;
-        void (BadiAddon::*revisionStep)(Binding &) = nullptr;
-        std::unique_ptr<::fcitx::EventSourceTime> revisionTimer;
-        std::unique_ptr<::fcitx::EventSourceTime> revisionNoticeTimer;
-        // An unnamed IBus context (program() empty, frontendName() == "ibus"):
-        // only an observed field verified by the GNOME observer may open here
-        // (ADR 0017); Manual and TypedLine never activate.
-        bool unnamedIbus = false;
-        // A typed key arrived before async inspect bound the field; consumed
-        // once bindObservedField confirms an editable field.
-        bool pendingBrokerStart = false;
-        // An applied revision's selection and text, until the field reads so.
-        std::optional<std::pair<SelectionWindow, std::string>> revisionExpected;
-        std::unique_ptr<::fcitx::EventSourceTime> revisionReadBackTimer;
-
-        [[nodiscard]] bool observed() const { return !observedFocus.is_null(); }
-        [[nodiscard]] bool observationCandidate() const {
-            return unnamedIbus ? (state.appId().empty() || unnamedIbusObservedApp(state.appId()))
-                               : nativeObservationAvailable(state.appId());
-        }
-    };
+    using Binding = InputBinding;
 
     static WireCallbacks callbacksFor(BadiAddon *addon);
     void watchInputContexts();
@@ -175,8 +61,6 @@ private:
     // Keys.
     void preKeyEvent(::fcitx::KeyEvent &event);
     void holdTab(Binding &binding);
-    void dropHeldTab(Binding &binding);
-    void clearTypeThrough(Binding &binding);
     void literalTab(Binding &binding, int code);
     void literalTabRelease(::fcitx::KeyEvent &event);
     void sendLiteralTabs(Binding &binding);
@@ -204,8 +88,6 @@ private:
     void denyEditing(Binding &binding);
     void observerUnavailable(Binding &binding, const Json &error = nullptr);
     void observerInvalidated(const Json &event);
-    void retireObservedField(Binding &binding);
-    void stopObserving(Binding &binding);
     void requestObservedContext(Binding &binding, bool rediscover = false);
     void publishObservedContext(Binding &binding, const Json &focus, const Json &reply, bool caretMayMove,
                                 bool windowAsked);
@@ -236,11 +118,10 @@ private:
     void onDisconnected();
 
     // Explicit revision of one selection (addon_revision.cpp).
-    bool revisionActive(const Binding &binding) const;
     std::optional<SelectionWindow> currentSelection(const Binding &binding) const;
     bool revisionChord(Binding &binding);
     void startRevision(Binding &binding, SelectionWindow selection, std::string mode);
-    bool retryRevision(Binding &binding, void (BadiAddon::*step)(Binding &));
+    bool retryRevision(Binding &binding, RevisionRetryStep step);
     void inspectForRevision(Binding &binding);
     void revisionInspected(Binding &binding, const Json &reply);
     void revisionByManualContract(Binding &binding);
@@ -257,10 +138,11 @@ private:
     bool revisionCommit(const CommitPrepare &prepare);
     void corroborateRevisionCommit(Binding &binding, const CommitPrepare &prepare, std::uint64_t deadline);
     void applyRevision(Binding &binding, const CommitPrepare &prepare);
+    void refuseRevisionCommit(const CommitPrepare &prepare, Binding *binding);
     void readBackRevision(Binding &binding);
     bool revisionSurvives(Binding &binding);
 
-    // The broker session.
+    // The broker session, panel ownership and unified retirement.
     bool open(Binding &binding);
     // Asks systemd to start the model, then attaches. Login and focus only
     // attach, so a down model stays down until somebody types or asks.
@@ -268,6 +150,7 @@ private:
     void queryPolicy(Binding &binding);
     std::optional<Json> brokerTarget(const Binding &binding) const;
     void closeBrokerSession(Binding &binding);
+    void retire(Binding &binding, RetireReason reason);
     PanelObservation observePanel(const Binding &binding) const;
     bool foreignImeActive(const Binding &binding) const;
     RequestFacts requestFacts(const Binding &binding) const;
@@ -281,11 +164,12 @@ private:
     void showNotice(Binding &binding, std::string_view message);
     void expectCorrection(Binding &binding, std::string expected);
     void readBackCorrection(Binding &binding);
-    void clearOwnedPanel(Binding &binding);
-    void removeOwnedPanel(Binding &binding);
+    void clearSuggestionUi(Binding &binding);
+    void clearNotice(Binding &binding);
+    void clearRevisionUi(Binding &binding);
+    void clearAllUi(Binding &binding);
     static std::optional<CaretRect> caretRect(const ::fcitx::InputContext &input);
     void hidePreview();
-    void cancelForInput(Binding &binding);
     std::unique_ptr<::fcitx::EventSourceTime> oneShot(std::uint64_t delayUs, std::function<void()> action);
 
     ::fcitx::Instance *instance_;

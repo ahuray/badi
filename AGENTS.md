@@ -118,7 +118,7 @@ Where code lives inside the larger components:
   `addon.cpp` (lifecycle and input-context events), `addon_keys.cpp`,
   `addon_observer.cpp`, `addon_broker.cpp` (broker events and display),
   `addon_session.cpp` and `addon_revision.cpp` (selection revision)
-  implement it over the tested core in `state`, `revision`,
+  implement it over the tested core in `binding`, `state`, `revision`,
   `observation`, `transport`, `accessibility`, `sanitizer` and `debug`.
 - **Observer** (`adapters/accessibility/`): `daemon.py` (the private
   Unix-socket service and AT-SPI events), `desktop.py` (active window, Omarchy lock and
