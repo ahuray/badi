@@ -12,6 +12,7 @@ class FakeBackend:
     def __init__(self):
         self.content = "Same text"
         self.reads = []
+        self.requested_apps = []
         self.geometry_requests = []
         self.caret_rects = []
         self.lock_checks = []
@@ -25,10 +26,11 @@ class FakeBackend:
                      "caret": 9, "total_chars": 9, "selection_count": 0}
 
     def metadata(self, app_id, geometry=False, check_lock=False, caret_rect=None):
+        self.requested_apps.append(app_id)
         self.caret_rects.append(caret_rect)
         self.geometry_requests.append(geometry)
         self.lock_checks.append(check_lock)
-        if app_id != self.meta["app_id"]:
+        if app_id is not None and app_id != self.meta["app_id"]:
             raise Denied("app_mismatch")
         return copy.deepcopy(self.meta)
 
@@ -145,6 +147,52 @@ class ContractTests(unittest.TestCase):
         self.assertEqual((focus["target"]["kind"], focus["target"]["app_id"]), ("browser", "brave-origin"))
         self.assertEqual(focus["target"]["origin"], {"scheme": "https", "host": "example.test"})
         self.assertEqual(focus["binding"]["app_id"], "brave-origin")
+
+    def test_unnamed_ibus_inspect_resolves_only_on_gnome_and_binds_the_focused_app(self):
+        hidden = []
+        self.observer.hide = lambda: hidden.append(True)
+        for bad in ({"schema": SCHEMA, "id": "1", "op": "inspect"},
+                    {"schema": SCHEMA, "id": "1", "op": "inspect", "app_id": "chromium", "frontend": "ibus"},
+                    *({"schema": SCHEMA, "id": "1", "op": "inspect", "frontend": value}
+                      for value in ("wayland", "dbus", "", True, 1))):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.observer.request(bad)["error"], "invalid_request")
+        self.assertEqual((self.backend.requested_apps, hidden), ([], []))
+
+        for desktop in (None, "hyprland", "kwin"):
+            self.observer.desktop = desktop
+            with self.subTest(desktop=desktop):
+                reply = self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "frontend": "ibus"})
+                self.assertEqual((reply["ok"], reply["error"]), (False, "unsupported_app"))
+        self.assertEqual(self.backend.requested_apps, [], "non-GNOME desktops never resolve an unnamed frontend")
+        self.assertEqual(len(hidden), 3)
+
+        self.observer.desktop = "gnome"
+        reply = self.observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "frontend": "ibus"})
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual((self.backend.requested_apps, self.backend.lock_checks, self.backend.reads), ([None], [True], []))
+        focus = reply["focus"]
+        self.assertEqual(focus["binding"]["app_id"], "chromium")
+        self.assertEqual(focus["target"], {"kind": "browser", "app_id": "chromium",
+                                           "target_id": focus["target"]["target_id"],
+                                           "origin": {"scheme": "https", "host": "example.test"}})
+        self.assertEqual(self.snapshot(focus)["focus"]["before"], "Same text")
+        self.backend.reads.clear()
+        self.backend.meta["app_id"] = "libreoffice"
+        self.assertEqual(self.snapshot(focus)["error"], "app_mismatch")
+        self.assertEqual(self.backend.reads, [])
+
+        self.backend.meta.update(app_id="libreoffice", browser=False, web=False, uri="", role="paragraph",
+                                 tag="", input_type="")
+        writer = self.observer.request({"schema": SCHEMA, "id": "2", "op": "inspect", "frontend": "ibus"})["focus"]
+        self.assertEqual(writer["binding"]["app_id"], "libreoffice")
+        self.assertEqual(writer["target"], {"kind": "desktop_application", "app_id": "libreoffice",
+                                            "target_id": writer["target"]["target_id"]})
+        self.backend.meta["selection_count"] = 1
+        selected = self.observer.request({"schema": SCHEMA, "id": "3", "op": "inspect", "frontend": "ibus",
+                                          "selection": True})
+        self.assertTrue(selected["ok"], selected)
+        self.assertEqual(selected["focus"]["binding"]["app_id"], "libreoffice")
 
     def test_only_inspect_checks_the_session_lock_and_later_reads_keep_its_epoch(self):
         focus = self.inspect()["focus"]

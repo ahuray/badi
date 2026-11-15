@@ -115,8 +115,12 @@ bool BadiAddon::revisionChord(Binding &binding) {
         return true;
     }
     if (revisionActive(binding)) return true;
-    const auto kind = classifyNativeApp(app);
-    if (kind == NativeAppClass::Terminal || kind == NativeAppClass::Unavailable) return false;
+    if (!binding.unnamedIbus) {
+        const auto kind = classifyNativeApp(app);
+        if (kind == NativeAppClass::Terminal || kind == NativeAppClass::Unavailable) return false;
+    } else if (!app.empty() && !unnamedIbusObservedApp(app)) {
+        return false;
+    }
     const auto &surrounding = binding.inputContext->surroundingText();
     if (!surrounding.isValid() || surrounding.cursor() == surrounding.anchor()) return false;
     if (hasForeignImeUi(observePanel(binding))) return false;
@@ -158,7 +162,9 @@ void BadiAddon::startRevision(Binding &binding, SelectionWindow selection, std::
         binding.observedFocus.value("selection_count", Json()) == 1) {
         return continueRevision(binding);
     }
-    if (!nativeObservationAvailable(binding.state.appId())) return revisionByManualContract(binding);
+    if (!binding.unnamedIbus && !nativeObservationAvailable(binding.state.appId())) {
+        return revisionByManualContract(binding);
+    }
     inspectForRevision(binding);
 }
 
@@ -191,7 +197,9 @@ void BadiAddon::inspectForRevision(Binding &binding) {
     // context is gone, so they find the binding by session, never by pointer.
     const auto session = binding.state.coordinates().sessionId;
     const auto generation = ++binding.observationGeneration;
-    const bool sent = accessibility_->request(revisionInspectRequest(binding.state.appId()),
+    const auto request = binding.unnamedIbus ? unnamedIbusInspectRequest(true)
+                                             : revisionInspectRequest(binding.state.appId());
+    const bool sent = accessibility_->request(request,
         [this, session, generation](const Json &reply) {
             auto *current = bindingFor(session);
             if (current && current->revisionWaiting && current->observationGeneration == generation)
@@ -201,16 +209,32 @@ void BadiAddon::inspectForRevision(Binding &binding) {
 }
 
 void BadiAddon::revisionInspected(Binding &binding, const Json &reply) {
-    const auto &app = binding.state.appId();
-    const auto target = observerAnswered(reply) ? revisionEditTarget(reply["focus"], app) : std::nullopt;
+    std::string app = binding.state.appId();
+    std::optional<NativeEditTarget> target;
+    if (observerAnswered(reply)) {
+        if (binding.unnamedIbus) {
+            if (const auto resolved = unnamedIbusEditTarget(reply["focus"], true)) {
+                app = resolved->first;
+                target = resolved->second;
+            }
+        } else {
+            target = revisionEditTarget(reply["focus"], app);
+        }
+    }
     if (!target) {
         // A native exact field the observer cannot read is still the user's
-        // explicit request through the manual contract; IME-parity has none.
-        if (classifyNativeApp(app) == NativeAppClass::NativeExact) return revisionByManualContract(binding);
+        // explicit request through the manual contract; IME-parity and
+        // unnamed-IBus contexts have none.
+        if (!binding.unnamedIbus && classifyNativeApp(app) == NativeAppClass::NativeExact)
+            return revisionByManualContract(binding);
+        if (binding.unnamedIbus && (binding.observed() || !binding.state.appId().empty()))
+            retireObservedField(binding);
+        if (binding.unnamedIbus && reply.value("error", Json()) == "unsupported_app")
+            return endRevision(binding, notice::kUnavailableApp, "unidentified_app");
         return endRevision(binding, notice::kRevisionSelection, "observer_field_denied");
     }
     auto waiting = std::move(*binding.revisionWaiting);
-    bindObservedField(binding, reply["focus"], *target);
+    bindObservedField(binding, reply["focus"], *target, app);
     if (!binding.state.editingAvailable()) return endRevision(binding, notice::kUnavailableApp, "no_edit_path");
     // Binding opened a new field session; the selection waits for its policy.
     waiting.first.identityKnown = true;
@@ -221,6 +245,7 @@ void BadiAddon::revisionInspected(Binding &binding, const Json &reply) {
 
 // An unobserved native field: the unknown-identity explicit contract.
 void BadiAddon::revisionByManualContract(Binding &binding) {
+    if (binding.unnamedIbus) return endRevision(binding, notice::kRevisionSelection, "observer_field_denied");
     if (binding.observed()) retireObservedField(binding);
     binding.revisionWaiting->first.identityKnown = false;
     showRevisionNotice(binding, waitingNotice(binding.revisionWaiting->second));

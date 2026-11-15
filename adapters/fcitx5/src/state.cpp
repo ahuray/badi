@@ -36,6 +36,10 @@ constexpr std::array<std::string_view, 6> kImeParityDesktopApps{"chatgpt", "code
 // id serves modules or fields the observer must tell apart (LibreOffice Calc
 // cells must keep Tab), so no manual path may exist.
 constexpr std::array<std::string_view, 1> kImeParityNativeApps{"libreoffice"};
+// Native-exact apps that also have an observer rule in daemon.py APPS;
+// tests/observer-identities.py keeps this list equal to the non-web,
+// non-observed-only rules there (ADR 0017).
+constexpr std::array<std::string_view, 2> kObservedNativeApps{"omawrite", "telegram"};
 // Terminals whose typed line and commitString were tried live.
 constexpr std::array<std::string_view, 2> kTerminalApps{"com.mitchellh.ghostty", "foot"};
 
@@ -193,6 +197,11 @@ bool nativeObservationAvailable(std::string_view appId) {
     return kind != NativeAppClass::Unavailable && kind != NativeAppClass::Terminal;
 }
 
+bool unnamedIbusObservedApp(std::string_view appId) {
+    return imeParityApp(appId) ||
+           std::find(kObservedNativeApps.begin(), kObservedNativeApps.end(), appId) != kObservedNativeApps.end();
+}
+
 bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
                             NativeEditPath path) {
     switch (classifyNativeApp(appId)) {
@@ -218,6 +227,7 @@ std::string_view focusReason(std::string_view appId) {
 }
 
 std::string_view editingUnavailableReason(std::string_view appId, bool fieldObserved) {
+    if (appId.empty()) return "unidentified_app";
     if (!imeParityApp(appId)) return "editor_transaction_unavailable";
     return fieldObserved ? "ime_parity_target_mismatch" : "ime_parity_unobserved";
 }
@@ -627,6 +637,29 @@ bool SessionState::focusIn(std::string sessionId, std::string targetId,
     return true;
 }
 
+bool SessionState::focusInUnnamed(std::string sessionId, std::string targetId, std::string fingerprintSalt) {
+    if (!validOpaqueId(targetId) || !validSessionId(sessionId) ||
+        fingerprintSalt.size() < 16 || !validOpaqueId(fingerprintSalt)) {
+        focusOut();
+        return false;
+    }
+    coordinates_.sessionId = std::move(sessionId);
+    targetId_ = std::move(targetId);
+    appId_.clear();
+    fingerprintSalt_ = std::move(fingerprintSalt);
+    editTarget_ = NativeEditTarget::Unsupported;
+    editPath_ = NativeEditPath::Observed;
+    coordinates_.focusEpoch =
+        coordinates_.focusEpoch >= kMaxSafeCounter ? 1 : coordinates_.focusEpoch + 1;
+    coordinates_.revision = 0;
+    coordinates_.fingerprint.clear();
+    focused_ = true;
+    lastContext_.reset();
+    clearSuggestion();
+    clearRevision();
+    return true;
+}
+
 void SessionState::focusOut() {
     focused_ = false;
     lastContext_.reset();
@@ -649,6 +682,11 @@ bool SessionState::retireObservation(std::string sessionId, std::string targetId
     const auto appId = appId_;
     return focusIn(std::move(sessionId), std::move(targetId), appId, std::move(fingerprintSalt),
                    NativeEditTarget::DesktopApplication, NativeEditPath::Manual);
+}
+
+bool SessionState::retireUnnamedObservation(std::string sessionId, std::string targetId,
+                                            std::string fingerprintSalt) {
+    return focusInUnnamed(std::move(sessionId), std::move(targetId), std::move(fingerprintSalt));
 }
 
 std::string sessionRequestId(std::string_view kind, const Coordinates &coordinates) {
@@ -693,7 +731,7 @@ SessionState::updateContext(ContextWindow context) {
     // IME-parity context is always corroborated by the observer; the unknown
     // identity manual contract is limited to native exact apps.
     // The paragraph-end normalization is the observed IME-parity rule.
-    if ((imeParityApp(appId_) && !context.identityKnown) ||
+    if (((imeParityApp(appId_) || editPath_ == NativeEditPath::Observed) && !context.identityKnown) ||
         (!context.paragraphEnd.empty() && (!imeParityApp(appId_) || !context.identityKnown ||
                                     editPath_ != NativeEditPath::Observed || !context.after.empty())) ||
         context.anchor != context.head ||
@@ -916,7 +954,8 @@ void SessionState::clearSuggestion() {
 std::optional<RevisionUpdate> SessionState::requestRevision(SelectionWindow selection, std::string mode) {
     if (!focused_ || !editingAvailable() ||
         (mode != "grammar" && mode != "refine" && mode != "synonyms") ||
-        (imeParityApp(appId_) && !selection.identityKnown) || !validLanguageTag(selection.language) ||
+        ((imeParityApp(appId_) || editPath_ == NativeEditPath::Observed) && !selection.identityKnown) ||
+        !validLanguageTag(selection.language) ||
         !safeRevisionText(selection.selected, kMaxSelectedScalars) || !validContextText(selection.before) ||
         !validContextText(selection.after) || selection.anchor == selection.head) {
         invalidateContext();

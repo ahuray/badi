@@ -98,21 +98,18 @@ an extension declares the Shell versions it supports.
   with Fcitx 5.1.12 standing in for IBus, a focused GTK 4 Wayland entry's
   input context was created through Fcitx's IBus frontend with no program
   name (`program:` empty in Fcitx's `DebugInfo`): the Shell relays every
-  text-input-v3 app, and Fcitx does not name it. The addon then has no app
-  id, so it denies the field, as it does for any unnamed context. The
-  observer can tell which app has focus, but nothing yet joins that to the
-  addon's field. Taking the app id from the observer for an unnamed IBus
-  context changes the addon's authority contract and is an open user
-  decision ([future plans](../../future%20plans.md)); until then GNOME's
-  observed fields get no suggestions.
+  text-input-v3 app, and Fcitx does not name it. [ADR 0017](0017-gnome-ibus-takes-observer-app-id.md)
+  lets an unnamed `ibus` context take the focused window's verified app id from
+  the GNOME observer for observed fields only, while keeping the manual and
+  typed-line paths closed there.
 - **Extension review.** Publishing on extensions.gnome.org is optional and a
   separate decision; the packages can ship it without that.
 
 ## Consequences
 
 - GNOME users install one more piece and enable it themselves; until they do,
-  `badi doctor` explains why observed fields get no suggestions. Even then,
-  observed fields stay without suggestions until the app-id decision above.
+  `badi doctor` explains why observed fields get no suggestions. Once enabled,
+  unnamed `ibus` contexts bind observed fields through [ADR 0017](0017-gnome-ibus-takes-observer-app-id.md).
 - A Shell upgrade can disable the extension (an undeclared Shell version);
   the observer then fails closed and `badi doctor` says so.
 - The extension is the only Badi code that runs inside gnome-shell, so it

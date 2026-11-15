@@ -113,16 +113,18 @@ BadiAddon::Binding *BadiAddon::bindingFor(std::string_view sessionId) {
 
 void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     const auto appId = canonicalProgram(inputContext);
+    const bool unnamedIbus = unnamedIbusContext(inputContext);
     debug_.refresh();
-    debug_.record("focus", appId, focusReason(appId));
+    debug_.record("focus", appId, unnamedIbus ? "awaiting_observed_field" : focusReason(appId));
     const auto contextId = uuidString(inputContext.uuid());
     const auto sessionId = randomUuid();
     const auto salt = randomSalt();
-    if (!sessionId || !salt || appId.empty()) return;
+    if (!sessionId || !salt || (appId.empty() && !unnamedIbus)) return;
     auto &binding = bindings_[contextId];
     closeBrokerSession(binding);
     clearOwnedPanel(binding);
     binding.inputContext = &inputContext;
+    binding.unnamedIbus = unnamedIbus;
     stopObserving(binding);
     binding.observationExplicit = false;
     binding.requestExplicit = false;
@@ -138,6 +140,15 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     binding.surroundingFreshness.focusIn();
     binding.surroundingEcho.reset();
     binding.typedLine.clear();
+    if (unnamedIbus) {
+        if (!binding.state.focusInUnnamed(*sessionId, contextId, *salt)) {
+            bindings_.erase(contextId);
+            return;
+        }
+        transport_.connect();
+        observeLater(binding);
+        return;
+    }
     const auto path = classifyNativeApp(appId) == NativeAppClass::Terminal ? NativeEditPath::TypedLine
                                                                             : NativeEditPath::Manual;
     if (!binding.state.focusIn(*sessionId, contextId, appId, *salt, NativeEditTarget::DesktopApplication, path)) {
@@ -150,8 +161,10 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
 }
 
 void BadiAddon::focusOut(::fcitx::InputContext &inputContext) {
-    debug_.record("blur", canonicalProgram(inputContext), "focus_left");
     auto *binding = bindingFor(inputContext);
+    const auto app = binding && !binding->state.appId().empty() ? binding->state.appId()
+                                                                : canonicalProgram(inputContext);
+    debug_.record("blur", app, "focus_left");
     if (!binding) return;
     closeBrokerSession(*binding);
     dropHeldTab(*binding);
@@ -173,9 +186,11 @@ void BadiAddon::destroy(::fcitx::InputContext &inputContext) {
 }
 
 void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
-    const auto app = canonicalProgram(inputContext);
     auto *binding = bindingFor(inputContext);
-    debug_.record("context", app, app.empty() ? "unidentified_app" :
+    const auto app = binding && !binding->state.appId().empty() ? binding->state.appId()
+                                                                : canonicalProgram(inputContext);
+    debug_.record("context", app,
+        app.empty() && !(binding && binding->unnamedIbus) ? "unidentified_app" :
         allowsNativeContext(binding ? fieldCapabilities(*binding) : inputContext.capabilityFlags())
             ? "context_received" : "field_denied");
     if (!binding) return;
@@ -210,7 +225,7 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     // not erase their explicit, timed unavailable notice. Classify the app
     // itself: observed targets of other classes still require invalidation
     // and fresh field metadata below.
-    if (binding->state.focused() && !nativeObservationAvailable(binding->state.appId())) return;
+    if (binding->state.focused() && !binding->observationCandidate()) return;
     // The selection a revision waits or shows for keeps it; nothing is
     // inspected meanwhile, since an inspection would decline the selection.
     if (revisionSurvives(*binding)) return;
@@ -241,16 +256,18 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
 
 void BadiAddon::capabilityChanged(::fcitx::InputContext &inputContext, ::fcitx::CapabilityFlags before,
                                   ::fcitx::CapabilityFlags after) {
-    const auto app = canonicalProgram(inputContext);
     auto *binding = bindingFor(inputContext);
+    const auto app = binding && !binding->state.appId().empty() ? binding->state.appId()
+                                                                : canonicalProgram(inputContext);
+    const bool activeUnnamed = binding && binding->unnamedIbus;
     // fcitx5-qt's withdrawal right after sending the text changes nothing
     // the field is judged by; see SurroundingEcho.
-    if (binding && !app.empty() && binding->surroundingEcho.capabilityChanged(before, after)) {
+    if (binding && (!app.empty() || activeUnnamed) && binding->surroundingEcho.capabilityChanged(before, after)) {
         debug_.record("authority", app, "surrounding_echo");
         return;
     }
     debug_.record("authority", app, "capabilities_changed");
-    if (!binding || app.empty()) return;
+    if (!binding || (app.empty() && !activeUnnamed)) return;
     binding->zenCommit.clear();
     // Capability changes can leave the previous widget's buffer cached.
     binding->surroundingFreshness.capabilityChanged();

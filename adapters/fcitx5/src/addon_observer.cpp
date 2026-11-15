@@ -10,7 +10,7 @@ namespace badi::fcitx5 {
 
 void BadiAddon::observeLater(Binding &binding, bool explicitRequest, bool retry, bool early) {
     if (!binding.inputContext->hasFocus() || !binding.state.focused() ||
-        !nativeObservationAvailable(binding.state.appId())) return;
+        !binding.observationCandidate()) return;
     if (!retry) binding.inspection.resetBusyRetries();
     binding.observationExplicit = explicitRequest;
     if (explicitRequest) {
@@ -38,7 +38,7 @@ void BadiAddon::inspectField(Binding &binding) {
     if (revisionActive(binding)) return;
     // Inspection reads only the focused accessible, so fcitx5-qt's
     // withdrawal echo does not stop it; reading text waits for observation.
-    if (!nativeObservationAvailable(binding.state.appId()) ||
+    if (!binding.observationCandidate() ||
         !allowsNativeContext(observedFieldCapabilities(binding.inputContext->capabilityFlags(),
                                                        binding.surroundingEcho)) ||
         !binding.surroundingFreshness.fresh()) return;
@@ -60,7 +60,9 @@ void BadiAddon::inspectField(Binding &binding) {
     debug_.record("observer", binding.state.appId(), "inspect_sent");
     const auto session = binding.state.coordinates().sessionId;
     const auto generation = binding.observationGeneration;
-    const bool sent = accessibility_->request(inspectRequest(binding.state.appId()),
+    const auto request = binding.unnamedIbus ? unnamedIbusInspectRequest()
+                                             : inspectRequest(binding.state.appId());
+    const bool sent = accessibility_->request(request,
         [this, session, generation](const Json &reply) {
             auto *current = bindingFor(session);
             if (current && current->inputContext->hasFocus() && current->observationGeneration == generation)
@@ -73,26 +75,40 @@ void BadiAddon::inspected(Binding &binding, const Json &reply) {
     debug_.record("observer", binding.state.appId(), "inspect_answered");
     if (!observerAnswered(reply)) return observerUnavailable(binding, reply.value("error", Json()));
     const auto &focus = reply["focus"];
-    const auto editTarget = inspectedEditTarget(focus, binding.state.appId());
+    std::string appId = binding.state.appId();
+    std::optional<NativeEditTarget> editTarget;
+    if (binding.unnamedIbus) {
+        if (const auto resolved = unnamedIbusEditTarget(focus)) {
+            appId = resolved->first;
+            editTarget = resolved->second;
+        }
+    } else {
+        editTarget = inspectedEditTarget(focus, appId);
+    }
     binding.inspection.found(editTarget.has_value());
     if (!editTarget) return denyEditing(binding);
     const bool unchanged = !binding.observationExplicit && !binding.zenCommit.active() && binding.observed() &&
+        binding.state.appId() == appId &&
         matchesObservedFocus(binding.observedFocus, focus) &&
         matchesCapturedContext(binding.state.lastContext(), currentContext(binding));
     if (unchanged) return;
     // Typing in the field we already authorized is a context update, not a
     // new session or a new policy query.
     if (binding.broker.opened && binding.broker.policyAllowed &&
+        binding.state.appId() == appId &&
         sameObservedField(binding.observedFocus, focus)) {
         binding.observedFocus = focus;
         debug_.record("observer", binding.state.appId(), "same_field_request");
         return requestObservedContext(binding);
     }
-    bindObservedField(binding, focus, *editTarget);
+    bindObservedField(binding, focus, *editTarget, appId);
 }
 
 // A newly observed field gets its own session, and policy for its exact target.
-void BadiAddon::bindObservedField(Binding &binding, const Json &focus, NativeEditTarget editTarget) {
+void BadiAddon::bindObservedField(Binding &binding, const Json &focus, NativeEditTarget editTarget,
+                                  std::string_view resolvedAppId) {
+    const std::string appId(resolvedAppId.empty() ? std::string_view(binding.state.appId()) : resolvedAppId);
+    if (binding.unnamedIbus && !unnamedIbusObservedApp(appId)) return denyEditing(binding);
     const auto session = randomUuid();
     const auto salt = randomSalt();
     if (!session || !salt) return;
@@ -104,7 +120,6 @@ void BadiAddon::bindObservedField(Binding &binding, const Json &focus, NativeEdi
     }
     closeBrokerSession(binding);
     clearOwnedPanel(binding);
-    const auto appId = binding.state.appId();
     if (!binding.state.focusIn(*session, binding.fieldVisitId, appId, *salt,
                                editTarget, NativeEditPath::Observed)) return;
     binding.observedFocus = focus;
@@ -117,30 +132,43 @@ void BadiAddon::bindObservedField(Binding &binding, const Json &focus, NativeEdi
 }
 
 void BadiAddon::denyEditing(Binding &binding) {
+    const std::string priorApp = binding.state.appId();
     binding.zenCommit.clear();
     binding.fieldVisit = nullptr;
     binding.fieldVisitId.clear();
-    closeBrokerSession(binding);
-    ++binding.observationGeneration;
-    binding.state.denyEditing();
-    binding.observedFocus = nullptr;
-    clearOwnedPanel(binding);
-    debug_.record("request_blocked", binding.state.appId(),
-        imeParityApp(binding.state.appId()) ? "ime_parity_target_invalid" : "editor_transaction_unavailable");
+    if (binding.unnamedIbus) {
+        retireObservedField(binding);
+        ++binding.observationGeneration;
+    } else {
+        closeBrokerSession(binding);
+        ++binding.observationGeneration;
+        binding.state.denyEditing();
+        binding.observedFocus = nullptr;
+        clearOwnedPanel(binding);
+    }
+    debug_.record("request_blocked", priorApp,
+        imeParityApp(priorApp) ? "ime_parity_target_invalid" : "editor_transaction_unavailable");
 }
 
-// IME-parity has no manual fallback, so an explicit request says why the
-// observer produced no field: the field's own purpose, or no observer.
+// IME-parity and unnamed-IBus contexts have no manual fallback, so an explicit
+// request says why the observer produced no field: an unsupported app, the
+// field's own purpose, or no observer.
 void BadiAddon::observerUnavailable(Binding &binding, const Json &error) {
+    const std::string priorApp = binding.state.appId();
     binding.zenCommit.clear();
     binding.inspection.found(false);
     binding.fieldVisit = nullptr;
     binding.fieldVisitId.clear();
     // A failed inspection must not keep the previous field's grant.
-    if (binding.observed()) retireObservedField(binding);
-    if (!imeParityApp(binding.state.appId())) return;
+    if (binding.observed() || (binding.unnamedIbus && !priorApp.empty())) retireObservedField(binding);
+    if (!imeParityApp(priorApp) && !binding.unnamedIbus) return;
+    if (binding.unnamedIbus && error == "unsupported_app") {
+        debug_.record("request_blocked", priorApp, "unidentified_app");
+        if (binding.observationExplicit) showNotice(binding, notice::kUnavailableApp);
+        return;
+    }
     const bool fieldDenied = observerDeniedField(error);
-    debug_.record("request_blocked", binding.state.appId(),
+    debug_.record("request_blocked", priorApp,
         fieldDenied ? "ime_parity_field_denied" : "ime_parity_observer_unavailable");
     if (binding.observationExplicit)
         showNotice(binding, fieldDenied ? notice::kFieldUnreadable : notice::kObserverUnavailable);
@@ -176,12 +204,16 @@ void BadiAddon::retireObservedField(Binding &binding) {
     // The manual path gets a session of its own: a policy answer still owed
     // to the observed field's session then finds no binding. Without fresh
     // randomness the binding stops until the next focus.
+    // An unnamed-IBus context has no manual path, so retiring its observed
+    // field drops the adopted app id and returns to an observed-only binding.
     const auto session = randomUuid();
     const auto salt = randomSalt();
-    if (!session || !salt ||
-        !binding.state.retireObservation(*session, uuidString(binding.inputContext->uuid()), *salt)) {
-        binding.state.focusOut();
-    }
+    const auto contextId = uuidString(binding.inputContext->uuid());
+    const bool retired = session && salt &&
+        (binding.unnamedIbus
+             ? binding.state.retireUnnamedObservation(*session, contextId, *salt)
+             : binding.state.retireObservation(*session, contextId, *salt));
+    if (!retired) binding.state.focusOut();
 }
 
 void BadiAddon::stopObserving(Binding &binding) {

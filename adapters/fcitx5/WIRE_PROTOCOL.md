@@ -76,7 +76,11 @@ installed app policy). Both name the same target, a JSON object of at most
 The canonical app id is `InputContext::program()` folded to ASCII lowercase
 once at focus-in, accepted only when it matches
 `^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*)*$` within 128 bytes; the
-broker's validator stays lowercase-only. Desktop targets omit `origin`; their
+broker's validator stays lowercase-only. When `InputContext::program()` is
+empty and `InputContext::frontendName() == "ibus"`, `inspect` carries
+`frontend: "ibus"` instead of `app_id`, and only an observed field whose
+verified `app_id` is in `unnamedIbusObservedApp` may open a broker session
+([ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)). Desktop targets omit `origin`; their
 settings identity is `{kind:"linux_app",adapter:"fcitx",app_id:<the same id>}`.
 The manual target ID is an opaque Fcitx context UUID, not a stable widget
 identity: runtime authorization is the exact application ID plus explicit

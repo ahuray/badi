@@ -101,6 +101,24 @@ class Desktop:
             raise Denied("app_mismatch")
         return window
 
+    def focused_app(self):
+        """(app_id, app, window) for the active window when exactly one rule matches it."""
+        window = self.active_window()
+        uid, configuration = os.getuid(), config_home()
+        matches = []
+        partial = False
+        for app_id, app in self.apps.items():
+            shown = _shows(window, app)
+            verified = verify_process(window["pid"], app, uid, configuration)
+            if shown and verified:
+                matches.append((app_id, app))
+            elif shown or verified:
+                partial = True
+        if len(matches) == 1:
+            app_id, app = matches[0]
+            return app_id, app, window
+        raise Denied("app_mismatch" if not matches and partial else "unsupported_app")
+
     def lock_query(self):
         endpoint = self.lock_endpoint.resolve(self.remaining)
         return SocketLockQuery(self.remaining, self.lock_endpoint, endpoint) if endpoint else LockQuery(self.remaining)

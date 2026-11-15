@@ -2358,6 +2358,122 @@ void zenPostCommitAgreementIsNarrowAndFailsClosed() {
     }
 }
 
+void unnamedIbusAdoptsOnlyObservedAppsAndNeverOpensManual() {
+    for (const auto app : {"chromium", "chromium-browser", "brave-origin", "zen", "zen-twilight",
+                           "chatgpt", "code", "com.anthropic.claude", "cursor", "discord", "grok-bot",
+                           "libreoffice", "omawrite", "telegram"}) {
+        check(unnamedIbusObservedApp(app), "observed app");
+    }
+    for (const auto denied : {"", "org.gnome.texteditor", "com.github.xournalpp.xournalpp", "com.mitchellh.ghostty",
+                              "foot", "firefox", "obsidian", "google-chrome", "code-oss", "Chromium"}) {
+        check(!unnamedIbusObservedApp(denied), "unobserved, manual-only, terminal and unavailable apps stay closed");
+    }
+    check(editingUnavailableReason("", false) == "unidentified_app" &&
+              editingUnavailableReason("", true) == "unidentified_app" &&
+              focusReason("") == "unidentified_app",
+          "an unidentified context names unidentified_app");
+    check(unnamedIbusInspectRequest() == nlohmann::json{{"op", "inspect"}, {"frontend", "ibus"}} &&
+              unnamedIbusInspectRequest(true) ==
+                  nlohmann::json{{"op", "inspect"}, {"frontend", "ibus"}, {"selection", true}},
+          "unnamed IBus inspection names only frontend=ibus and optional selection");
+    check(invalidates({{"app_id", "chromium"}}, "") && invalidates({{"event", "invalidate"}}, ""),
+          "an unidentified unnamed-IBus binding still reacts to observer invalidations");
+
+    const auto makeFocus = [](std::string_view appId, std::string_view kind, int selections = 0) {
+        nlohmann::json target = {{"kind", kind}, {"app_id", appId}, {"target_id", "target-1"}};
+        if (kind == "browser") target["origin"] = {{"scheme", "https"}, {"host", "example.test"}};
+        return nlohmann::json{
+            {"binding", {{"epoch", 1}, {"bus", ":1.9"}, {"path", "/field"}, {"process_id", 42}, {"app_id", appId}}},
+            {"target", std::move(target)},
+            {"purpose", "plain_text"},
+            {"caret", 9},
+            {"total_chars", 9},
+            {"selection_count", selections},
+        };
+    };
+    const auto chromium = unnamedIbusEditTarget(makeFocus("chromium", "browser"));
+    check(chromium && chromium->first == "chromium" && chromium->second == NativeEditTarget::BrowserOrigin,
+          "unnamed IBus adopts an observed browser field");
+    const auto writer = unnamedIbusEditTarget(makeFocus("libreoffice", "desktop_application"));
+    check(writer && writer->first == "libreoffice" && writer->second == NativeEditTarget::DesktopApplication,
+          "unnamed IBus adopts an observed LibreOffice Writer field");
+    const auto omawrite = unnamedIbusEditTarget(makeFocus("omawrite", "desktop_application"));
+    check(omawrite && omawrite->first == "omawrite" && omawrite->second == NativeEditTarget::DesktopApplication,
+          "unnamed IBus adopts an observed native app");
+    const auto selected = unnamedIbusEditTarget(makeFocus("chromium", "browser", 1), true);
+    check(selected && selected->first == "chromium" && selected->second == NativeEditTarget::BrowserOrigin &&
+              !unnamedIbusEditTarget(makeFocus("chromium", "browser", 1), false),
+          "unnamed IBus selection inspection requires selection=true");
+
+    for (const auto &rejected : {
+             makeFocus("org.gnome.texteditor", "desktop_application"),
+             makeFocus("com.mitchellh.ghostty", "desktop_application"),
+             makeFocus("firefox", "browser"),
+             makeFocus("chromium", "desktop_application"),
+             makeFocus("libreoffice", "browser"),
+             [&] {
+                 auto mismatched = makeFocus("chromium", "browser");
+                 mismatched["target"]["app_id"] = "zen";
+                 return mismatched;
+             }(),
+             makeFocus("", "desktop_application"),
+             makeFocus("Chromium", "browser"),
+         }) {
+        check(!unnamedIbusEditTarget(rejected) && !unnamedIbusEditTarget(rejected, true),
+              "manual-only, terminal, unavailable and mismatched replies never open an unnamed IBus context");
+    }
+
+    constexpr auto kSecondSession = "660e8400-e29b-41d4-a716-446655440001";
+    constexpr auto kThirdSession = "770e8400-e29b-41d4-a716-446655440002";
+    SessionState state;
+    check(state.focusInUnnamed(kSession, "ibus-ic-1", kSalt), "unnamed focus opens an observed-only waiting epoch");
+    check(state.focused() && state.appId().empty() && state.editPath() == NativeEditPath::Observed &&
+              !state.editingAvailable(),
+          "unnamed focus keeps appId empty, Observed path and editing unavailable");
+    auto rawWindow = *captureContextWindow("thank you", 9, 9, true, "en");
+    check(!manualTabRequests(state.editPath(), state.editingAvailable(), true, rawWindow) &&
+              !state.updateContext(rawWindow),
+          "unnamed focus never allows manual Tab or unbound context publication");
+
+    // Adopting an observed native app (omawrite) still keeps NativeEditPath::Observed, so identityKnown is required.
+    check(state.focusIn(kSecondSession, "ibus-ic-1", "omawrite", kSalt, NativeEditTarget::DesktopApplication,
+                        NativeEditPath::Observed),
+          "adopting an observed native app binds its session");
+    check(state.editingAvailable() && state.editPath() == NativeEditPath::Observed &&
+              !manualTabRequests(state.editPath(), state.editingAvailable(), true, rawWindow),
+          "an observed native app on unnamed IBus still never takes manual Tab");
+    check(!state.updateContext(rawWindow), "an observed session rejects identityKnown=false even for NativeExact");
+    auto observedWindow = rawWindow;
+    observedWindow.identityKnown = true;
+    const auto update = state.updateContext(observedWindow);
+    check(update.has_value(), "an observed session accepts identityKnown=true");
+    check(state.showSuggestion(suggestionFor(*update), 100), "observed suggestion displays");
+
+    SelectionWindow selection{
+        .before = "Yesterday ",
+        .selected = "i has went",
+        .after = ".",
+        .anchor = 10,
+        .head = 20,
+        .language = "en",
+        .multiline = true,
+        .identityKnown = false,
+    };
+    check(!state.requestRevision(selection, "grammar"),
+          "an observed session rejects selection revision with identityKnown=false");
+    selection.identityKnown = true;
+    check(state.requestRevision(selection, "grammar").has_value(),
+          "an observed session accepts selection revision with identityKnown=true");
+
+    // Retiring observation returns to unidentified observed-only waiting, never Manual.
+    check(state.retireUnnamedObservation(kThirdSession, "ibus-ic-1", kSalt),
+          "retiring unnamed observation opens a fresh unidentified epoch");
+    check(state.focused() && state.appId().empty() && state.editPath() == NativeEditPath::Observed &&
+              !state.editingAvailable() && !state.suggestionVisible() && !state.revisionRequest() &&
+              !state.updateContext(observedWindow),
+          "retiring unnamed observation drops the adopted app id and blocks further context");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2384,6 +2500,8 @@ int main(int argc, char **argv) {
         {"observed paragraph end is end of field", observedParagraphEndIsEndOfField},
         {"Zen post-commit agreement is narrow and fails closed",
          zenPostCommitAgreementIsNarrowAndFailsClosed},
+        {"unnamed IBus adopts only observed apps and never opens manual",
+         unnamedIbusAdoptsOnlyObservedAppsAndNeverOpensManual},
         {"observed fields are append-only", observedFieldsAreAppendOnly},
         {"state transitions and identity", stateTransitionsAndIdentity},
         {"native app policy coherence", nativePolicyMustBeCoherent},

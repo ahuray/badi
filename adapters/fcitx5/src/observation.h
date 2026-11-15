@@ -14,6 +14,9 @@ namespace badi::fcitx5 {
 // Badi's authority over one field. Missing or malformed data fails closed.
 
 nlohmann::json inspectRequest(std::string_view appId);
+// Unnamed IBus context (ADR 0017): asks the GNOME observer to resolve the
+// focused window's canonical app id alongside its field; denied elsewhere.
+nlohmann::json unnamedIbusInspectRequest(bool selection = false);
 // Re-reads the exact field an earlier reply bound (`focus`); with `window`,
 // also the text near it, once per field visit while context is on.
 nlohmann::json snapshotRequest(const nlohmann::json &focus, bool window = false);
@@ -72,6 +75,11 @@ bool continuedFieldSnapshot(const nlohmann::json &previous, const nlohmann::json
 // Nullopt when the inspected field's metadata is malformed or names another
 // app; prior authority is then retired rather than falling back.
 std::optional<NativeEditTarget> inspectedEditTarget(const nlohmann::json &focus, std::string_view appId);
+// Resolves `(appId, editTarget)` from an unnamed-IBus inspect reply (ADR 0017),
+// accepting only observed apps (`unnamedIbusObservedApp`) and failing closed
+// on manual-only, terminal, unavailable or malformed app ids.
+std::optional<std::pair<std::string, NativeEditTarget>> unnamedIbusEditTarget(const nlohmann::json &focus,
+                                                                               bool selection = false);
 
 // Writer gives Fcitx only the caret's sentence, and at the end of a paragraph
 // that sentence leaves out the spaces just typed. When the observer's verified

@@ -11,11 +11,13 @@ One part of the desktop contract differs from Omarchy's: the
 Hyprland, KDE Plasma 6 or GNOME session. On Plasma it uses a KWin script and
 shows suggestions in Fcitx's panel without the grey preview, not yet tried
 live. On GNOME it uses Badi's [Shell extension](../../adapters/gnome-shell/README.md),
-which the package ships and each user enables, but GNOME hands Fcitx no app
-name for observed fields, so Chromium-based apps, Zen, VS Code and Writer's
-grey preview still get no suggestions there. Fcitx's
-manual fields (a Tab request in an app allowed with `badi app ID on`),
-Obsidian, Neovim, Bash and the
+which the package ships and each user enables; unnamed `ibus` contexts there
+take the focused window's verified app id from the observer for observed fields
+only ([ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md))
+and show suggestions in Fcitx's panel without the grey preview, not yet tried
+live. Fcitx's
+manual fields (a Tab request in an app that hands Fcitx its program name and is
+allowed with `badi app ID on`), Obsidian, Neovim, Bash and the
 [Writer spelling extension](../../adapters/libreoffice/README.md) do not
 need it.
 

@@ -213,9 +213,8 @@ OBSERVER_NO_BACKEND_NOTE = ("The field observer found no focused-window source i
                             "still work.")
 OBSERVER_KWIN_NOTE = ("Field observer: KDE Plasma, through the KWin script it loads (ADR 0015). Plasma has no preview "
                       "position yet, so observed fields show suggestions in the Fcitx panel.")
-OBSERVER_GNOME_NOTE = ("Field observer: GNOME, through Badi's Shell extension (ADR 0016). Observed fields still get "
-                       "no suggestions on GNOME: GNOME hands Fcitx no app name for them, an open decision. Fcitx's "
-                       "manual fields, the editors and the Writer spelling extension work.")
+OBSERVER_GNOME_NOTE = ("Field observer: GNOME, through Badi's Shell extension (ADR 0016, ADR 0017). GNOME has no "
+                       "preview position yet, so observed fields show suggestions in the Fcitx panel.")
 GNOME_EXTENSION_ACTION = (f"Enable it: gnome-extensions enable {badi_install.GNOME_EXTENSION} (after a new install, "
                           "log out and back in first so GNOME Shell finds it), then run badi doctor again.")
 GNOME_EXTENSION_VERSION_ACTION = ("Log out and back in so GNOME Shell loads the installed extension, and remove any older "

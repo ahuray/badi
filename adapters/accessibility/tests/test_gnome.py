@@ -7,13 +7,16 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from contract import Denied
+from contract import Denied, Observer, SCHEMA
 import daemon as observer_daemon
 from desktop import App, NoDesktopBackend, SourceDesktop
+from field import FieldBackend
 import gnome
 from gnome import GnomeFocus, GnomeLockQuery, ShellUnavailable, parse_focus
 
@@ -230,6 +233,154 @@ class DesktopTests(GnomeFixture):
             bus.focus = reply
             with self.subTest(reply=reply), self.assertRaisesRegex(Denied, "app_mismatch"):
                 desktop.window(app)
+
+    def test_unnamed_ibus_resolves_only_one_verified_gnome_app_and_fails_closed(self):
+        focus, bus = self.focus()
+        exe = os.path.realpath(f"/proc/{os.getpid()}/exe")
+        apps = {
+            "chromium": App(frozenset({exe}), frozenset({"chromium"}), browser=True, web=True, web_apps="chrome-"),
+            "chromium-browser": App(frozenset({exe}), frozenset({"chromium-browser"}), browser=True, web=True),
+            "libreoffice": App(frozenset({exe}), frozenset({"libreoffice-writer"}),
+                               roles=frozenset({"paragraph"}), observed_only=True, sentence_bounded=True),
+            "omawrite": App(frozenset({"/nonexistent/omawrite"}), frozenset({"omawrite"})),
+        }
+        states = {"focused", "editable", "showing", "visible", "enabled"}
+        state_set = SimpleNamespace(contains=states.__contains__)
+        field_state = {"pid": os.getpid(), "role": "entry", "uri": "https://example.test/writing",
+                       "attributes": {"tag": "textarea", "text-input-type": "textarea"}, "content": "Same text"}
+
+        class Node:
+            def __init__(self, role, parent=None, interfaces=()):
+                self.role = role
+                self.parent = parent
+                self.interfaces = list(interfaces)
+                self.children = []
+                self.app = SimpleNamespace(bus_name=":1.25")
+                self.path = "/org/a11y/atspi/accessible/2"
+
+            def clear_cache(self):
+                pass
+
+            def get_process_id(self):
+                return field_state["pid"]
+
+            def get_role_name(self):
+                return field_state["role"] if self is entry else self.role
+
+            def get_name(self):
+                return ""
+
+            def get_description(self):
+                return ""
+
+            def get_interfaces(self):
+                return list(self.interfaces)
+
+            def get_parent(self):
+                return self.parent
+
+            def get_child_count(self):
+                return len(self.children)
+
+            def get_child_at_index(self, index):
+                return self.children[index]
+
+            def get_state_set(self):
+                return state_set if self is entry else SimpleNamespace(contains=lambda _flag: False)
+
+            def get_attributes(self):
+                return dict(field_state["attributes"])
+
+            def get_document_iface(self):
+                return SimpleNamespace(get_attribute_value=lambda key: field_state["uri"] if key == "URI" else "")
+
+            def get_text_iface(self):
+                return SimpleNamespace(
+                    get_caret_offset=lambda: len(field_state["content"]),
+                    get_character_count=lambda: len(field_state["content"]),
+                    get_n_selections=lambda: 0,
+                    get_text=lambda start, end: field_state["content"][start:end],
+                )
+
+        application = Node("application")
+        document = Node("document web", parent=application, interfaces=("Document",))
+        entry = Node("entry", parent=document, interfaces=("Text",))
+        application.children.append(document)
+        document.children.append(entry)
+        root = SimpleNamespace(get_child_count=lambda: 1, get_child_at_index=lambda _index: application)
+        atspi = SimpleNamespace(
+            get_desktop=lambda _index: root,
+            Document=SimpleNamespace(get_document_attribute_value=lambda doc, name: doc.get_attribute_value(name)),
+            StateType=SimpleNamespace(FOCUSED="focused", EDITABLE="editable", SHOWING="showing",
+                                      VISIBLE="visible", ENABLED="enabled"),
+            Text=SimpleNamespace(get_attribute_run=lambda *_args: ({"direction": "lr"}, 0, 9),
+                                 get_text=lambda text, start, end: text.get_text(start, end),
+                                 get_string_at_offset=lambda _text, _offset, _granularity: SimpleNamespace(
+                                     start_offset=0, end_offset=len(field_state["content"]),
+                                     content=field_state["content"])),
+            TextGranularity=SimpleNamespace(SENTENCE="sentence"),
+        )
+        backend = FieldBackend(atspi, apps)
+        backend.desktop = SourceDesktop(apps, backend.remaining, focus)
+        observer = Observer(backend)
+        observer.desktop = "gnome"
+
+        def inspect():
+            backend.deadline = time.monotonic() + 2
+            return observer.request({"schema": SCHEMA, "id": "1", "op": "inspect", "frontend": "ibus"})
+
+        for window_app in ("chromium", "chrome-example.test__-Default"):
+            bus.focus = focus_reply(app_id=window_app)
+            reply = inspect()
+            self.assertTrue(reply["ok"], (window_app, reply))
+            self.assertEqual(reply["focus"]["binding"]["app_id"], "chromium")
+            self.assertEqual(reply["focus"]["target"]["origin"], {"scheme": "https", "host": "example.test"})
+
+        bus.focus = focus_reply(app_id="libreoffice-writer")
+        field_state.update(role="paragraph", uri="", attributes={})
+        writer = inspect()
+        self.assertTrue(writer["ok"], writer)
+        self.assertEqual((writer["focus"]["binding"]["app_id"], writer["focus"]["target"]["kind"]),
+                         ("libreoffice", "desktop_application"))
+        backend.deadline = time.monotonic() + 2
+        snap = observer.request({"schema": SCHEMA, "id": "2", "op": "snapshot",
+                                 "binding": writer["focus"]["binding"], "policy_target": writer["focus"]["target"]})
+        self.assertEqual(snap["focus"]["before"], "Same text")
+
+        # Mismatched window vs process, minimized window, or AT-SPI node on another PID fail closed.
+        for reply, error in ((focus_reply(app_id="omawrite"), "app_mismatch"),
+                             (focus_reply(app_id="libreoffice-calc"), "app_mismatch"),
+                             (focus_reply(app_id="libreoffice-writer", minimized=True), "app_mismatch"),
+                             (focus_reply(window=0), "focus_unavailable"),
+                             (focus_reply(locked=True), "desktop_locked")):
+            bus.focus = reply
+            with self.subTest(reply=reply):
+                self.assertEqual(inspect()["error"], error)
+
+        bus.focus = focus_reply(app_id="libreoffice-writer")
+        field_state["pid"] = os.getpid() + 1
+        self.assertEqual(inspect()["error"], "focus_unavailable")
+        field_state["pid"] = os.getpid()
+
+        # Apps outside APPS (manual-only, terminal, unavailable browser) deny with unsupported_app,
+        # and a locked GNOME ScreenSaver still overrides that denial with desktop_locked.
+        other_desktop = SourceDesktop({"omawrite": apps["omawrite"]}, backend.remaining, focus)
+        backend.desktop = other_desktop
+        for unregistered in ("org.gnome.TextEditor", "com.mitchellh.ghostty", "org.mozilla.firefox"):
+            bus.focus = focus_reply(app_id=unregistered)
+            with self.subTest(unregistered=unregistered):
+                self.assertEqual(inspect()["error"], "unsupported_app")
+        bus.active = (True,)
+        self.assertEqual(inspect()["error"], "desktop_locked")
+        bus.active = (False,)
+
+        # Ambiguous overlapping rules fail closed rather than guessing.
+        ambiguous = SourceDesktop({"first": App(frozenset({exe}), frozenset({"shared"})),
+                                   "second": App(frozenset({exe}), frozenset({"shared"}))},
+                                  backend.remaining, focus)
+        backend.desktop = ambiguous
+        bus.focus = focus_reply(app_id="shared")
+        self.assertEqual(inspect()["error"], "unsupported_app")
 
 
 class DaemonTests(unittest.TestCase):

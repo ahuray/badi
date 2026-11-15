@@ -84,6 +84,14 @@ inline std::string canonicalProgram(const ::fcitx::InputContext &inputContext) {
     return programAppId(inputContext.program()).value_or("");
 }
 
+// GNOME relays Wayland text-input apps to Fcitx's IBus frontend with an empty
+// program name. Only that exact unnamed IBus case may ask the GNOME observer
+// for the focused window's app id (ADR 0017); a non-empty program() (even a
+// malformed one) or any other frontend stays unchanged.
+inline bool unnamedIbusContext(const ::fcitx::InputContext &inputContext) {
+    return inputContext.program().empty() && inputContext.frontendName() == "ibus";
+}
+
 inline const ::fcitx::Key &invokeChord() {
     static const ::fcitx::Key key("Control+Shift+space");
     return key;

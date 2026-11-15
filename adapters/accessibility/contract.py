@@ -24,7 +24,7 @@ MAX_PREVIEW_CHARS = 66
 MAX_POSITION = 2**31 - 1
 ID = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 APP_ID = re.compile(r"[a-zA-Z0-9_.-]{1,128}")
-REQUEST_FIELDS = {"inspect": {"schema", "id", "op", "app_id"},
+REQUEST_FIELDS = {"inspect": {"schema", "id", "op"},
                   "snapshot": {"schema", "id", "op", "binding", "policy_target"},
                   "preview": {"schema", "id", "op", "binding", "policy_target", "text", "ttl_ms",
                               "expected_caret", "expected_total_chars"},
@@ -35,8 +35,10 @@ REQUEST_FIELDS = {"inspect": {"schema", "id", "op", "app_id"},
 # A snapshot may ask once per field for the window's text (ADR 0010).
 # Inspect and snapshot may ask for the field's one selection instead of a
 # caret, for an explicit revision (ADR 0012).
+# Inspect names either Fcitx's app_id or, for an unnamed IBus context,
+# frontend: "ibus", which only the GNOME backend resolves (ADR 0017).
 OPTIONAL_FIELDS = {"preview": {"caret_rect", "strong"}, "snapshot": {"window", "selection"},
-                   "inspect": {"selection"}}
+                   "inspect": {"app_id", "frontend", "selection"}}
 CARET_RECT_FIELDS = frozenset({"x", "y", "width", "height", "scale"})
 IDENTITY = ("bus", "path", "process_id", "app_id", "uri")
 BINDING_FIELDS = frozenset({"epoch", *IDENTITY})
@@ -221,9 +223,18 @@ class Observer:
         return {"hidden": True, "epoch": self.epoch}
 
     def inspect(self, request):
+        if ("app_id" in request) == ("frontend" in request):
+            raise Denied("invalid_request")
         selection = flag(request, "selection")
-        _metadata, focus = self.describe(checked_app_id(request["app_id"]), check_lock=True,
-                                         selection=selection)
+        if "app_id" in request:
+            app_id = checked_app_id(request["app_id"])
+        else:
+            if request["frontend"] != "ibus":
+                raise Denied("invalid_request")
+            if self.desktop != "gnome":
+                raise Denied("unsupported_app")
+            app_id = None
+        _metadata, focus = self.describe(app_id, check_lock=True, selection=selection)
         return {"focus": focus}
 
     def snapshot(self, request):
@@ -403,13 +414,16 @@ class Observer:
         # Only inspect issues a binding, so only it checks the session lock;
         # snapshot and preview require that binding's unchanged epoch.
         metadata = self.backend.metadata(app_id, calibrate, check_lock, caret_rect)
+        resolved = checked_app_id(metadata.get("app_id")) if app_id is None else app_id
+        if metadata.get("app_id") != resolved:
+            raise Denied("app_mismatch")
         eligible(metadata, selection)
         key = {name: metadata[name] for name in IDENTITY}
         if self.tracked is not None and self.tracked != key:
             self.invalidate("focus_changed")
         self.tracked = key
         binding = {"epoch": self.epoch, **key}
-        target = self.policy_target(metadata, app_id)
+        target = self.policy_target(metadata, resolved)
         if metadata.get("geometry") and self.caret_edge:
             metadata["geometry"].update(caret_edge=self.caret_edge, text_follows=self.text_follows,
                                         text_ends=self.text_ends)
