@@ -92,10 +92,12 @@ As each desktop user, never as root:
 
    ```sh
    systemctl --user daemon-reload
-   systemctl --user enable --now badi-broker.service badi-session.service badi-accessibility.service
+   systemctl --user enable --now badi-session.service badi-accessibility.service
+   systemctl --user start badi-broker.service
    ```
 
-   Outside a Hyprland, KDE Plasma 6 or GNOME session the observer stops at
+   `badi-broker.service` starts on demand at later logins (`badi autostart on`
+   loads it at login instead). Outside a Hyprland, KDE Plasma 6 or GNOME session the observer stops at
    once, and `badi doctor` says so instead of reporting a problem; it names
    the observer's source. On GNOME, log out and back in, then enable the
    extension with `gnome-extensions enable badi-focus@ahuray.github.io`.

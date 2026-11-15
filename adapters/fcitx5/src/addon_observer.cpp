@@ -5,6 +5,7 @@
 #include <fcitx/instance.h>
 
 #include <cstdint>
+#include <utility>
 
 namespace badi::fcitx5 {
 
@@ -124,15 +125,18 @@ void BadiAddon::bindObservedField(Binding &binding, const Json &focus, NativeEdi
                                editTarget, NativeEditPath::Observed)) return;
     binding.observedFocus = focus;
     if (!binding.state.editingAvailable()) {
+        binding.pendingBrokerStart = false;
         binding.zenCommit.clear();
         debug_.record("request_blocked", appId, editingUnavailableReason(appId, binding.observed()));
         return;
     }
+    if (std::exchange(binding.pendingBrokerStart, false)) ensureBroker();
     queryPolicy(binding);
 }
 
 void BadiAddon::denyEditing(Binding &binding) {
     const std::string priorApp = binding.state.appId();
+    binding.pendingBrokerStart = false;
     binding.zenCommit.clear();
     binding.fieldVisit = nullptr;
     binding.fieldVisitId.clear();
@@ -155,6 +159,7 @@ void BadiAddon::denyEditing(Binding &binding) {
 // field's own purpose, or no observer.
 void BadiAddon::observerUnavailable(Binding &binding, const Json &error) {
     const std::string priorApp = binding.state.appId();
+    binding.pendingBrokerStart = false;
     binding.zenCommit.clear();
     binding.inspection.found(false);
     binding.fieldVisit = nullptr;
@@ -179,7 +184,10 @@ void BadiAddon::observerInvalidated(const Json &event) {
     for (auto &[_, binding] : bindings_) {
         if (!binding.state.focused() || !invalidates(event, binding.state.appId())) continue;
         debug_.record("observer", binding.state.appId(), "observer_invalidated");
-        if (!fieldChanged) binding.zenCommit.clear();
+        if (!fieldChanged) {
+            binding.pendingBrokerStart = false;
+            binding.zenCommit.clear();
+        }
         // A revision's own inspection is binding the focused field: the
         // observer may first retire the field it tracked before. Its reply
         // must still arrive.
@@ -217,6 +225,7 @@ void BadiAddon::retireObservedField(Binding &binding) {
 }
 
 void BadiAddon::stopObserving(Binding &binding) {
+    binding.pendingBrokerStart = false;
     binding.zenCommit.clear();
     binding.fieldVisit = nullptr;
     binding.fieldVisitId.clear();

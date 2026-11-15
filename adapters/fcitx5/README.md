@@ -27,7 +27,12 @@ observer wire details.
   alone; any invalidation, denial or `focusOut` drops it back to closed. Every
   non-empty `program()` and every other unnamed frontend keeps the rule above.
 - **Policy.** Each focus or authority epoch queries broker policy before any
-  text is read; only a current grant opens a session.
+  text is read; only a current grant opens a session. Addon load and focus
+  attach only when `badi-broker.service` is already listening. The first
+  typed key in an editable field, and an explicit ask (manual Tab, the chord,
+  or a revision), start that service when it is down. A password field does
+  not. The model then stays up until logout or `badi service stop`. The
+  session helper's reconnect never starts it.
 - **Keys.** Only Badi's own UI consumes a key:
 
   | Key | When Badi takes it |

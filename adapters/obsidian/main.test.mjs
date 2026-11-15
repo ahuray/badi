@@ -66,6 +66,7 @@ async function harness(context) {
     '@codemirror/commands': { isolateHistory: { of: value => ({ isolateHistory: value }) } },
     '@codemirror/autocomplete': { completionStatus: state => state.completion ?? null },
     '../shared/broker-client.mjs': { boundedContext },
+    '../shared/request-broker.mjs': { requestBroker: () => Promise.resolve(false) },
     '../shared/recovering-client.mjs': { RecoveringBrokerClient: Client },
     '../shared/activity.mjs': { recordActivity() {} },
     '../shared/writing-language.mjs': { writingLanguage },

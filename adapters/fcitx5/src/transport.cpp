@@ -6,10 +6,14 @@
 #include <fcitx-utils/log.h>
 #include <nlohmann/json.hpp>
 
+#include <spawn.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+extern char **environ;
 
 #include <array>
 #include <algorithm>
@@ -24,6 +28,13 @@
 #include <utility>
 
 namespace badi::fcitx5 {
+
+bool liveSessionRuntime(std::string_view runtime, std::uint32_t uid) {
+    if (runtime.empty() || runtime.front() != '/') return false;
+    const auto expected = std::string("/run/user/") + std::to_string(uid);
+    return runtime == expected;
+}
+
 namespace {
 
 using Json = nlohmann::json;
@@ -220,6 +231,49 @@ bool safeSocket(const std::string &path) {
     struct stat metadata {};
     return ::lstat(path.c_str(), &metadata) == 0 && S_ISSOCK(metadata.st_mode) &&
            metadata.st_uid == ::getuid() && (metadata.st_mode & 0777U) == 0600U;
+}
+
+// One start at a time. The broker binds its socket only after the model is
+// loaded, and the caller's own reconnect covers that wait. Returns true only
+// when it spawned systemctl so the caller can renew its reconnect budget once.
+bool requestSessionBroker() noexcept {
+    try {
+        const char *runtime = std::getenv("XDG_RUNTIME_DIR");
+        if (runtime == nullptr || !liveSessionRuntime(runtime, static_cast<std::uint32_t>(::getuid()))) return false;
+        const std::string path = std::string(runtime) + "/badi/broker.sock";
+        static pid_t child = -1;
+        if (child > 0) {
+            int status = 0;
+            if (::waitpid(child, &status, WNOHANG) != 0) child = -1;
+        }
+        if (safeSocket(path) || child > 0) return false;
+        using clock = std::chrono::steady_clock;
+        static std::optional<clock::time_point> last;
+        const auto now = clock::now();
+        if (last && now - *last < std::chrono::seconds(5)) return false;
+        last = now;
+        posix_spawnattr_t attributes;
+        if (::posix_spawnattr_init(&attributes) != 0) return false;
+        if (::posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID) != 0) {
+            ::posix_spawnattr_destroy(&attributes);
+            return false;
+        }
+        char bin[] = "/usr/bin/systemctl";
+        char user[] = "--user";
+        char start[] = "start";
+        char noBlock[] = "--no-block";
+        char unit[] = "badi-broker.service";
+        char *argv[] = {bin, user, start, noBlock, unit, nullptr};
+        pid_t pid = -1;
+        const int spawned = ::posix_spawn(&pid, bin, nullptr, &attributes, argv, ::environ);
+        ::posix_spawnattr_destroy(&attributes);
+        if (spawned != 0) return false;
+        child = pid;
+        FCITX_WARN() << "Badi starting the local model";
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 Json envelope(std::string_view type, std::optional<std::string> id,
@@ -531,6 +585,18 @@ public:
         const bool connected = connectSocket();
         if (!connected) scheduleReconnect();
         return connected;
+    }
+
+    void requestBroker() noexcept {
+        if (!requestSessionBroker() || fd_ >= 0) return;
+        try {
+            reconnectAttempts_ = 0;
+            reconnectScheduled_ = false;
+            if (reconnectTimer_) reconnectTimer_->setEnabled(false);
+            wantConnection_ = true;
+            if (!connectSocket()) scheduleReconnect();
+        } catch (...) {
+        }
     }
 
     void disconnect() {
@@ -1325,6 +1391,7 @@ Transport::Transport(::fcitx::EventLoop &eventLoop, WireCallbacks callbacks,
 Transport::~Transport() = default;
 
 bool Transport::connect() { return impl_->connect(); }
+void Transport::requestBroker() noexcept { impl_->requestBroker(); }
 void Transport::disconnect() { impl_->disconnect(); }
 bool Transport::ready() const { return impl_->ready(); }
 std::uint64_t Transport::nowMs() const { return impl_->nowMs(); }

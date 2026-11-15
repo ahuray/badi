@@ -68,7 +68,8 @@ _badi_start() {
   BADI_READER_FD=${BADI_WORKER[0]}
   BADI_WRITER_FD=${BADI_WORKER[1]}
   disown "$BADI_WORKER_PID" 2>/dev/null || true
-  if ! IFS=' ' read -r -t 3 -u "$BADI_READER_FD" BADI_REPLY_STATUS BADI_REPLY_VALUE ||
+  # The first reply waits out a cold model start. Later replies stay short.
+  if ! IFS=' ' read -r -t 25 -u "$BADI_READER_FD" BADI_REPLY_STATUS BADI_REPLY_VALUE ||
       [[ $BADI_REPLY_STATUS != READY ]]; then
     _badi_stop
     printf '\nBadi: local model unavailable. Run badi doctor.\n'

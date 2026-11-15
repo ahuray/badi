@@ -121,7 +121,9 @@ try {
   await writeFile(join(vault, 'Trial.md'), '');
   await startBroker();
   const sources = ['adapters/obsidian/main.mjs', 'adapters/obsidian/revision.mjs',
-    'adapters/obsidian/styles.css', 'adapters/shared/broker-client.mjs', 'adapters/shared/revision.mjs'];
+    'adapters/obsidian/styles.css', 'adapters/shared/broker-client.mjs',
+    'adapters/shared/recovering-client.mjs', 'adapters/shared/request-broker.mjs',
+    'adapters/shared/revision.mjs'];
   report.source = { base_commit: (await run('git', ['rev-parse', 'HEAD'], { cwd: ROOT })).stdout.trim(),
     sha256: Object.fromEntries(await Promise.all(sources.map(async path => [path,
       createHash('sha256').update(await readFile(join(ROOT, path))).digest('hex')]))),

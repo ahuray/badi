@@ -24,7 +24,7 @@ def build_shell_preview():
 
 
 SHARED_CLIENT = ("shared/broker-client.mjs", "shared/activity.mjs", "shared/writing-language.mjs",
-                 "shared/text-safety.mjs", "shared/revision.mjs")
+                 "shared/text-safety.mjs", "shared/revision.mjs", "shared/request-broker.mjs")
 NEOVIM_PLUGIN = ("plugin/badi.lua", "lua/badi/init.lua", "lua/badi/context.lua", "lua/badi/bridge.lua",
                  "lua/badi/revision.lua")
 

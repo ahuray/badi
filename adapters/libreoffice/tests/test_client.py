@@ -340,5 +340,29 @@ class ClientTest(unittest.TestCase):
             os.chmod(fake.directory, 0o700)
 
 
+class OnDemandTest(unittest.TestCase):
+    def test_only_the_live_runtime_starts_the_broker(self):
+        self.assertTrue(broker.live_session_runtime({"XDG_RUNTIME_DIR": "/run/user/1000"}, uid=1000))
+        self.assertFalse(broker.live_session_runtime({"XDG_RUNTIME_DIR": "/tmp/badi"}, uid=1000))
+        self.assertFalse(broker.live_session_runtime({"XDG_RUNTIME_DIR": "/run/user/1000/"}, uid=1000))
+        calls = []
+        slot = {"last": None}
+        clock = {"now": 1.0}
+        ready = {"up": False}
+        options = dict(environ={"XDG_RUNTIME_DIR": "/run/user/1000"}, uid=1000, spawn=calls.append,
+                       socket_ready=lambda _path: ready["up"], now=lambda: clock["now"], slot=slot)
+        self.assertFalse(broker.request_broker(**options))
+        clock["now"] = 3.0
+        self.assertFalse(broker.request_broker(**options))
+        self.assertEqual(calls, [["/usr/bin/systemctl", "--user", "start", "--no-block", "badi-broker.service"]])
+        self.assertFalse(broker.request_broker(environ={"XDG_RUNTIME_DIR": "/tmp/badi"}, uid=1000,
+                                               spawn=calls.append))
+        self.assertEqual(len(calls), 1)
+        ready["up"] = True
+        clock["now"] = 30.0
+        self.assertTrue(broker.request_broker(**options))
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

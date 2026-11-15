@@ -143,6 +143,9 @@ private:
         // only an observed field verified by the GNOME observer may open here
         // (ADR 0017); Manual and TypedLine never activate.
         bool unnamedIbus = false;
+        // A typed key arrived before async inspect bound the field; consumed
+        // once bindObservedField confirms an editable field.
+        bool pendingBrokerStart = false;
         // An applied revision's selection and text, until the field reads so.
         std::optional<std::pair<SelectionWindow, std::string>> revisionExpected;
         std::unique_ptr<::fcitx::EventSourceTime> revisionReadBackTimer;
@@ -259,6 +262,9 @@ private:
 
     // The broker session.
     bool open(Binding &binding);
+    // Asks systemd to start the model, then attaches. Login and focus only
+    // attach, so a down model stays down until somebody types or asks.
+    void ensureBroker();
     void queryPolicy(Binding &binding);
     std::optional<Json> brokerTarget(const Binding &binding) const;
     void closeBrokerSession(Binding &binding);

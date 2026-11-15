@@ -4,6 +4,7 @@ import { Prec, Transaction } from '@codemirror/state';
 import { isolateHistory } from '@codemirror/commands';
 import { completionStatus } from '@codemirror/autocomplete';
 import { boundedContext } from '../shared/broker-client.mjs';
+import { requestBroker } from '../shared/request-broker.mjs';
 import { RecoveringBrokerClient } from '../shared/recovering-client.mjs';
 import { recordActivity } from '../shared/activity.mjs';
 import { writingLanguage } from '../shared/writing-language.mjs';
@@ -158,6 +159,7 @@ class WritingView {
     if (update.docChanged || (update.selectionSet && !update.startState.selection.eq(update.state.selection)) ||
         (update.focusChanged && !this.view.hasFocus)) this.invalidate();
     if (update.docChanged && this.eligible()) this.timer = setTimeout(() => void this.request(false), 250);
+    if (update.docChanged && !this.view.state.readOnly && this.view.hasFocus && !this.client.connected) void requestBroker();
     if ((update.docChanged || update.focusChanged) && this.view.hasFocus && !this.client.connected) {
       void this.client.connect().catch(() => undefined);
     }
@@ -165,6 +167,11 @@ class WritingView {
 
   async request(explicit = true) {
     if (explicit && !this.view.state.selection.main.empty) return this.revise();
+    if (!this.client.connected) {
+      if (explicit) this.client.pauseRetries?.();
+      await requestBroker({ waitMs: explicit ? 20000 : 0 });
+      if (explicit) await this.client.connect(undefined, { immediate: true }).catch(() => undefined);
+    }
     const reason = this.blockedReason();
     recordActivity('obsidian', 'decision', reason ?? 'eligible');
     if (reason || this.pending || (!explicit && !this.client.automaticAllowed)) return;
@@ -207,6 +214,11 @@ class WritingView {
   }
 
   async revise(mode) {
+    if (!this.client.connected) {
+      this.client.pauseRetries?.();
+      await requestBroker({ waitMs: 20000 });
+      await this.client.connect(undefined, { immediate: true }).catch(() => undefined);
+    }
     const reason = this.blockedReason(true);
     if (reason || this.pending) return;
     const snapshot = captureRevision(this.view.state);

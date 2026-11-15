@@ -49,6 +49,9 @@ std::optional<std::string> serializeContextEnvelope(const ContextUpdate &update,
 // A revision request (ADR 0012), or nullopt when the selection is not one the
 // broker would accept.
 std::optional<std::string> serializeRevisionEnvelope(const RevisionUpdate &update, std::uint64_t monoMs);
+// The graphical session's runtime directory, and no private test directory.
+// Only that directory may ask systemd to start the user's broker.
+[[nodiscard]] bool liveSessionRuntime(std::string_view runtime, std::uint32_t uid);
 
 class FrameDecoder {
 public:
@@ -123,6 +126,11 @@ public:
     Transport &operator=(const Transport &) = delete;
 
     bool connect();
+    // Starts badi-broker.service when this process's runtime is the live
+    // session and the broker socket is not there yet, renewing the reconnect
+    // budget for the model's startup. A private runtime, including every unit
+    // test, is ignored.
+    void requestBroker() noexcept;
     void disconnect();
     [[nodiscard]] bool ready() const;
     [[nodiscard]] std::uint64_t nowMs() const;

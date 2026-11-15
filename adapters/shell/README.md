@@ -27,7 +27,9 @@ hooks and never adds text to `rl_line_buffer`, reads terminal output, intercepts
 other keys or runs a command. The Bash hook is the only mutation path, through
 `READLINE_LINE`, so native undo works. Persian caret positions are counted in
 characters (Bash 5.0+). Each shell starts its Node bridge (about 60 MB) on the
-first Ctrl-X Tab, and the bridge exits after ten idle minutes.
+first Ctrl-X Tab, which also starts the local model when it is not already
+running and waits up to 20 seconds for it. The bridge exits after ten idle
+minutes.
 
 Ctrl-X Escape sends the bridge `dismiss`, which tells the broker the user
 declined the suggestion: it ends the type-through carry and starts any Escape

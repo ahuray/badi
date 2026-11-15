@@ -15,7 +15,9 @@ Expiry still clears the preview and prevents acceptance; it is never renewed
 just because the preview remains visible. Bash keeps its existing lease and
 four-second local display timer. Update the broker before the editor plugin.
 Selection revisions have their own 60-second reading window, exact range
-grant and 45-second client request bound for a cold model start. Repeated
+grant and 45-second client request bound for a cold model start. An explicit
+request starts the local model when it is not already running. Opening or
+focusing an editor does not, and neither does the session helper. Repeated
 requests retain the same session with newer coordinates so the broker can
 avoid already-shown synonyms. A changed selection, dismissal or reconnect
 ends that session; no revision text is replayed or carried through typing.

@@ -11,6 +11,7 @@ export class RecoveringBrokerClient extends EventEmitter {
   #socketPath;
   #timer = null;
   #attempts = 0;
+  #started = false;
   #closed = false;
   // The last focus this editor reported; a new connection repeats a held
   // focus, because the broker forgets it with the old connection.
@@ -24,18 +25,30 @@ export class RecoveringBrokerClient extends EventEmitter {
   get acceptWord() { return this.#client?.acceptWord; }
   get alternativeWords() { return this.#client?.alternativeWords ?? null; }
 
-  connect(socketPath = this.#socketPath) {
+  pauseRetries() {
+    clearTimeout(this.#timer);
+    this.#timer = null;
+  }
+
+  connect(socketPath = this.#socketPath, { immediate = false } = {}) {
     if (this.#closed) return Promise.reject(new Error('Adapter closed'));
     if (this.#connection) return this.#connection;
     if (this.connected) return Promise.resolve(this.allowed);
-    if (this.#timer !== null) return Promise.resolve(false);
+    if (this.#timer !== null) {
+      this.#attempts = 0;
+      if (!immediate) return Promise.resolve(false);
+      clearTimeout(this.#timer);
+      this.#timer = null;
+    }
     this.#socketPath = socketPath;
+    this.#started = true;
     this.#attempts = 0;
     return this.#attempt();
   }
 
   #attempt() {
     this.#attempts++;
+    const quietFocusRetry = this.#attempts > 10;
     const previous = this.#client;
     const client = new BrokerClient(this.#profile, this.#options);
     this.#client = client;
@@ -43,8 +56,12 @@ export class RecoveringBrokerClient extends EventEmitter {
     for (const event of ['clear', 'update', 'activity', 'state']) {
       client.on(event, value => {
         if (this.#closed || this.#client !== client) return;
+        if (event === 'state' && value === 'offline') {
+          if (!quietFocusRetry) this.emit(event, value);
+          this.#schedule();
+          return;
+        }
         this.emit(event, value);
-        if (event === 'state' && value === 'offline') this.#schedule();
       });
     }
     const connection = client.connect(this.#socketPath).then(allowed => {
@@ -65,8 +82,13 @@ export class RecoveringBrokerClient extends EventEmitter {
 
   #schedule() {
     if (this.#closed || this.#timer !== null) return;
-    if (this.#attempts >= 10) { this.emit('state', 'offline_retry'); return; }
-    const delay = Math.min(5000, 250 * 2 ** Math.max(0, this.#attempts - 1));
+    if (this.#attempts >= 10) {
+      if (this.#attempts === 10) this.emit('state', 'offline_retry');
+      // While holding terminal focus (ADR 0009), keep watching quietly for an
+      // on-demand broker start so the terminal's typed-line path yields once up.
+      if (!this.#focused) return;
+    }
+    const delay = this.#attempts >= 10 ? 1000 : Math.min(5000, 250 * 2 ** Math.max(0, this.#attempts - 1));
     this.#timer = setTimeout(() => {
       this.#timer = null;
       if (!this.#closed) void this.#attempt().catch(() => undefined);
@@ -101,7 +123,16 @@ export class RecoveringBrokerClient extends EventEmitter {
   report(...args) { if (this.allowed) this.#client.report(...args); }
   reportFocus(focused) {
     this.#focused = focused === true;
-    if (!this.connected) return Promise.resolve(false);
+    if (!this.#focused && this.#attempts >= 10 && this.#timer !== null) {
+      clearTimeout(this.#timer);
+      this.#timer = null;
+    }
+    if (!this.connected) {
+      if (this.#focused && !this.#closed && this.#started && !this.#connection && this.#timer === null) {
+        this.#schedule();
+      }
+      return Promise.resolve(false);
+    }
     return this.#client.reportFocus(this.#focused);
   }
   dismiss() { this.#client?.dismiss(); }

@@ -5,6 +5,7 @@
 // buffer text anywhere but its reply to Neovim, and logs nothing.
 import { createInterface } from 'node:readline';
 import { boundedContext, refusalReason } from '../shared/broker-client.mjs';
+import { requestBroker } from '../shared/request-broker.mjs';
 import { RecoveringBrokerClient } from '../shared/recovering-client.mjs';
 import { recordActivity } from '../shared/activity.mjs';
 import { bridgeLanguage } from '../shared/writing-language.mjs';
@@ -62,7 +63,11 @@ async function suggest(command) {
       (command.language !== undefined && (typeof command.language !== 'string' || !LANGUAGE.test(command.language)))) {
     return { ok: false, reason: 'invalid_request' };
   }
-  if (!client.connected) await client.connect().catch(() => false);
+  if (!client.connected) {
+    if (command.explicit) client.pauseRetries();
+    const ready = await requestBroker({ waitMs: command.explicit ? 20000 : 0 });
+    await client.connect(undefined, { immediate: command.explicit || ready }).catch(() => false);
+  }
   if (!client.allowed) return { ok: false, reason: reason() };
   if (!command.explicit && !client.automaticAllowed) return { ok: false, reason: 'manual_required' };
   const { before, after } = boundedContext(command.before, command.after ?? '');
@@ -83,7 +88,11 @@ async function handle(command) {
           !validContext(command.selected, 2400) || !revisionModes.has(command.mode)) {
         return { ok: false, reason: 'invalid_request' };
       }
-      if (!client.connected) await client.connect().catch(() => false);
+      if (!client.connected) {
+        client.pauseRetries();
+        await requestBroker({ waitMs: 20000 });
+        await client.connect(undefined, { immediate: true }).catch(() => false);
+      }
       if (!client.allowed) return { ok: false, reason: reason() };
       grant = null;
       const { before, after } = boundedContext(command.before, command.after ?? '');
@@ -154,9 +163,15 @@ async function handle(command) {
       const withheld = await client.reportFocus(focused).catch(() => false);
       return { ok: true, withheld };
     }
-    case 'status':
-      if (!client.connected) await client.connect().catch(() => false);
+    case 'status': {
+      if (!client.connected) {
+        const explicit = command.explicit === true;
+        if (explicit) client.pauseRetries();
+        const ready = await requestBroker({ waitMs: explicit ? 20000 : 0 });
+        await client.connect(undefined, { immediate: explicit || ready }).catch(() => false);
+      }
       return { ok: true, ...policy() };
+    }
     default:
       return { ok: false, reason: 'invalid_request' };
   }
