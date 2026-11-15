@@ -178,7 +178,9 @@ subject. When a change touches the functions in that skill's Coverage table, run
 `.cursor/skills/verify-badi-formal-withhold/check.sh` (needs `java` and `curl`;
 it fetches a checksum-pinned TLC jar). It runs TLC, then the `withhold_` tests
 in `src/engine/tests/withhold.rs` against a running broker. The skill says how
-to read a counterexample and how to bring the model up to date.
+to read a counterexample and how to bring the model up to date. `npm run formal:check`
+fails when one of those functions changes, until the model is confirmed
+again and its hash recorded.
 
 ## Style learning (opt-in)
 

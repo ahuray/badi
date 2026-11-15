@@ -1,6 +1,19 @@
 ---
 name: verify-badi-formal-withhold
 description: Checks Badi's pause, snooze and screen-share withhold ordering with TLA+ (TLC) and the broker withhold_ tests. Use when a change touches runtime pause, settings pause, desktop hold, screen-share grace, snooze, ambiguous_session, or whether a suggestion may be admitted.
+# The functions Withhold.tla describes (the Coverage table below).
+# scripts/formal-sync-check.py hashes their code; see "When the code changes".
+covered:
+  - broker/src/engine/authority.rs set_paused set_runtime_pause settings_allow_data policy_status
+  - broker/src/engine/settings.rs replace_settings begin_control_plane_mutation install_settings_authority install_settings
+  - broker/src/engine/mod.rs close_all_sessions runtime_paused effective_paused session_with_data_access
+  - broker/src/engine/desktop.rs report_desktop_state finish_desktop_transition forget_desktop_state end_share_grace desktop_hold screen_share
+  - broker/src/engine/session.rs open_session close_session update_context revoke_context_authority
+  - broker/src/engine/generation.rs request_suggestion admit_generation
+  - broker/src/engine/snooze.rs snooze_focused focused_subject end_snoozes expire_snoozes withheld_reason
+  - broker/src/protocol.rs holds
+  - broker/src/settings/policy.rs allows_context_read allows_display allows_suggestion
+covered_sha256: 4dc83ca67a0a75c2
 ---
 
 # Verify withhold ordering
@@ -58,7 +71,9 @@ Confirm the model still describes the functions in [Coverage](#coverage). A gree
 2. For each change, ask whether it adds or drops a withhold, changes a guard on opening a session, reading context or admitting a suggestion, or lets one withhold end another. A change that does none of these (a refactor, a log line, proposal shape) needs no model edit.
 3. If the model no longer matches, edit [Withhold.tla](Withhold.tla), [Withhold.cfg](Withhold.cfg), the Coverage and Bounds sections and the `withhold_` tests so they describe the code. Do not edit product code here, and do not weaken a property to pass.
 4. Run `check.sh` and update the state count in [Bounds](#bounds).
-5. Move the confirmed commit in Coverage to the commit you read.
+5. Move the confirmed commit in Coverage to the commit you read, and run `python3 scripts/formal-sync-check.py --update` to record the hash of the code you confirmed.
+
+`npm run formal:check` (part of `npm run check`) fails when the code of a function in the frontmatter `covered` list no longer has the recorded `covered_sha256`. The hash ignores comments and whitespace, and it does not depend on commit ids, so a squash or merge commit does not trip it. It also fails when a covered function is renamed or removed. Keep the list and the Coverage table naming the same functions. The CI job "Formal model / TLC" runs `check.sh --tlc-only` on every change; the Rust job already runs the `withhold_` tests.
 
 ## Coverage
 

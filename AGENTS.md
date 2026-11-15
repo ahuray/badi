@@ -77,6 +77,7 @@ should serve current work.
 
 | Rule | Enforcer | How it fails |
 | --- | --- | --- |
+| A formal model's covered functions keep the code hash its skill recorded when the model was last confirmed | [`scripts/formal-sync-check.py`](scripts/formal-sync-check.py) via `npm run formal:check` | Exit 1, naming the skill and its covered files: confirm the model as that skill's "When the code changes" says, then run `python3 scripts/formal-sync-check.py --update` |
 | A commit that changes broker, adapter, protocol, panel, packaging or installer behavior also adds a [CHANGELOG.md](CHANGELOG.md) line under `## Unreleased` | [`scripts/check-agent-rules.mjs`](scripts/check-agent-rules.mjs) via `npm run agent-rules:check` | Exit 1, naming that commit and the product files. A later commit that only edits the changelog still fails |
 | [future plans.md](<future plans.md>) is the only backlog; no parallel planning, handoff or report document | the same check | Exit 1, naming the file to delete |
 | The Lab finishes a word by calling `badi_broker::vocabulary::complete` | the same check | Exit 1 when `evaluation/writing/lab-worker/src` scans words with `unicode_word_indices`, or no file there calls that function |
@@ -203,6 +204,7 @@ Every change also runs `npm run agent-rules:check`, the first step of `npm run c
 | Prediction Lab | `npm run writing:check`, `cargo test --locked -p badi-writing-lab`; a real-model `run.mjs` comparison when inference changes |
 | Omarchy panel | `npm run omarchy:check`; the host and lifecycle lanes in its runbook for QML or runtime changes |
 | Schemas, dependencies, broad changes | The Rust gate plus `npm run check` and affected integrations |
+| Formal model (`.cursor/skills/verify-badi-formal-*`) or the code it covers | `npm run formal:check`, and the skill's `check.sh` (TLC and its broker tests) |
 
 ```sh
 cargo fmt --all --check
@@ -213,7 +215,7 @@ cargo +1.85.0 check --workspace --all-targets --all-features --locked
 ```
 
 `npm run check` ([run-checks.mjs](scripts/run-checks.mjs)) runs the agent-rule,
-docs, accessibility, session, LibreOffice, desktop, Omarchy, editor and writing checks and summarizes;
+formal sync, docs, accessibility, session, LibreOffice, desktop, Omarchy, editor and writing checks and summarizes;
 `node scripts/run-checks.mjs NAME...` runs a subset. No source check proves
 native app behavior: claims about a real app need a live trial in the graphical
 session, and missing prerequisites must be reported with the exact unverified

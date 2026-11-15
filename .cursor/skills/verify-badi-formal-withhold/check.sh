@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # TLC on Withhold.tla, then the broker test of the same withhold promise.
 # Exit 0 only when both succeed. Prints the TLC summary and the test result.
+# --tlc-only skips the broker test; CI's Rust job already runs it.
 set -euo pipefail
+
+tlc_only=false
+if [[ "${1:-}" == "--tlc-only" ]]; then
+  tlc_only=true
+elif [[ $# -gt 0 ]]; then
+  echo "usage: check.sh [--tlc-only]" >&2
+  exit 2
+fi
 
 skill=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$skill/../../.." && pwd)
@@ -47,6 +56,12 @@ set +e
     "$skill/Withhold.tla"
 )
 tlc_status=$?
+
+if [[ "$tlc_only" == true ]]; then
+  set -e
+  echo "verify-badi-formal-withhold: TLC exit ${tlc_status}; cargo test skipped"
+  exit "$((tlc_status == 0 ? 0 : 1))"
+fi
 
 cargo test --locked -p badi-broker --lib withhold_ -- --test-threads=1
 test_status=$?
