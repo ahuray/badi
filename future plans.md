@@ -87,11 +87,11 @@ links to it. A tested app version is not a claim about Linux in general.
   words learned in that app ([ADR 0010](docs/decisions/0010-context-finishes-words.md));
   prompt-text window context stays Lab-only. Style learning stores sealed
   samples behind `badi style on`, and no prompt reads them yet.
-- **Distribution:** an Arch package candidate (step 6) and a
+- **Distribution:** an Arch package candidate (step 5) and a
   [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
   builds, lints and installs in containers (2026-10-23); neither is
   published, no GNOME session has run Badi, and Plasma has run only the
-  package's manual path (step 7). Without an
+  package's manual path (step 6). Without an
   installed writing model, the desktop installer lists the models that fit
   the device and lets the user pick one.
 - **Code health:** a full review before the 0.2.0 fresh start (2026-10-24)
@@ -110,8 +110,6 @@ Standing user decisions:
 - promote a quality fix only without a per-language harm increase;
 - keep the model resident; explicit requests get about 1.2 s;
 - Tab accepts one word and Ctrl+→ all of it, on every surface;
-- Ghostty follows the typed line automatically, by exact opt-in rule
-  ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md));
 - window context and learning stay on the device, with global and per-app
   opt-outs; language work prioritizes English, German, French, Spanish and
   Portuguese, and Persian keeps its regression gates
@@ -137,7 +135,25 @@ Standing user decisions:
   still need approval after the naming review (the licence review is done);
 - Discord gets the renderer flag through a user copy of its launcher
   (`--observed-app discord`), as other Chromium-based apps get it through
-  their flags files (2026-10-24).
+  their flags files (2026-10-24);
+- Ghostty and foot follow the typed line only by explicit per-terminal
+  opt-in, after at least two words with letters before automatic requests,
+  with local sandboxed inference only and zero learning or persistence,
+  accepting that terminal output is not read so prompt text cannot be
+  detected (2026-11-15,
+  [ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md));
+- opt-in (`badi spelling`) is sufficient for German, French, Spanish,
+  Italian, Dutch and Polish spelling; per-language held-out measurement
+  under [Suggestion quality](#suggestion-quality) gates turning any of them
+  on by default (2026-11-15);
+- `badi debug on --text` keeps text in `tmpfs` memory for up to 15 minutes
+  per explicit run, wiped on `badi debug off`, timer expiry or logout
+  (2026-11-15,
+  [ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md));
+- the laptop firmware's 15 W CPU sustained power default stays across
+  reboots rather than installing a persistent `cpu-sustained-power.service`
+  root unit for 28 W (2026-11-15,
+  [bench](evaluation/llm-bench/README.md)).
 
 Open decisions, for the user:
 - **GNOME app identity.** GNOME relays every Wayland text-input app (GTK 4,
@@ -149,18 +165,6 @@ Open decisions, for the user:
   GNOME's observed fields, but moves app identity from Fcitx to the observer
   there ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)).
   Allow that, or leave GNOME to Fcitx's manual fields and the editors.
-- **Terminal privacy.** A terminal cannot mark a password prompt, so a
-  passphrase of two or more words in an allowed terminal can reach the local
-  model. Keep it, make terminals explicit-only, or pause after prompts such as
-  `password:` (Badi cannot read terminal output to detect them).
-- **Spelling beyond English is unqualified.** It is opt-in; decide whether that
-  is enough or each language first needs the held-out measurement under
-  [Suggestion quality](#suggestion-quality).
-- **The `--text` debug trace** keeps typed text in memory for 15 minutes;
-  confirm that, or limit it to suggestions.
-- **The 28 W CPU power limit** is set until reboot; installing
-  `output/llm-bench/cpu-sustained-power.service` keeps it (see the
-  [bench](evaluation/llm-bench/README.md) conditions).
 
 ## Next steps, in order
 
@@ -199,10 +203,14 @@ publish need the user's go-ahead first; the rest can start at once.
      with production checks and measured 512-token admission, using one,
      two or four case-local examples. The user chose synthetic examples
      for development on 2026-11-12; no private export was read.
-     Remaining work: (ii) run the
-     paired comparison step 5 already specifies (same suites, settings and
-     seed, style off against on, the user's held-out drafts as the private
-     set, samples never leaving the machine or entering the checkout);
+     Remaining work: (ii) feed an explicit `badi style export` into a Lab
+     suite's `style` field and run the paired comparison (same suites,
+     settings and seed, style off against on, the user's own held-out
+     drafts as the private set with the `style_fact_conflict` fence and
+     native review, samples never leaving the machine or entering the
+     checkout; native Linux app learning is being lifted in its own
+     change), requiring a per-language gain without more harm before any
+     prompt reads samples;
      (iii) only if useful additions rise without harmful ones rising, wire
      the winning shape into `broker/src/writing.rs` behind the existing
      per-subject learning grant, add a strength setting (settings schema,
@@ -415,14 +423,7 @@ publish need the user's go-ahead first; the rest can start at once.
    of the four).
    *Done when* both show a window or learned word finished
    (`window_chars` on `context.changed` is now recorded for both).
-5. **Compare style learning in the Lab.** Feed an explicit `badi style
-   export` into a Lab suite's `style` field and compare against no style on
-   the user's own held-out drafts, with the `style_fact_conflict` fence and
-   native review ([broker runbook](broker/README.md#style-learning-opt-in)).
-   Linux apps cannot learn under the settings schema; lifting that is a
-   separate privacy decision. *Done when* the comparison shows a per-language
-   gain without more harm, before any prompt reads samples.
-6. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+5. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    CI builds and namcap-checks the package on every change, and the licence
    review is done: [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) ships
    with it and every model download shows its terms first. In a fresh Arch
@@ -433,7 +434,7 @@ publish need the user's go-ahead first; the rest can start at once.
    install, update and removal on a fresh Omarchy leave nothing behind, the
    panel's model-terms row has been tried live, and publication then waits
    only for the naming review.
-7. **Run Badi in real GNOME and KDE Plasma sessions.** The
+6. **Run Badi in real GNOME and KDE Plasma sessions.** The
    [Debian and Ubuntu package](packaging/debian/README.md) and the
    user-local installer pass in Debian 13 and Ubuntu 24.04 containers, and
    the package now has a first graphical-session run (Plasma, below).
@@ -673,7 +674,7 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       each after a live trial of its app id and `commitString`.
 - [ ] Panel rows for per-app language overrides and style learning, which
       are terminal-only today.
-- [ ] Later: a standard tray (other desktops are step 7) and personal snippets.
+- [ ] Later: a standard tray (other desktops are step 6) and personal snippets.
       Emoji stays with Fcitx: QuickPhrase and the Emoji module, not a Badi
       colon shortcode.
 
@@ -698,8 +699,7 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       every known install has started a v2-only broker (0.2.0), delete the
       on-disk v1 settings migration, `badi.settings.v1.schema.json` and the
       panel lifecycle and schema tests that exercise it.
-- [ ] Broker structure left by the review: collapse `complete`/`propose`
-      once the Lab calls `propose_outcome`, and move the remaining inline
+- [ ] Broker structure left by the review: move the remaining inline
       tests into `<module>/tests.rs` when those files are next touched.
 
 - [ ] `adapters/neovim/broker.test.mjs` timed out once in CI waiting for

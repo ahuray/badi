@@ -202,7 +202,7 @@ login; the user units under a real user manager, including whether GNOME
 and Plasma export `WAYLAND_DISPLAY` before `graphical-session.target`
 starts them (the broker's `ConditionEnvironment`); the observer, preview and
 Tab acceptance outside Hyprland; an install on Sway; an X11 session, where
-the broker's unit does not start. [Step 7](<../../future plans.md>) covers
+the broker's unit does not start. [Step 6](<../../future plans.md>) covers
 them.
 
 Reproduce a CI run locally, from the checkout:

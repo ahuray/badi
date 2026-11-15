@@ -27,9 +27,22 @@ if ! command -v java >/dev/null 2>&1; then
     apt-get update -y
     apt-get install -y --no-install-recommends openjdk-21-jre-headless
   else
-    echo "verify-badi-formal-withhold: java is required (OpenJDK 21 is enough; package openjdk-21-jre-headless)." >&2
+    echo "verify-badi-formal-withhold: java 17+ is required (OpenJDK 17 or 21 LTS; Debian/Ubuntu package openjdk-21-jre-headless)." >&2
     exit 1
   fi
+fi
+
+java_spec=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^[[:space:]]*java\.specification\.version = //p')
+java_spec="${java_spec%%$'\n'*}"
+if [[ "$java_spec" == 1.* ]]; then
+  java_major="${java_spec#1.}"
+else
+  java_major="$java_spec"
+fi
+java_major="${java_major%%[^0-9]*}"
+if [[ -z "$java_major" ]] || (( java_major < 17 )); then
+  echo "verify-badi-formal-withhold: java 17+ is required, got '${java_spec:-unknown}'." >&2
+  exit 1
 fi
 
 mkdir -p "$cache"
