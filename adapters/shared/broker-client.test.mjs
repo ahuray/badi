@@ -162,6 +162,12 @@ test('editor identities, native reading lease, revocation and one-shot commits a
     const base64 = text => Buffer.from(text).toString('base64');
     assert.equal(await reply(), 'READY 1');
     assert.equal(await exchange({ operation: 'status' }), 'READY 1');
+    bridge.stdin.write(`${'x'.repeat(16385)}\n`);
+    assert.equal(await reply(), 'ERROR input_too_large');
+    bridge.stdin.write('[]\n');
+    assert.equal(await reply(), 'ERROR invalid_operation');
+    bridge.stdin.write('{bad\n');
+    assert.equal(await reply(), 'ERROR expired_or_unavailable');
     assert.match(await exchange({ operation: 'suggest', before: base64('thank you') }), /^SUGGEST /);
     // A preview Bash could not draw is cancelled and keeps the carried rest;
     // only Ctrl-X Escape dismisses, which ends it.

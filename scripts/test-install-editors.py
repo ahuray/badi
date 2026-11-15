@@ -55,6 +55,7 @@ class InstallEditorsTests(unittest.TestCase):
             self.assertEqual(receipt['installer'], 'editors')
             preview = receipt['files']['.local/lib/badi/editors/shell/badi-preview.so']
             self.assertEqual(preview['sha256'], hashlib.sha256(b'test display builtin').hexdigest())
+            self.assertIn('.local/lib/badi/editors/shared/bridge-stdio.mjs', receipt['files'])
             self.assertIn('.bashrc', receipt['files'])
             # Both runs use this checkout's actual Git identity (or explicit unknown).
             self.assertRegex(receipt['source']['commit'], r'^([0-9a-f]{40}|unknown)$')
@@ -106,6 +107,7 @@ class InstallEditorsTests(unittest.TestCase):
                              'Identical files are not rewritten')
             receipt = json.loads((home / '.local/state/badi/receipts/editors.json').read_text())
             self.assertIn('.local/share/nvim/site/pack/badi/start/badi/lua/badi/init.lua', receipt['files'])
+            self.assertIn('.local/lib/badi/editors/shared/bridge-stdio.mjs', receipt['files'])
             self.assertIn('.local/lib/badi/editors/neovim/bridge.mjs', receipt['files'])
             # The installed bridge resolves its imports outside the checkout.
             bridge = home / '.local/lib/badi/editors/neovim/bridge.mjs'

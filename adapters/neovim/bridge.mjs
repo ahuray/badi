@@ -3,19 +3,14 @@
 // edit; this process only speaks the broker protocol through the shared
 // client, one JSON line per message on stdin and stdout. It never prints
 // buffer text anywhere but its reply to Neovim, and logs nothing.
-import { createInterface } from 'node:readline';
 import { boundedContext, refusalReason } from '../shared/broker-client.mjs';
+import { createBridgeStdio } from '../shared/bridge-stdio.mjs';
 import { requestBroker } from '../shared/request-broker.mjs';
 import { RecoveringBrokerClient } from '../shared/recovering-client.mjs';
 import { recordActivity } from '../shared/activity.mjs';
 import { bridgeLanguage } from '../shared/writing-language.mjs';
 import { nextRevisionMode, revisionDiff, revisionModes } from '../shared/revision.mjs';
 
-// Exit after this long without a command so an idle editor does not keep a
-// Node process (about 60 MB); the plugin starts a new bridge when it next needs one.
-const IDLE_MS = /^[1-9][0-9]{0,8}$/.test(process.env.BADI_BRIDGE_IDLE_MS ?? '')
-  ? Number(process.env.BADI_BRIDGE_IDLE_MS) : 10 * 60 * 1000;
-const LINE_LIMIT = 16384;
 const LANGUAGE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/;
 const ACCEPTANCE = new Set(['all', 'word']);
 const RESULTS = new Set(['applied', 'stale', 'failed']);
@@ -23,18 +18,10 @@ const RESULTS = new Set(['applied', 'stale', 'failed']);
 const client = new RecoveringBrokerClient('neovim', { textReplacement: true, selectionRevision: true });
 let grant = null;
 let revisionRequest = null;
-// While Neovim holds its terminal's focus the bridge stays connected, since
-// the broker drops the focus report with the connection.
-let focused = false;
-const send = message => process.stdout.write(`${JSON.stringify(message)}\n`);
-const lines = createInterface({ input: process.stdin, terminal: false });
-let idle = null;
-const armIdleExit = () => {
-  clearTimeout(idle);
-  if (focused) return;
-  idle = setTimeout(() => { lines.close(); process.stdin.destroy(); }, IDLE_MS);
-  idle.unref();
-};
+// Exit after ten idle minutes unless a command is in flight or Neovim holds
+// its terminal's focus (the broker drops the focus report with the connection).
+const stdio = createBridgeStdio({ concurrent: true, onClose: () => client.close() });
+const send = stdio.writeJson;
 
 // The client clears its candidate on expiry, revocation, pause and
 // disconnect; Neovim withdraws the preview it shows for that candidate.
@@ -158,9 +145,9 @@ async function handle(command) {
       return { ok: true };
     case 'focus': {
       if (typeof command.focused !== 'boolean') return { ok: false, reason: 'invalid_request' };
-      focused = command.focused;
+      stdio.setHeld(command.focused);
       if (!client.connected) await client.connect().catch(() => false);
-      const withheld = await client.reportFocus(focused).catch(() => false);
+      const withheld = await client.reportFocus(stdio.held).catch(() => false);
       return { ok: true, withheld };
     }
     case 'status': {
@@ -179,29 +166,23 @@ async function handle(command) {
 
 try {
   void client.connect().catch(() => undefined);
-  armIdleExit();
-  for await (const line of lines) {
-    clearTimeout(idle);
-    let command;
-    try {
-      if (line.length > LINE_LIMIT) throw new Error('input_too_large');
-      command = JSON.parse(line);
-      if (!command || typeof command !== 'object' || Array.isArray(command)) throw new Error('invalid');
-    } catch {
+  await stdio.serve({
+    onInvalid() {
       send({ ok: false, reason: 'invalid_request' });
-      armIdleExit();
-      continue;
-    }
-    const id = Number.isSafeInteger(command.id) && command.id >= 0 ? command.id : undefined;
-    // Commands run concurrently: a newer suggestion supersedes an older one
-    // in the client, which rejects the older request with a changed context.
-    void handle(command).then(reply => send({ id, ...reply }), () => {
-      if (['accept', 'suggest', 'revise', 'accept_revision'].includes(command.op)) grant = null;
-      send({ id, ok: false, reason: reason() });
-    }).finally(armIdleExit);
-  }
+    },
+    async onCommand(command) {
+      const id = Number.isSafeInteger(command.id) && command.id >= 0 ? command.id : undefined;
+      // Commands run concurrently: a newer suggestion supersedes an older one
+      // in the client, which rejects the older request with a changed context.
+      try {
+        const reply = await handle(command);
+        send({ id, ...reply });
+      } catch {
+        if (['accept', 'suggest', 'revise', 'accept_revision'].includes(command.op)) grant = null;
+        send({ id, ok: false, reason: reason() });
+      }
+    },
+  });
 } finally {
-  clearTimeout(idle);
-  client.close();
-  lines.close();
+  stdio.close();
 }

@@ -696,8 +696,7 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Structure left by the review, each only when its file is next touched:
       the Fcitx `Binding` (about 50 fields, one expiry timer for notices,
       suggestions and revisions) as small reset-able parts and one retire
-      function for authority change and disconnect; and a shared stdio and
-      idle-exit module for the Bash and Neovim bridges.
+      function for authority change and disconnect.
 
 - [ ] Broker structure left by the review: move the remaining inline
       tests into `<module>/tests.rs` when those files are next touched.

@@ -57,13 +57,17 @@ restricted mode or edits a note.
   with fresh policy. Each accepted word is its own undo step.
 - **Bash.** Open a new shell (or source
   `~/.local/lib/badi/editors/shell/badi.bash`); Node must be on PATH.
-  `BADI_LANGUAGE=de` or `fa` overrides the locale. The Node bridge exits after
-  ten idle minutes, and the next Ctrl-X Tab starts a new one.
+  `BADI_LANGUAGE=de` or `fa` overrides the locale. The Node bridge uses
+  [`bridge-stdio.mjs`](bridge-stdio.mjs) to read bounded JSON lines on stdin,
+  exit after ten idle minutes once active requests finish, and close cleanly on
+  EOF; the next Ctrl-X Tab starts a new one.
 - **Neovim.** Restart it. The plugin is a start package under
   `stdpath('data')/site/pack/badi`; when lazy.nvim is detected the installer
   also writes its own new `lua/plugins/badi.lua` spec for that package.
-  Node must be on PATH, and its bridge exits after ten idle minutes like
-  Bash's ([details](../neovim/README.md)).
+  Node must be on PATH, and its bridge shares
+  [`bridge-stdio.mjs`](bridge-stdio.mjs) — exiting after ten idle minutes
+  unless a command is in flight or Neovim holds terminal focus
+  ([details](../neovim/README.md)).
 
 A suggestion appears whole, once the broker's confidence gate has judged
 it ([suggestion limits](../../broker/README.md#suggestion-limits)), and

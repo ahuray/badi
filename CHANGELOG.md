@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Extracted a shared stdio and idle-exit module (`adapters/shared/bridge-stdio.mjs`) for the Bash and Neovim bridges, unifying bounded NDJSON stdin reading, line/JSON stdout framing, clean EOF teardown and ten-minute idle exit held while commands run or Neovim holds terminal focus.
+
 - Added Omarchy panel rows for per-app European writing-language overrides and
   opt-in style learning (keeping terminals and shells fail-closed and using
   compare-and-swap settings writes), and extracted the panel's settings
