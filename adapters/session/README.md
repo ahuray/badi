@@ -31,7 +31,9 @@ whenever one changes; the reply is `desktop.status`
 - The report is bound to the helper's connection. If the helper exits, the
   broker drops its hold and low-power state, except that a live screen share
   stays held for 10 s or until a helper reports again; after a broker restart
-  the helper reconnects (1, 2, 5, 10, then 30 s) and reports again.
+  the helper reconnects (1, 2, 5, 10, then 30 s) and reports again. That
+  reconnect never starts the broker: a stopped model stays stopped until an
+  editor asks for a suggestion.
 - Unknown is permissive only where nothing is at stake: without logind the
   session counts as active (adapters keep their own focus, lock and expiry
   checks), and without UPower or power-profiles-daemon the machine counts as

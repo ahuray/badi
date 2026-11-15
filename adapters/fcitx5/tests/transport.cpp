@@ -263,6 +263,13 @@ private:
 
 int main() {
     try {
+        require(!liveSessionRuntime("", 1000), "an empty runtime is not the session");
+        require(!liveSessionRuntime("/tmp/badi", 1000), "a private runtime is not the session");
+        require(!liveSessionRuntime("/run/user/1000/extra", 1000), "a child path is not the session");
+        require(!liveSessionRuntime("/run/user/1000/", 1000), "a trailing slash is not the session");
+        require(!liveSessionRuntime("/run/user/1001", 1000), "another user's runtime is not the session");
+        require(liveSessionRuntime("/run/user/1000", 1000), "the session runtime");
+        std::cout << "ok - native transport: live session runtime\n";
         for (const auto *scenario : {"refusals", "malformed-refusal", "early-refusal", "dispatch-after-close"}) {
             Harness(scenario).run();
             std::cout << "ok - native transport: " << scenario << '\n';

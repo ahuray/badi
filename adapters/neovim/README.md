@@ -124,8 +124,10 @@ the comment colour in bold. Set either group to restyle it.
   policy for Neovim. The plugin reads no buffer text for a request that
   policy refuses (paused, `badi app nvim off`, or an automatic request under
   a manual grant); until the bridge has reported one, it asks with a
-  content-free `status` first. The bridge checks the policy again before it
-  sends anything to the broker.
+  content-free `status` first. When `badi-broker.service` is stopped, typing
+  in an eligible prose buffer starts it in the background, and an explicit
+  request waits up to 20 seconds for it; opening or focusing Neovim does not.
+  The bridge checks the policy again before it sends anything to the broker.
 - **Context.** At most 512 Unicode scalars before the caret (up to 64 earlier
   lines, joined with `\n`) and the rest of the caret's line after it, cut on
   UTF-8 boundaries. Text with bytes that are not UTF-8 is refused.

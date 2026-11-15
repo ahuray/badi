@@ -152,7 +152,7 @@ void BadiAddon::startRevision(Binding &binding, SelectionWindow selection, std::
     binding.zenCommit.clear();
     clearOwnedPanel(binding);
     binding.state.clearRevision();
-    if (!transport_.ready()) transport_.connect();
+    ensureBroker();
     binding.revisionWaiting = std::make_pair(std::move(selection), std::move(mode));
     binding.revisionRetries = 0;
     showRevisionNotice(binding, waitingNotice(binding.revisionWaiting->second));

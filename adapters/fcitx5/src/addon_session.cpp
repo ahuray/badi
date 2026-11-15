@@ -29,6 +29,11 @@ bool BadiAddon::open(Binding &binding) {
     return true;
 }
 
+void BadiAddon::ensureBroker() {
+    transport_.requestBroker();
+    if (!transport_.ready()) transport_.connect();
+}
+
 void BadiAddon::queryPolicy(Binding &binding) {
     if (!binding.state.editingAvailable() || binding.broker.policyKnown) return;
     if (const auto target = brokerTarget(binding)) transport_.queryPolicy(binding.state.coordinates(), *target);

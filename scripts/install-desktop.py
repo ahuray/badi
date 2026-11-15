@@ -464,12 +464,6 @@ class Plan:
     # is active in this session (a tty-launched compositor without uwsm
     # never activates it, so enabled units would not start at login).
     graphical_session: bool = True
-    # Broker enablement at preflight, and whether a completed install
-    # already happened (its receipt exists). Disabled with a receipt is the
-    # user's `badi autostart off`; disabled without one is an interrupted
-    # first install that must still be enabled.
-    broker_enabled: bool = False
-    broker_installed_before: bool = False
 
     @property
     def native(self):
@@ -561,9 +555,7 @@ def preflight(args):
                 broker_updating, accessibility_enabled, hypr_update=hypr_update,
                 session_disabled=session_disabled, platform=platform, system_addons=system_addons,
                 observer_session=observer_session or platform == badi_install.OMARCHY,
-                graphical_session=graphical_session,
-                broker_enabled=unit_enabled("badi-broker.service"),
-                broker_installed_before=badi_install.receipt_path(home, "desktop").exists())
+                graphical_session=graphical_session)
 
 
 def unit_enabled(unit):
@@ -878,13 +870,6 @@ def install_prepared_files(plan, installation):
     return installation
 
 
-def broker_needs_enable(plan):
-    """Enable the broker on a first install and after an interrupted one;
-    disabled after a completed install (receipt exists) is the user's
-    `badi autostart off` and stays off."""
-    return not plan.broker_enabled and not plan.broker_installed_before
-
-
 def restart(plan, installation):
     """Apply the installed files to the running services; returns the model's health."""
     home, runtime = plan.home, plan.runtime
@@ -894,9 +879,8 @@ def restart(plan, installation):
     if plan.native:
         run(["systemd-analyze", "--user", "verify", str(units / "badi-accessibility.service")])
     run(["systemctl", "--user", "daemon-reload"])
-    if broker_needs_enable(plan):
-        run(["systemctl", "--user", "enable", "badi-broker.service"])
-        plan.broker_enabled = True
+    # badi-broker.service starts on demand when the user types or asks; leave
+    # login autostart as the user's explicit `badi autostart on|off` choice.
     run(["systemctl", "--user", "reset-failed", "badi-broker.service"])
     run(["systemctl", "--user", "restart", "badi-broker.service"])
     probe = wait_model(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")

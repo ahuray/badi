@@ -100,6 +100,20 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     // their count and timing would describe the password.
     const bool sensitive =
         static_cast<bool>(event.inputContext()->capabilityFlags() & ::fcitx::CapabilityFlag::PasswordOrSensitive);
+    // A typed key is the moment an app needs the model. Modifiers, repeats of
+    // a key that already asked, and password fields do not start it. Observed
+    // apps and unnamed GNOME IBus contexts defer the start until async inspect
+    // confirms an editable field, so password fields and urlbars never wake it.
+    if (sensitive) {
+        binding->pendingBrokerStart = false;
+    } else if (!pressed.modifier && !pressed.repeat) {
+        if (binding->state.editingAvailable()) {
+            binding->pendingBrokerStart = false;
+            ensureBroker();
+        } else if (binding->observationCandidate()) {
+            binding->pendingBrokerStart = true;
+        }
+    }
     if (!pressed.modifier && !sensitive) {
         // A key that types text is named only in a text run, and only in a
         // field Badi edits for an allowed app: never a password, a denied
@@ -274,7 +288,7 @@ void BadiAddon::dropHeldTab(Binding &binding) {
 void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelObservation &panel) {
     // An explicit key can renew an exhausted recovery budget without
     // reading the field before the new policy response arrives.
-    if (!transport_.ready()) transport_.connect();
+    ensureBroker();
     const auto facts = requestFacts(binding);
     const auto context = facts.foreignIme ? std::nullopt : currentContext(binding);
     debug_.record("decision", binding.state.appId(), tabDecisionReason(facts, context),
@@ -328,7 +342,7 @@ void BadiAddon::requestTypedLine(Binding &binding, bool explicitRequest) {
     const auto &app = binding.state.appId();
     if (explicitRequest) {
         clearOwnedPanel(binding);
-        transport_.connect();
+        ensureBroker();
         queryPolicy(binding);
         if (const auto waiting = manualRequestNotice(requestFacts(binding))) return showNotice(binding, *waiting);
     }
@@ -417,6 +431,7 @@ void BadiAddon::invoke(Binding &binding) {
     case InvokeRoute::Unavailable:
         return showNotice(binding, notice::kUnavailableApp);
     case InvokeRoute::ObservedField:
+        ensureBroker();
         return observeLater(binding, true);
     case InvokeRoute::Manual:
         return requestManually(binding);
@@ -429,13 +444,13 @@ void BadiAddon::inspectOnRequest(Binding &binding) {
     debug_.record("observer", binding.state.appId(), "explicit_inspect_requested");
     if (const auto blocked = inspectionNotice(requestFacts(binding))) return showNotice(binding, *blocked);
     clearOwnedPanel(binding);
-    transport_.connect();
+    ensureBroker();
     observeLater(binding, true);
 }
 
 void BadiAddon::requestManually(Binding &binding) {
     clearOwnedPanel(binding);
-    transport_.connect();
+    ensureBroker();
     queryPolicy(binding);
     if (const auto waiting = manualRequestNotice(requestFacts(binding))) return showNotice(binding, *waiting);
     const auto context = currentContext(binding);

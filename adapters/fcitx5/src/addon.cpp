@@ -22,6 +22,7 @@ BadiAddon::BadiAddon(::fcitx::Instance *instance)
     accessibility_ = std::make_unique<Accessibility>(instance->eventLoop(),
         [this](const Json &event) { observerInvalidated(event); });
     watchInputContexts();
+    // The addon loads with the session. Attaching must not start the model.
     transport_.connect();
 }
 
@@ -125,6 +126,7 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     clearOwnedPanel(binding);
     binding.inputContext = &inputContext;
     binding.unnamedIbus = unnamedIbus;
+    binding.pendingBrokerStart = false;
     stopObserving(binding);
     binding.observationExplicit = false;
     binding.requestExplicit = false;
@@ -155,6 +157,8 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
         bindings_.erase(contextId);
         return;
     }
+    // Focusing a field is not a request. The model starts on a typed key or
+    // an explicit ask, then this connection's retries pick the socket up.
     transport_.connect();
     queryPolicy(binding);
     observeLater(binding);
@@ -268,6 +272,7 @@ void BadiAddon::capabilityChanged(::fcitx::InputContext &inputContext, ::fcitx::
     }
     debug_.record("authority", app, "capabilities_changed");
     if (!binding || (app.empty() && !activeUnnamed)) return;
+    if (after & ::fcitx::CapabilityFlag::PasswordOrSensitive) binding->pendingBrokerStart = false;
     binding->zenCommit.clear();
     // Capability changes can leave the previous widget's buffer cached.
     binding->surroundingFreshness.capabilityChanged();

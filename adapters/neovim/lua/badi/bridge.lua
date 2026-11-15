@@ -84,8 +84,12 @@ function Bridge:request(message, callback)
   end
   -- The broker bounds a cold revision call at 40 seconds. Its transport
   -- client allows 45; give that result time to reach the editor as well.
-  vim.defer_fn(function() finish({ ok = false, reason = 'timeout' }) end,
-    message.op == 'revise' and 47000 or REPLY_TIMEOUT_MS)
+  -- Explicit status and suggestion asks may wait up to 20 seconds for a
+  -- stopped badi-broker.service to load the model and bind its socket.
+  local timeout = message.op == 'revise' and 47000
+    or ((message.op == 'status' or message.op == 'suggest') and message.explicit == true and 25000)
+    or REPLY_TIMEOUT_MS
+  vim.defer_fn(function() finish({ ok = false, reason = 'timeout' }) end, timeout)
 end
 
 function Bridge:_receive(data)

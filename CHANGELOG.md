@@ -8,6 +8,12 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Typing in a field Badi can edit, or an explicit request from the input
+  method, Obsidian, Neovim, Bash or Writer, starts the local model when it is
+  not already running. Logging in does not unless `badi autostart on` is set,
+  and the session helper's reconnect loop does not either. The model stays up
+  until logout or `badi service stop`.
+
 - On GNOME, unnamed `ibus` input contexts (`program()` empty, `frontendName() ==
   "ibus"`) now take the focused window's verified canonical `app_id` from the
   GNOME observer for observed fields only

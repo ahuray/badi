@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline';
 import { BrokerClient, boundedContext, refusalReason } from '../shared/broker-client.mjs';
+import { requestBroker } from '../shared/request-broker.mjs';
 import { recordActivity } from '../shared/activity.mjs';
 import { bridgeLanguage } from '../shared/writing-language.mjs';
 
@@ -26,6 +27,9 @@ const armIdleExit = () => {
 };
 async function connect() {
   if (client.connected) return;
+  // The bridge process exists only because the user asked. Wait for the model
+  // to bind its socket; Bash allows this first reply that long.
+  await requestBroker({ waitMs: 20000 });
   client.close();
   client = new BrokerClient('terminal', { textReplacement: true });
   grant = null;

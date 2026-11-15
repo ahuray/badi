@@ -73,7 +73,9 @@ command.
   for, and once more right before the edit. A Replace button from another
   window never touches the proposal; a new request anywhere retires it.
 - **Broker.** One private v2 connection per attempt (`$XDG_RUNTIME_DIR/badi/broker.sock`,
-  owner and `0600` checked, `SO_PEERCRED` UID checked) negotiating
+  owner and `0600` checked, `SO_PEERCRED` UID checked). A correction starts
+  `badi-broker.service` when that socket is down and waits up to 20 seconds
+  for the model to bind it. The attempt negotiates
   `context`, `suggestion`, `commit.applied`, `text_replacement`, `control`,
   `policy` and `long_reading_window` (a 15 s reading window). It acknowledges
   every authority epoch; any later epoch, a `suggestion.clear`, a malformed

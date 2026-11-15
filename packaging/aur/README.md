@@ -88,13 +88,15 @@ On a fresh unlocked Omarchy session with the assets installed:
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now badi-broker.service badi-accessibility.service badi-session.service
+systemctl --user enable --now badi-accessibility.service badi-session.service
+systemctl --user start badi-broker.service
 systemctl --user restart omarchy-fcitx5.service
 badi doctor
 badi app omawrite on
 ```
 
-The broker creates private settings with access denied by default. Follow
+`badi-broker.service` starts on demand when you type in an editable field or
+ask explicitly (`badi autostart on` loads it at login instead). The broker creates private settings with access denied by default. Follow
 the [application setup and privacy controls](https://github.com/ahuray/badi/blob/main/README.md)
 for other apps and sites. Accessibility flags and desktop-wide
 `ScreenReaderEnabled` remain explicit user choices. Model readiness alone

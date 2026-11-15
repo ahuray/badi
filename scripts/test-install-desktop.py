@@ -1358,16 +1358,39 @@ class GenericInstallTests(unittest.TestCase):
             self.assertFalse(self.observer_waited or self.runtime_checked)
             self.assertIn('runs only in a Hyprland, KDE Plasma 6 or GNOME session', self.output)
 
-    def test_broker_enable_recovers_an_interrupted_install_but_preserves_autostart_off(self):
-        cases = (
-            (False, False, True, 'an interrupted first install is enabled'),
-            (False, True, False, 'a completed install preserves badi autostart off'),
-            (True, False, False, 'an enabled unit stays enabled'),
-            (True, True, False, 'an enabled completed install is untouched'))
-        for enabled, installed_before, expected, message in cases:
-            with self.subTest(enabled=enabled, installed_before=installed_before):
-                plan = SimpleNamespace(broker_enabled=enabled, broker_installed_before=installed_before)
-                self.assertIs(installer.broker_needs_enable(plan), expected, message)
+    def test_fresh_install_leaves_broker_autostart_off_for_on_demand_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home, project, runtime = root / 'home', root / 'project', root / 'runtime'
+            native_project(project)
+            calls = []
+
+            def execute(command, **kwargs):
+                calls.append(command)
+                if command[0] == 'loginctl':
+                    return subprocess.CompletedProcess(command, 0, str(runtime), '')
+                if '--property=UnitFileState' in command and 'badi-broker.service' in command:
+                    return subprocess.CompletedProcess(command, 0, 'disabled', '')
+                output = ('loaded' if '--property=LoadState' in command
+                          else 'active' if '--property=ActiveState' in command
+                          else 'enabled' if '--property=UnitFileState' in command else '{}')
+                return subprocess.CompletedProcess(command, 0, output, '')
+
+            with patch.object(installer, 'ROOT', project), \
+                 patch.object(installer.Path, 'home', return_value=home), \
+                 patch.object(installer.subprocess, 'run', side_effect=execute), \
+                 patch.object(installer, 'require_writing_assets'), \
+                 patch.object(installer, 'require_writing_model'), \
+                 patch.object(installer, 'wait_session_helper', return_value=True), \
+                 patch.object(installer, 'probe_model', return_value={'provider': 'local_model', 'paused': False, 'control_plane_degraded': False}), \
+                 patch.dict(os.environ, {'WAYLAND_DISPLAY': 'wayland-test', 'XDG_RUNTIME_DIR': str(runtime),
+                                         'XDG_CONFIG_HOME': str(home / '.config')}), \
+                 patch('sys.argv', ['install-desktop.py', '--broker-only']), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                installer.main()
+            self.assertNotIn(['systemctl', '--user', 'enable', 'badi-broker.service'], calls)
+            self.assertNotIn(['systemctl', '--user', 'disable', 'badi-broker.service'], calls)
+            self.assertIn(['systemctl', '--user', 'restart', 'badi-broker.service'], calls)
 
     def test_an_inactive_graphical_session_target_is_reported_with_recovery_steps(self):
         with tempfile.TemporaryDirectory() as temporary:

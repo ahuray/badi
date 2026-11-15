@@ -15,6 +15,7 @@ import re
 import socket
 import stat
 import struct
+import subprocess
 import threading
 import time
 import uuid
@@ -56,6 +57,64 @@ def socket_path(environ=None):
     if not runtime or not os.path.isabs(runtime) or os.path.normpath(runtime) != runtime:
         raise BrokerError("offline")
     return os.path.join(runtime, "badi", "broker.sock")
+
+
+_BROKER_START = ["/usr/bin/systemctl", "--user", "start", "--no-block", "badi-broker.service"]
+_broker_start = {"last": None}
+
+
+def live_session_runtime(environ=None, uid=None):
+    """True only for this user's systemd runtime, never a test directory."""
+    environ = os.environ if environ is None else environ
+    runtime = environ.get("XDG_RUNTIME_DIR", "")
+    if uid is None:
+        uid = os.geteuid()
+    return isinstance(runtime, str) and runtime == f"/run/user/{uid}"
+
+
+def _socket_ready(path, uid=None):
+    try:
+        metadata = os.lstat(path)
+    except OSError:
+        return False
+    expected_uid = os.geteuid() if uid is None else uid
+    return (stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == expected_uid
+            and stat.S_IMODE(metadata.st_mode) == 0o600)
+
+
+def request_broker(environ=None, uid=None, spawn=None, socket_ready=None, now=None,
+                   wait_seconds=0, slot=None):
+    """Start the user broker when a Writer attempt needs it and it is down.
+
+    Returns True once the socket exists. A private runtime does nothing, so
+    tests never start the session model.
+    """
+    if not live_session_runtime(environ, uid):
+        return False
+    environ = os.environ if environ is None else environ
+    path = os.path.join(environ["XDG_RUNTIME_DIR"], "badi", "broker.sock")
+    ready = (lambda candidate: _socket_ready(candidate, uid)) if socket_ready is None else socket_ready
+    if ready(path):
+        return True
+    clock = time.monotonic if now is None else now
+    state = _broker_start if slot is None else slot
+    at = clock()
+    last = state.get("last")
+    if last is None or at - last >= 5:
+        state["last"] = at
+        if spawn is None:
+            subprocess.Popen(_BROKER_START, start_new_session=True, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            spawn(list(_BROKER_START))
+    if wait_seconds <= 0:
+        return False
+    deadline = at + wait_seconds
+    while clock() < deadline:
+        if ready(path):
+            return True
+        time.sleep(0.2)
+    return bool(ready(path))
 
 
 def check_private_socket(path):
@@ -107,6 +166,14 @@ class Attempt:
     # Connection -----------------------------------------------------------
 
     def _connect(self):
+        try:
+            default = socket_path()
+        except BrokerError:
+            default = None
+        # An explicit test socket is not the session broker. Only the live
+        # default socket may start the model, and only because Writer asked.
+        if default is not None and self._path == default:
+            request_broker(wait_seconds=20)
         check_private_socket(self._path)
         connection = None
         try:

@@ -453,7 +453,7 @@ function M.revise(mode)
   if not ensure_bridge() then set_status('bridge_unavailable'); return end
   if not state.policy then
     local asked = state.generation
-    state.bridge:request({ op = 'status' }, function(reply)
+    state.bridge:request({ op = 'status', explicit = true }, function(reply)
       if reply.ok then set_policy(reply) end
       if state.generation == asked and state.policy then M.revise(mode) end
     end)
@@ -529,7 +529,7 @@ function M.request(explicit)
   -- ask it (a content-free status), then decide as if just requested.
   if not state.policy then
     local asked = state.generation
-    state.bridge:request({ op = 'status' }, function(reply)
+    state.bridge:request({ op = 'status', explicit = explicit }, function(reply)
       if reply.ok then set_policy(reply) end
       if state.generation ~= asked then return end
       if state.policy then return M.request(explicit) end
