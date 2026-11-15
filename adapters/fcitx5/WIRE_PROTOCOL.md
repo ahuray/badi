@@ -167,15 +167,21 @@ Exactly these keys, an opaque id and a known reason code are accepted; an
 `settings_revision` or `control_plane_degraded`), or before the handshake
 completes closes the connection. A refusal ends only what its id names:
 
-- an acceptance in flight (`fcitx.accept.<epoch>.<revision>`) retires its
-  suggestion, so a later grant for it is reported `stale`;
+- a `session.open` (`fcitx.open.<session>`) leaves its binding closed, so
+  the next request opens the session again;
+- an acceptance in flight (`fcitx.accept.<session>.<epoch>.<revision>`)
+  retires its suggestion, so a later grant for it is reported `stale`;
 - a revision request or its acceptance ends the revision with a notice;
-- the current context's `suggest.request` (`fcitx.suggest.<epoch>.<revision>`)
-  says the request failed if the user asked for it, and keeps the context;
+- the current context's `suggest.request`
+  (`fcitx.suggest.<session>.<epoch>.<revision>`) says the request failed if
+  the user asked for it, and keeps the context;
 - a `policy.query` is owed nothing more, and its session may ask again.
 
-These ids carry a focus epoch and revision, not the session, so two sessions
-can share one; every binding holding the id retires it, which only withdraws.
+Every request id carries its session UUID: bindings count focus epochs and
+revisions independently, and the `error` frame names only the id, so the
+session keeps one field's refusal from retiring another's request. The
+longest id, an alternative pick with its serial, is 109 bytes, within the
+128-byte limit.
 
 ## Revision
 

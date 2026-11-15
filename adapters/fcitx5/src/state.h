@@ -334,6 +334,14 @@ std::optional<std::string_view> inspectionNotice(const RequestFacts &facts);
 std::string_view tabDecisionReason(const RequestFacts &facts,
                                    const std::optional<ContextWindow> &context);
 
+// A request id unique to one session's coordinates. Bindings number focus
+// epochs and revisions independently, and a broker `error` frame names only
+// the id, so the session id keeps one binding's refusal out of another's.
+// At most 109 bytes with the alternative serial, under the 128-byte id limit.
+std::string sessionRequestId(std::string_view kind, const Coordinates &coordinates);
+// The id of the session.open for `sessionId`; a refusal names it.
+std::string sessionOpenRequestId(std::string_view sessionId);
+
 // The broker's view of one binding: a session opened at `coordinates` and the
 // policy answer for its target. Focus, a new field, a new authority epoch and
 // a closed connection retire both.
@@ -360,6 +368,13 @@ struct BrokerSession {
         languageOverride = allowed ? std::move(language) : std::string{};
         contextWords = allowed && words;
         snoozed = !allowed && snoozedHere;
+    }
+    // A refused session.open leaves nothing open: the next request opens
+    // again instead of speaking for a session the broker never granted.
+    bool refuseOpen(std::string_view requestId) {
+        if (!opened || requestId != sessionOpenRequestId(coordinates.sessionId)) return false;
+        opened = false;
+        return true;
     }
     void retire() {
         opened = false;

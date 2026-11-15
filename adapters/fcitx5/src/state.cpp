@@ -651,9 +651,14 @@ bool SessionState::retireObservation(std::string sessionId, std::string targetId
                    NativeEditTarget::DesktopApplication, NativeEditPath::Manual);
 }
 
-std::string suggestRequestId(const Coordinates &coordinates) {
-    return "fcitx.suggest." + std::to_string(coordinates.focusEpoch) + "." + std::to_string(coordinates.revision);
+std::string sessionRequestId(std::string_view kind, const Coordinates &coordinates) {
+    return "fcitx." + std::string(kind) + "." + coordinates.sessionId + "." +
+           std::to_string(coordinates.focusEpoch) + "." + std::to_string(coordinates.revision);
 }
+
+std::string suggestRequestId(const Coordinates &coordinates) { return sessionRequestId("suggest", coordinates); }
+
+std::string sessionOpenRequestId(std::string_view sessionId) { return "fcitx.open." + std::string(sessionId); }
 
 RefusedRequest SessionState::refuseRequest(std::string_view requestId) {
     if (!focused_ || requestId.empty()) return RefusedRequest::None;
@@ -791,9 +796,7 @@ SessionState::requestAlternativePick(std::string word, std::uint64_t nowMs,
     }
     AlternativePickRequest request{
         .coordinates = alternativeList_->coordinates,
-        .controlId = "fcitx.alternative." +
-                     std::to_string(alternativeList_->coordinates.focusEpoch) + "." +
-                     std::to_string(alternativeList_->coordinates.revision) + "." +
+        .controlId = sessionRequestId("alternative", alternativeList_->coordinates) + "." +
                      std::to_string(++alternativeSerial_),
         .suggestionId = alternativeList_->suggestionId,
         .word = std::move(word),
@@ -818,9 +821,7 @@ SessionState::requestAcceptance(std::uint64_t nowMs,
     }
     AcceptRequest request{
         .coordinates = visible_->coordinates,
-        .controlId = "fcitx.accept." +
-                     std::to_string(visible_->coordinates.focusEpoch) + "." +
-                     std::to_string(visible_->coordinates.revision),
+        .controlId = sessionRequestId("accept", visible_->coordinates),
         .suggestionId = visible_->suggestionId,
         .expectedText = word ? visible_->acceptWord : visible_->text,
         .acceptance = word ? "word" : "all",
@@ -843,9 +844,7 @@ SessionState::requestDismissal(std::uint64_t nowMs,
     }
     DismissRequest request{
         .coordinates = visible_->coordinates,
-        .controlId = "fcitx.dismiss." +
-                     std::to_string(visible_->coordinates.focusEpoch) + "." +
-                     std::to_string(visible_->coordinates.revision),
+        .controlId = sessionRequestId("dismiss", visible_->coordinates),
         .suggestionId = visible_->suggestionId,
     };
     clearSuggestion();
@@ -860,8 +859,8 @@ SessionState::requestAlternative(std::uint64_t nowMs, const PanelObservation &pa
     }
     return DismissRequest{
         .coordinates = visible_->coordinates,
-        .controlId = "fcitx.alternative." + std::to_string(visible_->coordinates.focusEpoch) + "." +
-                     std::to_string(visible_->coordinates.revision) + "." + std::to_string(++alternativeSerial_),
+        .controlId = sessionRequestId("alternative", visible_->coordinates) + "." +
+                     std::to_string(++alternativeSerial_),
         .suggestionId = visible_->suggestionId,
     };
 }
@@ -933,8 +932,7 @@ std::optional<RevisionUpdate> SessionState::requestRevision(SelectionWindow sele
     clearRevision();
     revisionRequest_ = RevisionUpdate{
         .coordinates = coordinates_,
-        .requestId = "fcitx.revise." + std::to_string(coordinates_.focusEpoch) + "." +
-                     std::to_string(coordinates_.revision),
+        .requestId = sessionRequestId("revise", coordinates_),
         .mode = std::move(mode),
         .selection = std::move(selection),
         .appId = appId_,
@@ -968,8 +966,7 @@ std::optional<AcceptRequest> SessionState::requestRevisionAcceptance(std::uint64
     }
     revisionAcceptance_ = AcceptRequest{
         .coordinates = revision_->coordinates,
-        .controlId = "fcitx.revise.accept." + std::to_string(revision_->coordinates.focusEpoch) + "." +
-                     std::to_string(revision_->coordinates.revision),
+        .controlId = sessionRequestId("revise.accept", revision_->coordinates),
         .suggestionId = revision_->revisionId,
         .expectedText = revision_->text,
         .acceptance = "all",
@@ -986,8 +983,7 @@ std::optional<DismissRequest> SessionState::requestRevisionDismissal(std::uint64
     }
     DismissRequest request{
         .coordinates = revision_->coordinates,
-        .controlId = "fcitx.revise.dismiss." + std::to_string(revision_->coordinates.focusEpoch) + "." +
-                     std::to_string(revision_->coordinates.revision),
+        .controlId = sessionRequestId("revise.dismiss", revision_->coordinates),
         .suggestionId = revision_->revisionId,
     };
     clearRevision();

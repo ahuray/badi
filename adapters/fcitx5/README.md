@@ -341,6 +341,10 @@ toolkit in general.
 
 The 2026-10-24 cells, their drivers and screenshots are in
 `output/native-trials/2026-10-24-full-trial/` (`results.jsonl`).
+With session-scoped request ids (installed `3006451`, 2026-11-15), Chromium
+155 and Omawrite 0.7.2 each showed a suggestion, took a word with Tab, listed
+alternatives, took a digit pick and the rest with Ctrl+→, with no refusal in
+the trace (`output/native-trials/2026-11-15-fcitx-request-ids/`).
 
 What the live trials established, beyond those cells:
 
