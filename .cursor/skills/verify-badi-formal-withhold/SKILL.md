@@ -1,7 +1,6 @@
 ---
 name: verify-badi-formal-withhold
 description: Checks Badi's pause, snooze and screen-share withhold ordering with TLA+ (TLC) and the broker withhold_ tests. Use when a change touches runtime pause, settings pause, desktop hold, screen-share grace, snooze, ambiguous_session, or whether a suggestion may be admitted.
-sync_commit: 972c5a52900a8ceec57528664734c7ae0ee31180
 ---
 
 # Verify withhold ordering
@@ -28,7 +27,7 @@ The model is [Withhold.tla](Withhold.tla) with [Withhold.cfg](Withhold.cfg). TLC
 
 ## Read a result
 
-Read every TLC result with the pstack /statechart skill before deciding what it means.
+A counterexample is a numbered list of states. Each state after the first names the action that produced it. Read it from the first state. For each step, write down the action, the variables it changed (names below) and the function in [Coverage](#coverage) that takes that step. Then decide which of the cases below the trace is.
 
 State names in a trace:
 
@@ -45,7 +44,7 @@ State names in a trace:
 | `sa` / `mail`, `sb` / `docs` | the two sites |
 | `inactive` | `DesktopSession::Inactive` or `Sleeping` (both `holds`) |
 
-A counterexample is a product bug when every step is an action in the table below and the named function can take it. Say the steps in those function names, and the harm. Leave the model as it is. Do not change product code unless the user asked. Upkeep of the model follows pstack /maintain-formal-verification-skill, in its own change, separate from a product fix.
+A counterexample is a product bug when every step is an action in the table below and the named function can take it. Say the steps in those function names, and the harm. Leave the model as it is. Do not change product code unless the user asked. Model upkeep ([When the code changes](#when-the-code-changes)) is its own change, separate from a product fix.
 
 A counterexample is a modeling error when a step cannot happen in that function: the code's guard would refuse it, the code does not take that step, or the step is outside the bounds below. Fix the model so it describes the code, then rerun. Do not drop a conjunct from `SuggestionsStayWithheld`, `OneWithholdDoesNotLiftAnother` or `SnoozeStartsOnlyForOneClearSubject` to get a pass.
 
@@ -53,11 +52,17 @@ TLC passing while a `withhold_` test fails means the running broker broke the pr
 
 ## When the code changes
 
-Confirm the model still describes the functions in [Coverage](#coverage). A green `check.sh` is not that confirmation. Move `sync_commit` in this file only after that confirmation, to the commit you confirmed. Follow pstack /maintain-formal-verification-skill: edit the model, the config, this skill and the `withhold_` tests, not product code, and do not weaken the property to pass.
+Confirm the model still describes the functions in [Coverage](#coverage). A green `check.sh` is not that confirmation.
+
+1. Read the diff of every function in Coverage since the confirmed commit: `git diff <confirmed>..HEAD -- <files>`.
+2. For each change, ask whether it adds or drops a withhold, changes a guard on opening a session, reading context or admitting a suggestion, or lets one withhold end another. A change that does none of these (a refactor, a log line, proposal shape) needs no model edit.
+3. If the model no longer matches, edit [Withhold.tla](Withhold.tla), [Withhold.cfg](Withhold.cfg), the Coverage and Bounds sections and the `withhold_` tests so they describe the code. Do not edit product code here, and do not weaken a property to pass.
+4. Run `check.sh` and update the state count in [Bounds](#bounds).
+5. Move the confirmed commit in Coverage to the commit you read.
 
 ## Coverage
 
-Confirmed against commit `972c5a52900a8ceec57528664734c7ae0ee31180`. The model describes these functions as of that commit. The `withhold_` tests call them.
+Confirmed against commit `bb9aec21299e6d148c6c6d1464daacbaa3399ef6`. The model describes these functions as of that commit. The `withhold_` tests call them.
 
 | TLC action or operator | Code |
 | --- | --- |
@@ -75,7 +80,7 @@ Confirmed against commit `972c5a52900a8ceec57528664734c7ae0ee31180`. The model d
 | `Expire` | `Broker::expire_snoozes` |
 | `Revoked` | `SessionState::revoke_context_authority` in `broker/src/engine/session.rs` |
 | `RuntimePaused`, `EffectivePaused` | `BrokerState::runtime_paused`, `BrokerState::effective_paused` in `broker/src/engine/mod.rs` |
-| `DesktopHoldOf`, `ScreenShareOf` | `BrokerState::desktop_hold`, `BrokerState::screen_share`; `DesktopSession::holds` in `broker/src/protocol.rs` |
+| `DesktopHoldOf`, `ScreenShareOf` | `BrokerState::desktop_hold`, `BrokerState::screen_share` in `broker/src/engine/desktop.rs`; `DesktopSession::holds` in `broker/src/protocol.rs` |
 | `DataAccess` | `BrokerState::session_with_data_access` in `broker/src/engine/mod.rs`; `BrokerState::withheld_reason` in `broker/src/engine/snooze.rs`; `settings_allow_data` in `broker/src/engine/authority.rs`; `PolicyResolution::allows_context_read`, `allows_display`, `allows_suggestion` in `broker/src/settings/policy.rs` |
 | `SuggestionsAllowed` | `policy_status` in `broker/src/engine/authority.rs` |
 
@@ -93,7 +98,7 @@ TLC checks every interleaving inside these bounds, and nothing outside them:
 - The target is allowed by settings whenever it is not paused, held or snoozed. A blocked site, an unknown identity, manual activation, a sensitive field and editor focus are other denials.
 - No commit grant, no suggestion text, no battery scheduling, no type-through.
 
-Checked states at the sync commit: 3080 distinct, search depth 13. TLC's state-graph outdegree can show a minimum of 0. That is an action that leaves the state unchanged, such as a repeated helper report. Deadlock checking is on; a state with no enabled action fails the run.
+Checked states at the confirmed commit: 3080 distinct, search depth 13. TLC's state-graph outdegree can show a minimum of 0. That is an action that leaves the state unchanged, such as a repeated helper report. Deadlock checking is on; a state with no enabled action fails the run.
 
 ## What a pass does not cover
 
