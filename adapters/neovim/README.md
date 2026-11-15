@@ -113,11 +113,13 @@ the comment colour in bold. Set either group to restyle it.
 
 - **Bridge.** On the first Insert in an eligible buffer, the plugin starts
   [`bridge.mjs`](bridge.mjs) with `vim.fn.jobstart` and speaks one JSON line per
-  message over its stdio. The bridge reuses the shared
+  message over its stdio through [`bridge-stdio.mjs`](../shared/bridge-stdio.mjs).
+  The bridge reuses the shared
   [broker client](../shared/broker-client.mjs) (protocol v2, adapter kind
   `neovim`, the 15-second `long_reading_window`, `commit.applied`) through its
   reconnecting wrapper, so the wire, frame, policy and authority handling are
-  the same code Obsidian and Bash use. It exits after ten idle minutes; the
+  the same code Obsidian and Bash use. It exits after ten idle minutes unless a
+  command is in flight or Neovim holds terminal focus; the
   next eligible keystroke starts a new one. A reconnect only refreshes policy
   and never replays text.
 - **Policy first.** Every state the bridge reports carries the broker's

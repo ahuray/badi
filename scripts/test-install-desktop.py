@@ -1555,6 +1555,18 @@ class PayloadListTests(unittest.TestCase):
         self.assertEqual(sorted(panel.FILES), shipped)
         self.assertEqual(self.pkgbuild_loop('ui/omarchy-plugin'), shipped)
 
+    def test_editor_files(self):
+        spec = importlib.util.spec_from_file_location('install_editors', self.ROOT / 'scripts/install-editors.py')
+        editors = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(editors)
+        shared = sorted('shared/' + path.name for path in (self.ROOT / 'adapters/shared').glob('*.mjs')
+                        if not path.name.endswith('.test.mjs'))
+        self.assertEqual(sorted((*editors.SHARED_CLIENT, 'shared/recovering-client.mjs')), shared)
+        neovim = sorted(str(path.relative_to(self.ROOT / 'adapters/neovim'))
+                        for folder in ('plugin', 'lua')
+                        for path in (self.ROOT / 'adapters/neovim' / folder).rglob('*.lua'))
+        self.assertEqual(sorted(editors.NEOVIM_PLUGIN), neovim)
+
 
 if __name__ == '__main__':
     unittest.main()
