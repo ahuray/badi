@@ -55,7 +55,8 @@ may hold a passphrase. Storage and expiry:
 - Turning context off for a subject deletes its words. Turning context off
   everywhere keeps them until they expire or `badi context forget` runs.
 
-Linux apps may learn this way. Style samples still may not.
+Non-terminal Linux apps may learn this way (and, since 2026-11-15, may also opt
+into per-app style learning; terminals and shells never learn either).
 
 **Finishing a word.** After five typed letters, Badi offers the rest of the one
 longer word in view (window, learned or earlier in the draft) that starts with

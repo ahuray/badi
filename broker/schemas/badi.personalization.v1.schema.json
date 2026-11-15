@@ -22,21 +22,53 @@
   },
   "$defs": {
     "identity": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "adapter", "scheme", "host", "port"],
-      "properties": {
-        "kind": { "const": "browser_origin" },
-        "adapter": { "const": "chromium" },
-        "scheme": { "enum": ["http", "https"] },
-        "host": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 253,
-          "pattern": "^[a-z0-9.:-]+$"
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "scheme", "host", "port"],
+          "properties": {
+            "kind": { "const": "browser_origin" },
+            "adapter": { "const": "chromium" },
+            "scheme": { "enum": ["http", "https"] },
+            "host": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[a-z0-9.:-]+$"
+            },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
         },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
-      }
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter", "app_id"],
+          "properties": {
+            "kind": { "const": "linux_app" },
+            "adapter": { "enum": ["fcitx", "obsidian", "neovim", "libreoffice"] },
+            "app_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[a-z][a-z0-9_-]*(?:\\.[a-z][a-z0-9_-]*)*$"
+            }
+          },
+          "not": {
+            "properties": {
+              "adapter": { "const": "fcitx" },
+              "app_id": {
+                "enum": [
+                  "com.mitchellh.ghostty",
+                  "foot",
+                  "org.codeberg.dnkl.foot"
+                ]
+              }
+            },
+            "required": ["adapter", "app_id"]
+          }
+        }
+      ]
     },
     "counter": {
       "type": "integer",

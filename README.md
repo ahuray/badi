@@ -364,18 +364,19 @@ words; `badi context forget` deletes them all.
 ### Style learning (opt-in)
 
 ```sh
-badi style on                              # keyring key; nothing is kept yet
-badi style site https://mail.example on 30 # keep samples from this allowed site for 30 days
+badi style on                               # keyring key; nothing is kept yet
+badi style app omawrite on 30               # keep samples from this allowed app for 30 days
+badi style site https://mail.example on 30  # keep samples from this allowed site for 30 days
 badi style status | export | forget
 ```
 
-When on, each accepted suggestion on a learning site keeps the sentence you
-wrote before it, sealed with a key in your desktop keyring; sentences with
+When on, each accepted suggestion in a learning app or site keeps the sentence
+you wrote before it, sealed with a key in your desktop keyring; sentences with
 digits, email addresses or links are skipped. Desktop suggestions do not use
 the samples yet: the Lab offers [three style strengths](evaluation/writing/README.md#style-comparison)
 for comparing explicitly supplied examples against style off.
-`badi style forget` deletes them and the key. Apps other than websites cannot
-learn ([details](broker/README.md#style-learning-opt-in)).
+`badi style forget` deletes them and the key. Terminals and shells never learn
+([details](broker/README.md#style-learning-opt-in)).
 
 ### Usage statistics
 

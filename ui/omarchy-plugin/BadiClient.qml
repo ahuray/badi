@@ -149,11 +149,20 @@ Scope {
     return value.retention.mode !== "bounded" || value.learn === "allow"
   }
 
+  function isTerminalIdentity(value) {
+    return value.kind === "linux_app"
+      && (value.adapter === "shell"
+        || (value.adapter === "fcitx"
+          && (value.app_id === "com.mitchellh.ghostty"
+            || value.app_id === "foot"
+            || value.app_id === "org.codeberg.dnkl.foot")))
+  }
+
   function isSubject(value) {
     return hasExactKeys(value, ["identity", "permissions"])
       && isIdentity(value.identity)
       && isPermissions(value.permissions)
-      && (value.identity.kind !== "linux_app" || value.permissions.learn === "block")
+      && (!isTerminalIdentity(value.identity) || value.permissions.learn === "block")
   }
 
   function compareIdentities(left, right) {

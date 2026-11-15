@@ -11,6 +11,11 @@ use crate::protocol::{
     LIBREOFFICE_WRITER_APP_ID, OriginScheme, TargetDescriptor, TargetKind, valid_linux_app_id,
 };
 
+/// Native terminal app ids whose typed line Badi may assist on opt-in
+/// (ADR 0009), and which must never learn style samples or context words.
+pub const TERMINAL_FCITX_APP_IDS: [&str; 3] =
+    ["com.mitchellh.ghostty", "foot", "org.codeberg.dnkl.foot"];
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserAdapter {
@@ -150,6 +155,23 @@ impl StableIdentity {
                 Self::linux_app(LinuxAdapter::Libreoffice, &target.app_id)
             }
             _ => Err(IdentityError::UnsupportedTarget),
+        }
+    }
+
+    /// Whether this identity names a shell or terminal app, whose typed line
+    /// must never learn style samples, context words or aggregates (ADR 0009).
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        match self {
+            Self::LinuxApp {
+                adapter: LinuxAdapter::Shell,
+                ..
+            } => true,
+            Self::LinuxApp {
+                adapter: LinuxAdapter::Fcitx,
+                app_id,
+            } => TERMINAL_FCITX_APP_IDS.contains(&app_id.as_str()),
+            Self::BrowserOrigin { .. } | Self::LinuxApp { .. } => false,
         }
     }
 

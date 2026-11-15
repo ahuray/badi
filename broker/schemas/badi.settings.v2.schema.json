@@ -248,8 +248,29 @@
           "if": {
             "properties": {
               "identity": {
-                "properties": { "kind": { "const": "linux_app" } },
-                "required": ["kind"]
+                "anyOf": [
+                  {
+                    "properties": {
+                      "kind": { "const": "linux_app" },
+                      "adapter": { "const": "shell" }
+                    },
+                    "required": ["kind", "adapter"]
+                  },
+                  {
+                    "properties": {
+                      "kind": { "const": "linux_app" },
+                      "adapter": { "const": "fcitx" },
+                      "app_id": {
+                        "enum": [
+                          "com.mitchellh.ghostty",
+                          "foot",
+                          "org.codeberg.dnkl.foot"
+                        ]
+                      }
+                    },
+                    "required": ["kind", "adapter", "app_id"]
+                  }
+                ]
               }
             },
             "required": ["identity"]

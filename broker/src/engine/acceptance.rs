@@ -15,8 +15,10 @@ use crate::personalization::PersonalizationSignal;
 use crate::policy::PolicyReason;
 use crate::protocol::{
     Acceptance, AdapterKind, Capability, CommitPreparePayload, CommitResultPayload, CommitStatus,
-    ControlAction, Coordinates, ReasonCode, SessionControlRequestPayload, SuggestRequestPayload,
+    ControlAction, Coordinates, FieldPurpose, ReasonCode, SessionControlRequestPayload,
+    SuggestRequestPayload, TargetKind,
 };
+use crate::settings::StableIdentity;
 use crate::stats::StatsEvent;
 
 /// The UTC day and signal of one outcome aggregate to record.
@@ -322,6 +324,15 @@ impl Broker {
             })
             .and_then(|revision| {
                 let context = session.context.as_ref()?;
+                if session.target.target.kind == TargetKind::Terminal
+                    || context.field.purpose != FieldPurpose::Normal
+                    || context.field.sensitive
+                    || context.field.lock_screen
+                    || !StableIdentity::from_target(&session.target.target)
+                        .is_ok_and(|identity| !identity.is_terminal())
+                {
+                    return None;
+                }
                 let text = crate::style::authored_sample(&context.before)?;
                 Some((session.target.target.clone(), revision, text))
             });

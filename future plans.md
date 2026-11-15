@@ -160,7 +160,11 @@ Standing user decisions:
   addon corroborates exact `fcitx_before + committed_suffix` (including
   back-to-back word commits) in that same field and epoch and fails closed on
   any difference (2026-11-15,
-  [ADR 0003](docs/decisions/0003-ime-parity-append-only.md)).
+  [ADR 0003](docs/decisions/0003-ime-parity-append-only.md));
+- native Linux apps may opt into style learning per app
+  (`badi style app ID on [DAYS]`, default off); terminals and shells
+  (`Ghostty`, `foot`, `bash`) and sensitive fields never learn style samples
+  or context words (2026-11-15).
 
 Open decisions, for the user:
 - **GNOME app identity.** GNOME relays every Wayland text-input app (GTK 4,
@@ -202,8 +206,8 @@ publish need the user's go-ahead first; the rest can start at once.
    pixels, and larger models only where a real GPU qualifies them.
 
    - **1a. Read the style samples (personalized word choice).** Today
-     `badi style on` seals a bounded set of sentences (16 per site, 64 in
-     all) and no prompt reads them
+     `badi style on` seals a bounded set of sentences (16 per app or site, 64
+     in all) and no prompt reads them
      ([broker runbook](broker/README.md#style-learning-opt-in));
      Cotypist's core feature is exactly this loop closed, with a six-stop
      strength slider. The Lab now has [three explicit style arms](evaluation/writing/README.md#style-comparison)
@@ -215,8 +219,7 @@ publish need the user's go-ahead first; the rest can start at once.
      settings and seed, style off against on, the user's own held-out
      drafts as the private set with the `style_fact_conflict` fence and
      native review, samples never leaving the machine or entering the
-     checkout; native Linux app learning is being lifted in its own
-     change), requiring a per-language gain without more harm before any
+     checkout), requiring a per-language gain without more harm before any
      prompt reads samples;
      (iii) only if useful additions rise without harmful ones rising, wire
      the winning shape into `broker/src/writing.rs` behind the existing

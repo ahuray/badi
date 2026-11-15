@@ -138,7 +138,7 @@ impl LearnedStore {
         identity: &StableIdentity,
         words: &[String],
     ) -> Result<bool, StyleError> {
-        if words.is_empty() || !settings.context_words_for(identity) {
+        if words.is_empty() || identity.is_terminal() || !settings.context_words_for(identity) {
             return Ok(false);
         }
         let key = self.key.as_ref().ok_or(StyleError::KeyUnavailable)?;
@@ -225,7 +225,9 @@ impl LearnedStore {
             self.document
                 .subjects
                 .iter()
-                .filter(|record| settings.context_words_for(&record.identity))
+                .filter(|record| {
+                    !record.identity.is_terminal() && settings.context_words_for(&record.identity)
+                })
                 .filter_map(|record| {
                     let words: Vec<(String, u64)> = self
                         .words_of(record)
@@ -248,7 +250,8 @@ impl LearnedStore {
             .subjects
             .iter()
             .filter(|record| {
-                !settings.context_words_off.contains(&record.identity)
+                !record.identity.is_terminal()
+                    && !settings.context_words_off.contains(&record.identity)
                     && within_retention(record.day, today)
             })
             .cloned()
@@ -355,6 +358,7 @@ fn validate_document(document: &LearnedDocument) -> Result<(), StyleError> {
         || document.subjects.len() > MAX_LEARNED_SUBJECTS
         || document.subjects.iter().any(|record| {
             record.identity.validate().is_err()
+                || record.identity.is_terminal()
                 || decode_hex(&record.nonce).is_none_or(|bytes| bytes.len() != NONCE_BYTES)
                 || decode_hex(&record.ciphertext).is_none()
         })

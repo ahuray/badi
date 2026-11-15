@@ -82,7 +82,7 @@ impl DailyAggregate {
 
     fn validate(&self) -> Result<(), PersonalizationValidationError> {
         self.identity.validate()?;
-        if !matches!(self.identity, StableIdentity::BrowserOrigin { .. }) {
+        if self.identity.is_terminal() {
             return Err(PersonalizationValidationError::UnsupportedIdentity);
         }
         if self.day > MAX_SAFE_COUNTER {
@@ -168,7 +168,7 @@ impl PersonalizationV1 {
 
     fn reconcile(&mut self, settings: &SettingsV2, today: u64) {
         self.records.retain(|record| {
-            if record.day > today {
+            if record.day > today || record.identity.is_terminal() {
                 return false;
             }
             let resolution = settings.resolve_identity_validated(&record.identity);
@@ -356,8 +356,9 @@ impl PersonalizationStore {
         next.reconcile(settings, today);
         let resolution = settings.resolve_identity_validated(&identity);
         let retention_days = resolution.permissions.retention.days().map_or(1, u64::from);
-        let signal_eligible =
-            resolution.allows_learning() && today.saturating_sub(event_day) < retention_days;
+        let signal_eligible = !identity.is_terminal()
+            && resolution.allows_learning()
+            && today.saturating_sub(event_day) < retention_days;
         let signal_identity = identity.clone();
         let signal_changed = if signal_eligible {
             next.record_signal(identity, provider, event_day, signal)?
