@@ -2186,6 +2186,178 @@ void observedParagraphEndIsEndOfField() {
           "IME-parity browsers share the observed rule");
 }
 
+void zenPostCommitAgreementIsNarrowAndFailsClosed() {
+    check(zenPostCommitApp("zen") && zenPostCommitApp("zen-twilight"),
+          "both exact Zen identities use the post-commit agreement rule");
+    for (const auto app : {"chromium", "chromium-browser", "brave-origin", "code", "chatgpt", "firefox",
+                           "zen-alpha", "zen-browser", "app.zen_browser.zen", "omawrite", ""}) {
+        check(!zenPostCommitApp(app), "no non-Zen or unverified Gecko identity uses the Zen post-commit rule");
+    }
+
+    const auto makeField = [](std::string_view app, int epoch, std::int64_t caret, std::int64_t total,
+                              std::string_view before, std::string_view after = "") {
+        return nlohmann::json{
+            {"binding", {{"app_id", app}, {"bus", ":1.9"}, {"path", "/field/1"}, {"process_id", 42}, {"epoch", epoch}}},
+            {"target", {{"kind", "browser"}, {"app_id", app}, {"origin", "https://allowed.example.test"},
+                        {"target_id", "target-" + std::to_string(epoch)}}},
+            {"purpose", "plain_text"},
+            {"selection_count", 0},
+            {"caret", caret},
+            {"total_chars", total},
+            {"before", before},
+            {"after", after},
+        };
+    };
+
+    for (const auto app : {"zen", "zen-twilight"}) {
+        auto raw = *captureContextWindow("thank you", 9, 9, true, "en");
+        raw.identityKnown = true;
+        raw.explicitRequest = false;
+        const auto preField = makeField(app, 1, 9, 9, "thank you");
+
+        ZenPendingCommit pending;
+        pending.record(app, preField, raw, " for");
+        check(pending.active() && pending.matchesFcitx(raw), "append-only Zen commit arms pending suffix");
+
+        auto explicitFlipped = raw;
+        explicitFlipped.explicitRequest = true;
+        check(pending.matchesFcitx(explicitFlipped),
+              "automatic re-inspection after an explicit request's commit still matches Fcitx's text");
+
+        auto reacquiredInspect = makeField(app, 2, 13, 13, "thank you for");
+        reacquiredInspect.erase("before");
+        reacquiredInspect.erase("after");
+        reacquiredInspect.erase("total_chars");
+        check(pending.sameField(reacquiredInspect), "same-field re-inspection across observer epoch keeps expectation");
+
+        const auto afterFirst = makeField(app, 2, 13, 13, "thank you for");
+        auto corroboratedFirst = raw;
+        check(pending.corroborate(app, corroboratedFirst, afterFirst) && pending.active(),
+              "exact fcitx_before + S1 corroborates and stays armed while Fcitx remains at pre-commit text");
+        check(corroboratedFirst.before == "thank you for" && corroboratedFirst.anchor == 13 &&
+                  corroboratedFirst.head == 13 && !observedRequestBlocked(afterFirst, corroboratedFirst, false, true),
+              "corroborated post-commit context carries the committed word and caret");
+
+        // Second consecutive Tab while Gecko still reports the pre-commit SurroundingText.
+        pending.record(app, afterFirst, raw, " your");
+        check(pending.active() && pending.matchesFcitx(raw), "chained second Tab accumulates S1 + S2");
+        const auto afterSecond = makeField(app, 3, 18, 18, "thank you for your");
+        auto corroboratedSecond = raw;
+        check(pending.corroborate(app, corroboratedSecond, afterSecond) && pending.active() &&
+                  corroboratedSecond.before == "thank you for your" && corroboratedSecond.anchor == 18 &&
+                  corroboratedSecond.head == 18,
+              "chained second Tab corroborates exact fcitx_before + S1 + S2");
+
+        // Once Fcitx updates SurroundingText past the pre-commit snapshot, matchesFcitx turns false.
+        auto caughtUp = *captureContextWindow("thank you for your", 18, 18, true, "en");
+        caughtUp.identityKnown = true;
+        check(!pending.matchesFcitx(caughtUp), "Fcitx catching up ends the pre-commit match");
+        pending.clear();
+        check(!pending.active(), "clear retires the pending suffix");
+    }
+
+    // Multi-byte UTF-8 scalars, mid-text after-caret agreement, paragraph ends and >512-scalar windowing.
+    {
+        auto utf8Raw = *captureContextWindow("danke sch\xc3\xb6n", 11, 11, true, "de");
+        utf8Raw.identityKnown = true;
+        const auto utf8Pre = makeField("zen", 1, 11, 11, "danke sch\xc3\xb6n");
+        ZenPendingCommit utf8Pending;
+        utf8Pending.record("zen", utf8Pre, utf8Raw, " f\xc3\xbcr");
+        auto utf8Ctx = utf8Raw;
+        check(utf8Pending.corroborate("zen", utf8Ctx, makeField("zen", 2, 15, 15, "danke sch\xc3\xb6n f\xc3\xbcr")) &&
+                  utf8Ctx.anchor == 15 && utf8Ctx.head == 15,
+              "multi-byte UTF-8 commits advance caret and length in Unicode scalars");
+
+        auto midRaw = *captureContextWindow("thank all", 5, 5, true, "en");
+        midRaw.identityKnown = true;
+        const auto midPre = makeField("zen", 1, 5, 9, "thank", " all");
+        ZenPendingCommit midPending;
+        midPending.record("zen", midPre, midRaw, " you");
+        auto midCtx = midRaw;
+        check(midPending.corroborate("zen", midCtx, makeField("zen", 2, 9, 13, "thank you", " all")) &&
+                  midCtx.before == "thank you" && midCtx.after == " all" && midCtx.head == 9,
+              "mid-text Zen commit corroborates when after-caret text stays agreed");
+        check(!midPending.corroborate("zen", midRaw, makeField("zen", 3, 9, 14, "thank you", " all!")) &&
+                  !midPending.active(),
+              "changed after-caret text fails closed and clears pending suffix");
+
+        auto paraRaw = *captureContextWindow("thank you\n\n", 9, 9, true, "en");
+        paraRaw.identityKnown = true;
+        normalizeObservedParagraphEnd(paraRaw);
+        const auto paraPre = makeField("zen", 1, 9, 11, "thank you", "\n\n");
+        ZenPendingCommit paraPending;
+        paraPending.record("zen", paraPre, paraRaw, " for");
+        auto paraCtx = paraRaw;
+        check(paraPending.corroborate("zen", paraCtx, makeField("zen", 2, 13, 15, "thank you for", "\n\n")) &&
+                  paraCtx.before == "thank you for" && paraCtx.after.empty() && paraCtx.paragraphEnd == "\n\n",
+              "normalized paragraph end still requires raw paragraph-end agreement after commit");
+
+        const std::string longPrefix = std::string(510, 'a') + "thank you";
+        auto longRaw = *captureContextWindow(longPrefix, 519, 519, true, "en");
+        longRaw.identityKnown = true;
+        const auto longPre = makeField("zen", 1, 519, 519, longPrefix.substr(longPrefix.size() - 512));
+        ZenPendingCommit longPending;
+        longPending.record("zen", longPre, longRaw, " for");
+        auto longCtx = longRaw;
+        const std::string expectedWindow = std::string(499, 'a') + "thank you for";
+        check(longPending.corroborate("zen", longCtx, makeField("zen", 2, 523, 523, expectedWindow)) &&
+                  longCtx.before.size() == 512 && longCtx.before == expectedWindow && longCtx.head == 523,
+              "512-scalar window slides identically to the observer when committed text crosses 512 scalars");
+    }
+
+    // Any discrepancy — including a dropped commit that left the field at raw Fcitx — fails closed and clears.
+    const auto raw = [] {
+        auto captured = *captureContextWindow("thank you", 9, 9, true, "en");
+        captured.identityKnown = true;
+        return captured;
+    }();
+    const auto preField = makeField("zen", 1, 9, 9, "thank you");
+    const std::vector<nlohmann::json> badSnapshots{
+        makeField("zen", 2, 9, 9, "thank you"),               // Page script dropped commitString(" for").
+        makeField("zen", 2, 13, 13, "thank you fox"),          // Page script altered one character.
+        makeField("zen", 2, 14, 14, "thank you for "),         // Page script added a trailing space.
+        makeField("zen", 2, 13, 13, "Thank you for"),          // Page script altered case before commit.
+        makeField("zen", 2, 12, 13, "thank you for"),          // Caret moved off end of committed word.
+        makeField("zen", 2, 13, 14, "thank you for", "x"),     // Unexpected text inserted after caret.
+        [&] {
+            auto block = makeField("zen", 2, 13, 13, "thank you for");
+            block["scope"] = "block";
+            return block;
+        }(),
+        [&] {
+            auto otherField = makeField("zen", 2, 13, 13, "thank you for");
+            otherField["binding"]["path"] = "/field/2";
+            return otherField;
+        }(),
+        [&] {
+            auto otherOrigin = makeField("zen", 2, 13, 13, "thank you for");
+            otherOrigin["target"]["origin"] = "https://evil.example.test";
+            return otherOrigin;
+        }(),
+        [&] {
+            auto selected = makeField("zen", 2, 13, 13, "thank you for");
+            selected["selection_count"] = 1;
+            return selected;
+        }(),
+    };
+    for (const auto &bad : badSnapshots) {
+        ZenPendingCommit pending;
+        pending.record("zen", preField, raw, " for");
+        auto candidate = raw;
+        check(!pending.corroborate("zen", candidate, bad) && !pending.active() && candidate == raw,
+              "every dropped, modified or redirected Zen commit fails closed and clears pending state");
+    }
+
+    // Non-Zen apps never arm or corroborate a stale Fcitx snapshot.
+    for (const auto app : {"chromium", "brave-origin", "code", "firefox", "zen-alpha", "omawrite"}) {
+        ZenPendingCommit pending;
+        pending.record(app, makeField(app, 1, 9, 9, "thank you"), raw, " for");
+        auto candidate = raw;
+        check(!pending.active() && !pending.corroborate(app, candidate, makeField(app, 2, 13, 13, "thank you for")),
+              "non-Zen apps never accept a stale pre-commit Fcitx snapshot");
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -2210,6 +2382,8 @@ int main(int argc, char **argv) {
         {"Tab decision reasons", tabReasonNamesTheFirstBlocker},
         {"broker session retirement", brokerSessionRetiresSessionAndPolicyTogether},
         {"observed paragraph end is end of field", observedParagraphEndIsEndOfField},
+        {"Zen post-commit agreement is narrow and fails closed",
+         zenPostCommitAgreementIsNarrowAndFailsClosed},
         {"observed fields are append-only", observedFieldsAreAppendOnly},
         {"state transitions and identity", stateTransitionsAndIdentity},
         {"native app policy coherence", nativePolicyMustBeCoherent},

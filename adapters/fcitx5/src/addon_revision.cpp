@@ -145,6 +145,7 @@ bool BadiAddon::revisionChord(Binding &binding) {
 }
 
 void BadiAddon::startRevision(Binding &binding, SelectionWindow selection, std::string mode) {
+    binding.zenCommit.clear();
     clearOwnedPanel(binding);
     binding.state.clearRevision();
     if (!transport_.ready()) transport_.connect();
@@ -386,6 +387,7 @@ void BadiAddon::acceptRevision(Binding &binding) {
 // Escape, or any key that edits the field: tell the broker and clear Badi's
 // panel. The key itself keeps its meaning.
 void BadiAddon::cancelRevision(Binding &binding) {
+    binding.zenCommit.clear();
     binding.revisionCycle.reset();
     if (binding.revisionWaiting) {
         binding.revisionWaiting.reset();

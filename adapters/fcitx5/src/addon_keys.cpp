@@ -70,6 +70,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     // line could record the digit as text; no other key is captured.
     if (binding->state.alternativeList() && !hasForeignImeUi(panel) && unclaimed) {
         if (pressed.escape) {
+            binding->zenCommit.clear();
             binding->state.clearAlternativeList();
             clearOwnedPanel(*binding);
             event.filterAndAccept();
@@ -133,6 +134,13 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     if (reachesApp && binding->state.editPath() == NativeEditPath::TypedLine) lineKey(*binding, key, typed);
     switch (action) {
     case PreKeyAction::PassThrough:
+        if (!pressed.modifier &&
+            !(unclaimed && !pressed.repeat && binding->state.editingAvailable() &&
+              binding->state.suggestionVisible() && panel.candidatesOwnedByBadi && hasOwnedCandidate(panel) &&
+              !hasForeignImeUi(panel) &&
+              (key.check(acceptChord()) || (key.check(invokeChord()) && binding->broker.policyAllowed)))) {
+            binding->zenCommit.clear();
+        }
         return;
     case PreKeyAction::CancelDeclining:
         declineContext(*binding);
@@ -157,6 +165,7 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
         tabKey(event, *binding, panel);
         return;
     case PreKeyAction::CloseNotice:
+        binding->zenCommit.clear();
         binding->state.invalidateContext();
         clearOwnedPanel(*binding);
         return;
@@ -342,13 +351,18 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
     if (event.isRelease() || !!(event.key().states() & ::fcitx::KeyState::Repeat)) return;
     auto *binding = bindingFor(*event.inputContext());
     if (!binding || !binding->state.focused()) return;
-    if (event.isVirtual() || event.filtered() || event.accepted()) return;
-    const auto panel = observePanel(*binding);
+    if (event.isVirtual()) return;
     const auto key = event.key().normalize();
+    if (event.filtered() || event.accepted()) {
+        if (!key.isModifier()) binding->zenCommit.clear();
+        return;
+    }
+    const auto panel = observePanel(*binding);
     const bool invokeChordPressed = key.check(invokeChord());
     const bool foreignIme = hasForeignImeUi(panel);
     // On a selection the chord asks for a revision of it (ADR 0012).
     if (invokeChordPressed && !foreignIme && revisionChord(*binding)) {
+        binding->zenCommit.clear();
         event.filterAndAccept();
         return;
     }
@@ -363,7 +377,10 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
         debug_.record("decision", binding->state.appId(),
                       binding->state.editingAvailable() ? "app_disabled" : "no_edit_path");
     }
-    if (!binding->state.editingAvailable()) return;
+    if (!binding->state.editingAvailable()) {
+        if (!key.isModifier()) binding->zenCommit.clear();
+        return;
+    }
     // Escape, Tab and Ctrl+Right were decided before the input method.
     const bool liveOwnedCandidate = binding->state.suggestionVisible() && panel.candidatesOwnedByBadi;
     switch (decideLocalAction(claimInvoke && invokeChordPressed, key.check(acceptChord()), liveOwnedCandidate,
@@ -375,6 +392,7 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
         requestAcceptance(*binding);
         break;
     case LocalAction::PassThrough:
+        if (!key.isModifier()) binding->zenCommit.clear();
         if ((liveOwnedCandidate ||
              (binding->state.alternativeList() && panel.candidatesOwnedByBadi)) &&
             !key.isModifier()) {
@@ -388,6 +406,7 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
 
 // Explicit requests.
 void BadiAddon::invoke(Binding &binding) {
+    binding.zenCommit.clear();
     if (binding.state.editingAvailable() && binding.state.editPath() == NativeEditPath::TypedLine)
         return requestTypedLine(binding, true);
     switch (routeInvoke(binding.state.appId(), binding.state.editingAvailable(), binding.observed())) {
@@ -440,7 +459,10 @@ void BadiAddon::requestAcceptance(Binding &binding, bool word) {
     const auto request = binding.state.editingAvailable()
         ? binding.state.requestAcceptance(transport_.nowMs(), observePanel(binding), word)
         : std::nullopt;
-    if (!request || !transport_.requestAcceptance(*request)) return clearOwnedPanel(binding);
+    if (!request || !transport_.requestAcceptance(*request)) {
+        binding.zenCommit.clear();
+        return clearOwnedPanel(binding);
+    }
     // Retain local ownership until the grant is checked, but stop painting
     // extensions once the user has chosen this immutable candidate.
     binding.heldSuggestion.reset();
@@ -458,6 +480,7 @@ bool BadiAddon::requestAlternative(Binding &binding, const PanelObservation &pan
 }
 
 void BadiAddon::dismissSuggestion(Binding &binding, const PanelObservation &panel) {
+    binding.zenCommit.clear();
     if (const auto request = binding.state.requestDismissal(transport_.nowMs(), panel)) {
         ++binding.observationGeneration;
         declineContext(binding);

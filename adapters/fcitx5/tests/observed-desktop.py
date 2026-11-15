@@ -40,7 +40,8 @@ UNOBSERVED_FAMILY_PROGRAMS = {'chrome': 'chrome', 'Google-chrome': 'google-chrom
                               # Gecko: another Zen build and a PWAsForFirefox window.
                               'Zen-Alpha': 'zen-alpha',
                               'FFPWA-01HVY3F0GDT6DCG5V6TTRHK4BT': 'ffpwa-01hvy3f0gdt6dcg5v6ttrhk4bt'}
-IME_PARITY_APPS = ('chromium', 'chromium-browser', 'brave-origin', 'zen', 'chatgpt', 'code', 'cursor', 'discord')
+IME_PARITY_APPS = ('chromium', 'chromium-browser', 'brave-origin', 'zen', 'zen-twilight',
+                   'chatgpt', 'code', 'cursor', 'discord')
 RIGHT, CONTROL, SHIFT = 0xff53, 1 << 2, 1
 # Chromium's text-input-v3 path adds UppercaseWords (0x80072 in total).
 CHROMIUM_HINT = 1 << 19
@@ -1098,6 +1099,125 @@ def session(root, report):
         checks.append('IME-parity browser (zen, Gecko): an observer-denied urlbar on the same unhinted input '
                       'context reads no prose, sends no context and keeps Tab')
 
+        # Decision 6a (ADR 0003): in Zen (`zen` and `zen-twilight` only), Gecko
+        # keeps Fcitx's SurroundingText at the pre-commit text after Tab commits
+        # a word until the next keystroke, while the observer already reads
+        # `fcitx_before + committed`.
+        def observer_only(value):
+            backend.value, backend.caret = value, None
+            daemon.observer.invalidate('field_changed')
+
+        backend.browser, backend.uri, backend.role = True, ALLOWED_URI, 'text'
+        change(PREFIX, new_field=True)
+        wait(lambda: context.candidate() == SHOWN, 'zen candidate before stale-Fcitx Tab')
+        calls, commits = provider_calls(), context.commits()
+        assert context.key(desktop.TAB), 'zen Tab accepts first word'
+        wait(lambda: context.commits() == [*commits, ' for'], 'zen first word committed')
+        observer_only(PREFIX + ' for')  # Fcitx SurroundingText deliberately left at PREFIX.
+        wait(lambda: context.candidate() == 'your time', 'zen remainder corroborated while Fcitx stays at pre-commit')
+        assert provider_calls() == calls, 'zen post-Tab remainder uses type-through carry without a model call'
+        display_mismatches = reason_count('observer_display_mismatch')
+        assert context.key(ord(' '), CONTROL | SHIFT), \
+            'zen Ctrl+Shift+Space asks for alternatives on the post-Tab remainder without clearing zenCommit'
+        wait(lambda: provider_calls() == calls + 1, 'zen alternatives call reaches real broker')
+        quiet(.15)
+        assert reason_count('observer_display_mismatch') == display_mismatches, \
+            'zen alternatives response corroborates while Fcitx stays at pre-commit'
+        assert context.candidate() == 'your time', 'zen fallback remainder stays corroborated'
+        assert context.key(desktop.TAB), 'zen second consecutive Tab accepts second word while Fcitx stays stale'
+        wait(lambda: context.commits() == [*commits, ' for', ' your'], 'zen second word committed')
+        observer_only(PREFIX + ' for your')  # Fcitx still at PREFIX.
+        wait(lambda: context.candidate() == 'time', 'zen third word shown after back-to-back Tabs')
+        assert provider_calls() == calls + 1
+        assert context.key(RIGHT, CONTROL), 'zen Ctrl+Right accepts remaining suffix'
+        wait(lambda: context.commits() == [*commits, ' for', ' your', ' time'], 'zen remaining suffix committed')
+        checks.append('Zen (`zen`): single-Tab remainder, `Ctrl+Shift+Space` alternatives, and back-to-back second Tab '
+                      'corroborate `fcitx_before + S` while Gecko leaves Fcitx at `fcitx_before`')
+
+        # `zen-twilight` shares the exact rule, including a quick held second Tab.
+        backend.apps.add('zen-twilight')
+        open_context('zen-twilight')
+        change(PREFIX, new_field=True)
+        wait(lambda: context.candidate() == SHOWN, 'zen-twilight candidate before held second Tab')
+        calls = provider_calls()
+        held = reason_count('tab_held')
+        assert context.key(desktop.TAB)
+        wait(lambda: context.commits() == [' for'], 'zen-twilight first word committed')
+        assert context.key(desktop.TAB), 'zen-twilight quick second Tab is held'
+        wait(lambda: reason_count('tab_held') == held + 1, 'zen-twilight second Tab held')
+        observer_only(PREFIX + ' for')
+        wait(lambda: context.commits() == [' for', ' your'], 'zen-twilight held Tab commits second word')
+        observer_only(PREFIX + ' for your')
+        wait(lambda: context.candidate() == 'time', 'zen-twilight remainder after held second Tab')
+        assert provider_calls() == calls
+        checks.append('Zen Twilight (`zen-twilight`): held second Tab chains `S1 + S2` while Fcitx stays at '
+                      'pre-commit text')
+
+        # Page script altering OR dropping the committed word fails closed and clears the pending suffix.
+        open_context('zen')
+        for bad_value, detail in ((PREFIX + ' fox', 'altered commit'),
+                                  (PREFIX, 'dropped commit leaving field at pre-commit text')):
+            change(PREFIX, new_field=True)
+            wait(lambda: context.candidate() == SHOWN, 'zen candidate before ' + detail)
+            commits = context.commits()
+            mismatch, before_updates = reason_count('observer_context_mismatch'), updates()
+            assert context.key(desktop.TAB)
+            wait(lambda: context.commits() == [*commits, ' for'], 'zen commit before ' + detail)
+            observer_only(bad_value)
+            wait(lambda: reason_count('observer_context_mismatch') > mismatch,
+                 'zen fails closed on ' + detail)
+            quiet(.25)
+            assert updates() == before_updates and context.candidate() is None, detail
+        checks.append('Zen: page script altering or dropping the committed word fails closed with '
+                      '`observer_context_mismatch` and clears the pending suffix')
+
+        # Fresh non-acceptance keystroke or focus change clears the pending committed suffix.
+        change(PREFIX, new_field=True)
+        wait(lambda: context.candidate() == SHOWN, 'zen candidate before fresh keystroke')
+        commits = context.commits()
+        assert context.key(desktop.TAB)
+        wait(lambda: context.commits() == [*commits, ' for'], 'zen commit before fresh keystroke')
+        assert not context.key(ord('x')), 'fresh keystroke reaches the app and clears pending commit suffix'
+        mismatch, before_updates = reason_count('observer_context_mismatch'), updates()
+        backend.value, backend.caret = PREFIX + ' for', None
+        context.text(PREFIX)  # Even if Fcitx republished PREFIX, the keystroke cleared the expectation.
+        wait(lambda: reason_count('observer_context_mismatch') > mismatch,
+             'zen fresh keystroke cleared pending suffix')
+        quiet(.2)
+        assert updates() == before_updates and context.candidate() is None
+
+        change(PREFIX, new_field=True)
+        wait(lambda: context.candidate() == SHOWN, 'zen candidate before focus reset')
+        commits = context.commits()
+        assert context.key(desktop.TAB)
+        wait(lambda: context.commits() == [*commits, ' for'], 'zen commit before focus reset')
+        context.ic('FocusOut')
+        context.ic('FocusIn')
+        mismatch, before_updates = reason_count('observer_context_mismatch'), updates()
+        backend.value, backend.caret = PREFIX + ' for', None
+        daemon.observer.invalidate('focus_changed')
+        context.text(PREFIX)
+        wait(lambda: reason_count('observer_context_mismatch') > mismatch,
+             'zen focus change cleared pending suffix')
+        quiet(.2)
+        assert updates() == before_updates and context.candidate() is None
+        checks.append('Zen: a fresh non-acceptance keystroke or focus change clears the pending committed suffix')
+
+        # Non-Zen browser (`chromium`) still rejects stale `fcitx_before` against `fcitx_before + S`.
+        backend.apps.add('chromium')
+        open_context('chromium', CHROMIUM_HINT)
+        change(PREFIX, new_field=True)
+        wait(lambda: context.candidate() == SHOWN, 'chromium candidate before stale-Fcitx check')
+        assert context.key(desktop.TAB)
+        wait(lambda: context.commits() == [' for'], 'chromium first word committed')
+        mismatch, before_updates = reason_count('observer_context_mismatch'), updates()
+        observer_only(PREFIX + ' for')
+        wait(lambda: reason_count('observer_context_mismatch') > mismatch,
+             'chromium rejects stale pre-commit Fcitx text')
+        quiet(.25)
+        assert updates() == before_updates and context.candidate() is None
+        checks.append('Non-Zen browser (`chromium`) still rejects stale `fcitx_before` against `fcitx_before + S`')
+
         ime_parity('code', False, 0, 'IME-parity desktop (code)')
 
         # A ProseMirror composer (Codex desktop): Chromium ends each <p> with
@@ -1474,6 +1594,80 @@ def session(root, report):
         fake_wait(lambda: fake.count('commit.result') > results, 'a grant after the refusal is reported')
         assert fake.last('commit.result')['payload']['status'] == 'stale' and context.commits() == commits
         checks.append('A broker refusal of an acceptance keeps the connection and retires only that suggestion')
+
+        # In Zen, `Ctrl+Shift+Space` -> `AlternativeList` -> digit `1` pick -> `Tab`
+        # commit all keep `zenCommit` intact while Fcitx stays at `PREFIX`, and a
+        # refused acceptance clears `zenCommit`.
+        backend.apps.add('zen')
+        backend.browser, backend.uri, backend.role = True, ALLOWED_URI, 'text'
+        open_context('zen')
+        request = fake_request()
+        fake.respond(request, 'suggestion.show', {
+            'suggestion_id': 'zen-first', 'text': SUFFIX, 'accept_word': ' for', 'ttl_ms': 10000,
+            'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() == SHOWN, 'zen initial suggestion from fake broker')
+        controls, results = fake.count('control.request'), fake.count('commit.result')
+        assert context.key(desktop.TAB)
+        fake_wait(lambda: fake.count('control.request') > controls, 'zen first Tab acceptance request')
+        fake.respond(fake.last('control.request'), 'commit.prepare', {
+            'suggestion_id': 'zen-first', 'text': ' for', 'acceptance': 'word'})
+        fake_wait(lambda: fake.count('commit.result') > results and context.commits() == [' for'],
+                  'zen first word dispatched')
+        requests = fake.count('suggest.request')
+        observer_only(PREFIX + ' for')  # Fcitx SurroundingText remains at PREFIX.
+        fake_wait(lambda: fake.count('suggest.request') > requests, 'zen post-Tab context reaches fake broker')
+        assert fake.last('context.changed')['payload']['before'] == PREFIX + ' for'
+        post_commit_req = fake.last('suggest.request')
+        fake.respond(post_commit_req, 'suggestion.show', {
+            'suggestion_id': 'zen-rest', 'text': ' your time', 'accept_word': ' your', 'ttl_ms': 10000,
+            'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() == 'your time',
+                  'zen post-Tab remainder displayed while Fcitx stays at pre-commit')
+        controls = fake.count('control.request')
+        assert context.key(ord(' '), CONTROL | SHIFT), 'Ctrl+Shift+Space requests alternative list on Zen remainder'
+        fake_wait(lambda: fake.count('control.request') > controls, 'zen alternative list request reaches fake broker')
+        alt_req = fake.last('control.request')
+        assert alt_req['payload']['action'] == 'alternatives'
+        fake.respond(alt_req, 'suggestion.list', {
+            'suggestion_id': 'zen-rest', 'words': ['much', 'kindness'], 'ttl_ms': 10000, 'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() == 'much', 'zen numbered alternative list displayed')
+        controls, display_mismatches = fake.count('control.request'), reason_count('observer_display_mismatch')
+        assert context.key(ord('1')), 'digit 1 picks first alternative without reaching Zen'
+        fake_wait(lambda: fake.count('control.request') > controls, 'zen alternative pick reaches fake broker')
+        pick_req = fake.last('control.request')
+        assert pick_req['payload']['action'] == 'alternatives' and pick_req['payload']['word'] == 'much'
+        fake.respond(pick_req, 'suggestion.show', {
+            'suggestion_id': 'zen-picked', 'text': ' much!', 'accept_word': ' much!', 'ttl_ms': 10000,
+            'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() == 'much!',
+                  'zen picked alternative corroborated while Fcitx stays at pre-commit')
+        assert reason_count('observer_display_mismatch') == display_mismatches
+        controls, results = fake.count('control.request'), fake.count('commit.result')
+        assert context.key(desktop.TAB), 'Tab accepts picked alternative while Fcitx stays at pre-commit'
+        fake_wait(lambda: fake.count('control.request') > controls, 'zen picked alternative acceptance reaches broker')
+        fake.respond(fake.last('control.request'), 'commit.prepare', {
+            'suggestion_id': 'zen-picked', 'text': ' much!', 'acceptance': 'word'})
+        fake_wait(lambda: fake.count('commit.result') > results and context.commits() == [' for', ' much!'],
+                  'zen picked alternative committed')
+        requests = fake.count('suggest.request')
+        observer_only(PREFIX + ' for much!')
+        fake_wait(lambda: fake.count('suggest.request') > requests, 'zen cumulative S1 + S2 context reaches broker')
+        fake.respond(fake.last('suggest.request'), 'suggestion.show', {
+            'suggestion_id': 'zen-refused', 'text': ' Thanks', 'accept_word': ' Thanks', 'ttl_ms': 10000,
+            'provider': 'phrase_v1'})
+        fake_wait(lambda: context.candidate() == 'Thanks', 'zen candidate after cumulative commit')
+        controls = fake.count('control.request')
+        assert context.key(desktop.TAB)
+        fake_wait(lambda: fake.count('control.request') > controls, 'zen acceptance before refusal')
+        refused_accept = fake.last('control.request')
+        fake.send({'v': 2, 'id': refused_accept['id'], 'type': 'error', 'mono_ms': 0, 'payload': {'code': 'expired'}})
+        fake_wait(lambda: context.candidate() is None, 'refused Zen acceptance retires candidate')
+        mismatch = reason_count('observer_context_mismatch')
+        context.text(PREFIX)
+        fake_wait(lambda: reason_count('observer_context_mismatch') > mismatch,
+                  'refused Zen acceptance cleared zenCommit')
+        checks.append('Zen (`zen`): `Ctrl+Shift+Space` alternative list, digit `1` pick and `Tab` commit corroborate '
+                      'while Fcitx stays at pre-commit text, and a refused acceptance clears `zenCommit`')
 
         # A second Tab while a revision's acceptance is in flight is a no-op;
         # the grant still applies the revision once (ADR 0012).

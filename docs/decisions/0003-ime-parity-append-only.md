@@ -1,7 +1,7 @@
 # ADR 0003: extension-free editing accepts one append-only IME commit
 
 - Status: accepted; corrections amended by [ADR 0011](0011-checked-corrections-in-append-only-apps.md) (2026-10-23)
-- Date: 2026-09-26, extended 2026-10-06, 2026-10-07, 2026-10-12 and 2026-10-20
+- Date: 2026-09-26, extended 2026-10-06, 2026-10-07, 2026-10-12, 2026-10-20 and 2026-11-15
 - Scope: Fcitx IME-parity apps: Chromium, Brave Origin and its `--app` windows
   (Omarchy web apps), Zen (exact `zen` and `zen-twilight` identities only), Codex desktop, Claude
   desktop, VS Code, Cursor, Discord, Grok Bot and LibreOffice Writer
@@ -55,10 +55,27 @@ urlbar shares the page's input context without a URL purpose, so only the
 observer can deny it.
 
 Agreement between the observer and Fcitx stays exact, with two narrow
-equivalences for rich editors:
+equivalences for rich editors and one post-commit rule for Zen:
 - an empty Fcitx `after` and an observed block end both mean end of field;
 - when a list, quote or table lies in the window, the observer corroborates only
-  the caret's own block, which Fcitx's text must end with from a line start.
+  the caret's own block, which Fcitx's text must end with from a line start;
+- since 2026-11-15 (user decision), in Zen (`zen` and `zen-twilight` only)
+  immediately after Badi itself dispatches an append-only `commitString`, Gecko
+  keeps Fcitx's surrounding text at the pre-commit snapshot until the next
+  keystroke while the observer already reads the committed text; in that same
+  input context, field identity and authority epoch, the addon corroborates the
+  field if and only if the observer's plain-text `before` equals exact
+  `fcitx_before + committed_suffix` (accumulating back-to-back word commits
+  while Fcitx's snapshot stays unchanged), `caret` and `total_chars` advance by
+  that suffix's scalar count, and `after` still agrees, using that corroborated
+  `before` and caret as the field context and withholding spelling replacement
+  until Fcitx's surrounding text catches up. Badi's consumed acceptance and
+  alternative-selection keys on a shown remainder keep the pending suffix;
+  focus loss, a different field, an authority or connection reset, a changed
+  Fcitx snapshot, any key reaching the app, Escape, explicit invoke, selection
+  revision, or even a one-character difference (including a dropped commit that
+  leaves the field at `fcitx_before`) clears the pending suffix and fails
+  closed.
 
 ## Consequences
 

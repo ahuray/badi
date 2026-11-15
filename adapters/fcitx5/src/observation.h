@@ -86,6 +86,39 @@ bool observerAgrees(const nlohmann::json &observed, const ContextWindow &context
 bool observerCorroborates(const nlohmann::json &captured, const nlohmann::json &observed,
                           const ContextWindow &context);
 
+// Only the exact Zen identities keep Fcitx's surrounding text at the pre-commit
+// snapshot after an append-only commitString until the next keystroke (ADR 0003).
+bool zenPostCommitApp(std::string_view appId);
+
+// Tracks Badi's own append-only commitString suffix in an observed Zen field
+// while Gecko still reports the pre-commit surrounding text to Fcitx. Badi's
+// consumed acceptance and alternative-selection keys on a shown remainder keep
+// it; focus loss, an authority or connection reset, a field-identity or
+// surrounding-text change, any key reaching the app, Escape, explicit invoke,
+// selection revision, a refused request, or any observer snapshot that differs
+// by even one character from `preCommit.before + committed` clears it.
+class ZenPendingCommit {
+public:
+    void record(std::string_view appId, const nlohmann::json &observedField,
+                const ContextWindow &rawFcitx, std::string_view committed);
+    void clear();
+    [[nodiscard]] bool active() const { return active_; }
+    [[nodiscard]] bool sameField(const nlohmann::json &focus) const;
+    [[nodiscard]] bool matchesFcitx(const ContextWindow &rawFcitx) const;
+    [[nodiscard]] bool corroborate(std::string_view appId, ContextWindow &context,
+                                   const nlohmann::json &observed);
+    [[nodiscard]] bool applyToCorroborated(std::string_view appId, ContextWindow &context,
+                                           const nlohmann::json &observed) const;
+
+private:
+    bool active_ = false;
+    nlohmann::json field_;
+    ContextWindow preCommit_;
+    std::string committed_;
+    std::size_t committedScalars_ = 0;
+    std::string expectedBefore_;
+};
+
 // The observer's quiet fact for this field ("file_dialog", "narrow_field", or
 // "quiet_field" for a fact this build does not name), or nullopt. Quiet binds
 // automatic requests only; an explicit request is the user's own action.

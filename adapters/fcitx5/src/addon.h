@@ -57,6 +57,9 @@ private:
         std::optional<std::string> pendingSuggestion;
         // The observed field. Replies of an older generation are ignored.
         Json observedFocus;
+        // Zen's post-commit expectation while Fcitx's surrounding text stays at
+        // the pre-commit snapshot (ADR 0003).
+        ZenPendingCommit zenCommit;
         // Identity for a field visit, used only to preserve broker quieting.
         // Observation epochs and editing sessions still retire on every
         // invalidation; this contains no text or reusable editing grant.
@@ -257,7 +260,7 @@ private:
     bool contextReadable(const Binding &binding) const;
     bool safeToObserve(const Binding &binding) const;
     std::optional<ContextWindow> currentContext(const Binding &binding) const;
-    std::optional<ContextWindow> currentContext(const Binding &binding, const Json &observed) const;
+    std::optional<ContextWindow> rawContext(const Binding &binding, const Json &observed) const;
     std::string_view unavailableContextReason(const Binding &binding) const;
     void invalidateChangedContext(Binding &binding);
     void showNotice(Binding &binding, std::string_view message);
