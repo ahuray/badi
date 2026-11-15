@@ -1120,6 +1120,35 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(problem['code'], 'settings_unsafe_file')
             self.assertNotIn('settings path', json.dumps(problem))
 
+    def test_doctor_reports_unrecognized_settings_schema_as_a_configuration_error(self):
+        service = {'loaded': True, 'active': 'failed', 'state': 'failed', 'autostart': True}
+        journal_lines = 'badi.settings.v1 on disk\nerror_code=control_plane: json\n'
+        output = io.StringIO()
+        with patch.object(desktop, 'service_state', return_value=service), \
+             patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+             patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+             patch.object(desktop, 'control', side_effect=RuntimeError('error_code=connect')), \
+             patch.object(desktop.subprocess, 'run', side_effect=[
+                 subprocess.CompletedProcess([], 0, 'd' * 32 + '\n', ''),
+                 subprocess.CompletedProcess([], 0, journal_lines, ''),
+             ]), \
+             contextlib.redirect_stdout(output):
+            with self.assertRaises(SystemExit) as stopped:
+                desktop.main(['doctor', '--json'])
+        self.assertEqual(stopped.exception.code, 1)
+        report = json.loads(output.getvalue())
+        self.assertEqual(report['problems'][0]['code'], 'settings_json')
+        self.assertIn('settings.json', report['problems'][0]['action'])
+        self.assertIn('service_failed', [item['code'] for item in report['problems']])
+        self.assertNotIn('badi.settings.v1 on disk', json.dumps(report))
+        with patch.object(desktop, 'health_report', return_value=report), \
+             contextlib.redirect_stdout(io.StringIO()) as human:
+            with self.assertRaises(SystemExit) as stopped:
+                desktop.main(['doctor'])
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertIn("Badi's private settings cannot be used", human.getvalue())
+        self.assertIn('Repair or replace ~/.config/badi/settings.json', human.getvalue())
+
     def test_startup_diagnosis_does_not_reuse_logs_without_an_invocation(self):
         with patch.object(desktop.subprocess, 'run') as command:
             command.return_value = subprocess.CompletedProcess([], 0, '\n', '')

@@ -1,7 +1,7 @@
 # ADR 0007: retire protocol v1
 
-- Status: accepted; steps 1–3 and 5 done (2026-10-24), step 4 waits one
-  release
+- Status: accepted; steps 1–5 done (steps 1–3 and 5 on 2026-10-24, step 4 on
+  2026-11-15)
 - Date: 2026-10-13
 - Scope: the broker's wire protocol, the settings document schema, and every
   client that negotiates with the broker
@@ -98,6 +98,7 @@ expiry checks.
   uses.
 - A pre-public v1-only build stops at `hello` with no session, instead of
   running with silently different offsets, leases and counters.
-- Until step 4 lands, an old settings file still migrates itself on first
-  load; afterwards, the same file is a doctor-reported configuration error
-  rather than a silent downgrade of the user's policy.
+- An old `badi.settings.v1` settings file on disk fails settings load closed
+  and is reported as a configuration error by `badi doctor`, as corrupt
+  settings are, rather than migrating or silently downgrading the user's
+  policy.

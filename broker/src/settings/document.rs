@@ -1,5 +1,4 @@
-//! The `badi.settings.v2` document, its decoding from v2 or a v1 file on disk,
-//! and validation.
+//! The strict `badi.settings.v2` document, decoding and validation.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -15,7 +14,7 @@ use super::permissions::{
     ALL_LINUX_APPS_PERMISSIONS, ALL_WEB_ORIGINS_PERMISSIONS, SubjectPermissions, SubjectRule,
 };
 use super::policy::{PolicyResolution, PolicySource};
-use super::{MAX_ESCAPE_QUIET_SECONDS, MAX_SUBJECTS, SETTINGS_SCHEMA, SETTINGS_SCHEMA_V1};
+use super::{MAX_ESCAPE_QUIET_SECONDS, MAX_SUBJECTS, SETTINGS_SCHEMA};
 
 /// The languages the writing provider can suggest in, in canonical order.
 /// English and German are on by default; French, Spanish and Portuguese are
@@ -145,8 +144,7 @@ impl SuggestionLength {
     }
 }
 
-/// Settings v1 documents deserialize into this type, but it is always
-/// canonical settings v2 in memory and on disk.
+/// The canonical `badi.settings.v2` document in memory and on disk.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 // Independent persisted flags, not a state machine.
@@ -294,84 +292,6 @@ struct SettingsDocument {
     subjects: Vec<SubjectRule>,
 }
 
-impl SettingsDocument {
-    /// The error for the first field a settings v1 document cannot name,
-    /// in a fixed order.
-    fn first_v2_only_field(&self) -> Option<&'static str> {
-        [
-            (
-                self.subjects
-                    .iter()
-                    .any(|rule| matches!(rule.identity, StableIdentity::LinuxApp { .. })),
-                "linux_app_requires_settings_v2",
-            ),
-            (
-                self.all_web_origins.is_some(),
-                "all_web_origins_requires_settings_v2",
-            ),
-            (
-                self.all_linux_apps.is_some(),
-                "all_linux_apps_requires_settings_v2",
-            ),
-            (self.mid_line.is_some(), "mid_line_requires_settings_v2"),
-            (
-                self.escape_quiet_seconds.is_some(),
-                "escape_quiet_seconds_requires_settings_v2",
-            ),
-            (
-                self.battery_mode.is_some(),
-                "battery_mode_requires_settings_v2",
-            ),
-            (
-                self.screen_share.is_some(),
-                "screen_share_requires_settings_v2",
-            ),
-            (
-                self.suggestion_length.is_some(),
-                "suggestion_length_requires_settings_v2",
-            ),
-            (
-                self.languages_chosen.is_some(),
-                "languages_chosen_requires_settings_v2",
-            ),
-            (
-                self.places_chosen.is_some(),
-                "places_chosen_requires_settings_v2",
-            ),
-            (
-                self.style_learning.is_some(),
-                "style_learning_requires_settings_v2",
-            ),
-            (
-                self.context_words.is_some() || self.context_words_off.is_some(),
-                "context_words_requires_settings_v2",
-            ),
-            (
-                self.language_overrides.is_some(),
-                "language_overrides_requires_settings_v2",
-            ),
-            (
-                self.spelling_languages.is_some(),
-                "spelling_languages_requires_settings_v2",
-            ),
-            (
-                self.writing_model.is_some(),
-                "writing_model_requires_settings_v2",
-            ),
-            (
-                self.writing_languages.is_some(),
-                "writing_languages_requires_settings_v2",
-            ),
-            (
-                self.trailing_space_healing.is_some(),
-                "trailing_space_healing_requires_settings_v2",
-            ),
-        ]
-        .into_iter()
-        .find_map(|(present, error)| present.then_some(error))
-    }
-}
-
 fn present_language_overrides<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<BTreeMap<String, PredictionLanguage>>, D::Error> {
@@ -384,13 +304,8 @@ impl<'de> Deserialize<'de> for SettingsV2 {
         D: Deserializer<'de>,
     {
         let decoded = SettingsDocument::deserialize(deserializer)?;
-        if decoded.schema != SETTINGS_SCHEMA && decoded.schema != SETTINGS_SCHEMA_V1 {
+        if decoded.schema != SETTINGS_SCHEMA {
             return Err(serde::de::Error::custom("unsupported_settings_schema"));
-        }
-        if decoded.schema == SETTINGS_SCHEMA_V1 {
-            if let Some(error) = decoded.first_v2_only_field() {
-                return Err(serde::de::Error::custom(error));
-            }
         }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),

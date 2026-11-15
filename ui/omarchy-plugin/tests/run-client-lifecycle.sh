@@ -168,8 +168,8 @@ jq -e '
   and .settingsDocumentValid == true
   and .subjectCount == 2
 ' <<<"$state" >/dev/null
-legacy_settings='{"schema":"badi.settings.v1","revision":0,"paused":true,"subjects":[]}'
-[[ $(ipc validateSettings "$legacy_settings") == false ]]
+unknown_schema_settings='{"schema":"badi.settings.unknown","revision":0,"paused":true,"subjects":[]}'
+[[ $(ipc validateSettings "$unknown_schema_settings") == false ]]
 invalid_linux_settings=$(jq -cn '{
   schema: "badi.settings.v2",
   revision: 1,

@@ -74,11 +74,11 @@ and whether they were dirty (`--version` prints both; packagers may set
     session, which Fcitx does on every edit, does not end the carry. A carried
     remainder is not another shown suggestion and does not record a second
     outcome on the original aggregate.
-- **Settings** (`badi.settings.v2`, the only settings schema on the wire)
-  are replaced by compare-and-swap on their revision; while a replacement's
-  outcome is unknown, suggestions pause. A `badi.settings.v1` file on disk
-  still migrates to v2 on load.
-  `badi pause` persists in settings; `badictl pause` is runtime only.
+- **Settings** (`badi.settings.v2`, the only settings schema on disk and on
+  the wire) are replaced by compare-and-swap on their revision; while a
+  replacement's outcome is unknown, suggestions pause. An unrecognized or
+  corrupt settings file on disk fails startup closed for `badi doctor` to
+  report. `badi pause` persists in settings; `badictl pause` is runtime only.
 - **List modes.** `all_web_origins` (`badi sites blocklist`, or `badi site all
   on`) and `all_linux_apps` (`badi apps blocklist`) let a site or app without
   its own rule read context and suggest, but never learn or retain. Exact rules

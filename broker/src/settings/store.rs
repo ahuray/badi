@@ -3,15 +3,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use serde::Deserialize;
 use thiserror::Error;
 
 use crate::protocol::MAX_SAFE_COUNTER;
 
+use super::MAX_SETTINGS_BYTES;
 use super::document::{SettingsV2, SettingsValidationError};
 use super::paths::StoreLock;
 use super::private_file::{PrivateStorageError, atomic_write_private, read_private_limited};
-use super::{MAX_SETTINGS_BYTES, SETTINGS_SCHEMA_V1};
 
 #[derive(Debug)]
 pub(crate) struct SettingsStore {
@@ -49,14 +48,7 @@ impl SettingsStore {
             .lock()
             .map_err(|_| SettingsStoreError::LockPoisoned)?;
         if let Some(bytes) = read_private_limited(&self.path, MAX_SETTINGS_BYTES)? {
-            let (settings, migrated) = decode_settings_with_source(&bytes)?;
-            if migrated {
-                // The existing lifetime and mutation locks make this a single
-                // writer migration. atomic_write_private keeps either the old
-                // complete v1 document or the new complete v2 document visible.
-                write_settings(&self.path, &settings)?;
-            }
-            Ok(settings)
+            decode_settings(&bytes)
         } else {
             let settings = SettingsV2::deny_by_default();
             write_settings(&self.path, &settings)?;
@@ -150,19 +142,9 @@ impl SettingsStore {
 }
 
 fn decode_settings(bytes: &[u8]) -> Result<SettingsV2, SettingsStoreError> {
-    decode_settings_with_source(bytes).map(|(settings, _)| settings)
-}
-
-fn decode_settings_with_source(bytes: &[u8]) -> Result<(SettingsV2, bool), SettingsStoreError> {
-    #[derive(Deserialize)]
-    struct SchemaProbe {
-        schema: String,
-    }
-
-    let source = serde_json::from_slice::<SchemaProbe>(bytes)?;
     let settings: SettingsV2 = serde_json::from_slice(bytes)?;
     settings.validate()?;
-    Ok((settings, source.schema == SETTINGS_SCHEMA_V1))
+    Ok(settings)
 }
 
 pub(super) fn write_settings(path: &Path, settings: &SettingsV2) -> Result<(), SettingsStoreError> {

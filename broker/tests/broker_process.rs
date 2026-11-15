@@ -55,3 +55,40 @@ fn missing_model_exits_with_the_configuration_status() -> Result<(), Box<dyn Err
     assert!(!directory.path().join("private/broker.sock").exists());
     Ok(())
 }
+
+#[test]
+fn unrecognized_settings_schema_on_disk_exits_with_the_configuration_status()
+-> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir()?;
+    let config_dir = directory.path().join("config/badi");
+    let data_dir = directory.path().join("data/badi");
+    for path in [&config_dir, &data_dir] {
+        std::fs::create_dir_all(path)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let settings_path = config_dir.join("settings.json");
+    let retired_v1 = br#"{"schema":"badi.settings.v1","revision":1,"paused":false,"subjects":[]}"#;
+    std::fs::write(&settings_path, retired_v1)?;
+    std::fs::set_permissions(&settings_path, std::fs::Permissions::from_mode(0o600))?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_badi-broker"))
+        .arg("--provider")
+        .arg("phrase")
+        .arg("--socket")
+        .arg(directory.path().join("private/broker.sock"))
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .output()?;
+    assert_eq!(output.status.code(), Some(78), "{output:?}");
+    assert_eq!(output.stdout, [] as [u8; 0]);
+    assert_eq!(
+        String::from_utf8(output.stderr)?,
+        "error_code=control_plane: json\n",
+        "retired v1 settings emit the configuration error badi doctor classifies"
+    );
+    assert!(!directory.path().join("private/broker.sock").exists());
+    assert_eq!(std::fs::read(&settings_path)?, retired_v1);
+    Ok(())
+}
