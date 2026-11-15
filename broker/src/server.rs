@@ -30,7 +30,7 @@ use crate::protocol::{
     SettingsStatusPayload, StyleKeyPayload, StyleSamplesPayload, StyleStatusPayload,
     SuggestCancelPayload, SuggestRequestPayload, WireEnvelope,
 };
-use crate::settings::{SETTINGS_SCHEMA, SettingsStoreError, SettingsV2};
+use crate::settings::{SettingsStoreError, SettingsV2};
 use crate::style::{StyleKey, StyleKeyState};
 
 const MAX_CONNECTIONS: usize = 32;
@@ -980,15 +980,6 @@ impl MessageHandler<'_> {
         require_settings_authority(self.authority)?;
         let payload: SettingsReplacePayload = envelope.decode_payload()?;
         payload.validate()?;
-        let source_schema = payload
-            .document
-            .get("schema")
-            .and_then(serde_json::Value::as_str)
-            .ok_or(ServerError::InvalidMessage)?;
-        // Only `badi.settings.v2` crosses the wire; a v1 file migrates on disk.
-        if source_schema != SETTINGS_SCHEMA {
-            return Err(ServerError::InvalidMessage);
-        }
         let next: SettingsV2 =
             serde_json::from_value(payload.document).map_err(|_| ServerError::InvalidMessage)?;
         next.validate().map_err(|_| ServerError::InvalidMessage)?;

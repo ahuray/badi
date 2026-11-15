@@ -32,7 +32,6 @@ pub(crate) use private_file::{
 pub(crate) use store::SettingsStore;
 pub use store::SettingsStoreError;
 
-pub const SETTINGS_SCHEMA_V1: &str = "badi.settings.v1";
 pub const SETTINGS_SCHEMA: &str = "badi.settings.v2";
 pub const MAX_SETTINGS_BYTES: usize = 65_536;
 // Proven by a maximum-shape regression to fit both the 64 KiB wire frame and

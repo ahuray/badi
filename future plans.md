@@ -695,10 +695,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       need the installers' and the PKGBUILD's lists, which a test now
       compares).
 
-- [ ] [ADR 0007](docs/decisions/0007-retire-protocol-v1.md) step 4: once
-      every known install has started a v2-only broker (0.2.0), delete the
-      on-disk v1 settings migration, `badi.settings.v1.schema.json` and the
-      panel lifecycle and schema tests that exercise it.
 - [ ] Broker structure left by the review: move the remaining inline
       tests into `<module>/tests.rs` when those files are next touched.
 

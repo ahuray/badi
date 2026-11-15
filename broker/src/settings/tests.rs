@@ -9,8 +9,8 @@ use super::{
     ALL_LINUX_APPS_PERMISSIONS, BatteryMode, BrowserAdapter, LinuxAdapter,
     MAX_ESCAPE_QUIET_SECONDS, MAX_SETTINGS_BYTES, MAX_SUBJECTS, PermissionDecision,
     PredictionLanguage, PrivateStorage, PrivateStorageError, RetentionPermission, SETTINGS_SCHEMA,
-    SETTINGS_SCHEMA_V1, ScreenShareMode, SettingsStoreError, SettingsV2, SettingsValidationError,
-    StableIdentity, StoragePaths, SubjectPermissions, SubjectRule, SuggestionLength, WebScheme,
+    ScreenShareMode, SettingsStoreError, SettingsV2, SettingsValidationError, StableIdentity,
+    StoragePaths, SubjectPermissions, SubjectRule, SuggestionLength, WebScheme,
 };
 use crate::protocol::{
     MAX_FRAME_BYTES, Origin, OriginScheme, TargetDescriptor, TargetKind, WireEnvelope,
@@ -159,7 +159,7 @@ fn all_web_origins_allows_unlisted_web_origins_but_exact_rules_win() {
 }
 
 #[test]
-fn escape_quiet_seconds_round_trips_bounds_and_rejects_v1() {
+fn escape_quiet_seconds_round_trips_and_enforces_bounds() {
     let mut settings = settings_with(SubjectRule {
         identity: identity("mail.example"),
         permissions: allowed(None),
@@ -181,15 +181,6 @@ fn escape_quiet_seconds_round_trips_bounds_and_rejects_v1() {
     assert_eq!(
         settings.validate(),
         Err(SettingsValidationError::EscapeQuietOutOfRange)
-    );
-
-    let legacy = serde_json::json!({
-        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
-        "escape_quiet_seconds": 90, "subjects": [],
-    });
-    assert!(
-        serde_json::from_value::<SettingsV2>(legacy).is_err(),
-        "v1 cannot name it"
     );
 }
 
@@ -222,18 +213,10 @@ fn spelling_languages_omit_english_alone_and_must_be_canonical() {
     );
     settings.spelling_languages = Vec::new();
     assert_eq!(settings.validate(), Ok(()), "spelling can be off");
-    let legacy = serde_json::json!({
-        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
-        "spelling_languages": ["en"], "subjects": [],
-    });
-    assert!(
-        serde_json::from_value::<SettingsV2>(legacy).is_err(),
-        "v1 cannot name it"
-    );
 }
 
 #[test]
-fn battery_mode_round_trips_omits_quiet_and_rejects_v1() {
+fn battery_mode_round_trips_and_omits_quiet() {
     let mut settings = settings_with(SubjectRule {
         identity: identity("mail.example"),
         permissions: allowed(None),
@@ -259,14 +242,6 @@ fn battery_mode_round_trips_omits_quiet_and_rejects_v1() {
     let decoded: SettingsV2 = serde_json::from_value(explicit_quiet).expect("quiet");
     assert_eq!(decoded.battery_mode, BatteryMode::Quiet);
 
-    let legacy = serde_json::json!({
-        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
-        "battery_mode": "quiet", "subjects": [],
-    });
-    assert!(
-        serde_json::from_value::<SettingsV2>(legacy).is_err(),
-        "v1 cannot name it"
-    );
     let unknown = serde_json::json!({
         "schema": SETTINGS_SCHEMA, "revision": 1, "paused": false,
         "battery_mode": "off", "subjects": [],
@@ -297,14 +272,6 @@ fn screen_share_round_trips_and_omits_hold() {
         ScreenShareMode::Hold
     );
 
-    let legacy = serde_json::json!({
-        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
-        "screen_share": "hold", "subjects": [],
-    });
-    assert!(
-        serde_json::from_value::<SettingsV2>(legacy).is_err(),
-        "v1 cannot name it"
-    );
     for value in [serde_json::json!("off"), serde_json::json!(false)] {
         let unknown = serde_json::json!({
             "schema": SETTINGS_SCHEMA, "revision": 1, "paused": false,
@@ -340,14 +307,6 @@ fn suggestion_length_round_trips_and_omits_normal() {
     assert_eq!(decoded.suggestion_length, SuggestionLength::Normal);
     assert_eq!(SuggestionLength::Normal.max_words(), 4);
 
-    let legacy = serde_json::json!({
-        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
-        "suggestion_length": "short", "subjects": [],
-    });
-    assert!(
-        serde_json::from_value::<SettingsV2>(legacy).is_err(),
-        "v1 cannot name it"
-    );
     // Longer suggestions doubled harmful additions in the Lab; none decode.
     for value in [
         serde_json::json!("long"),
@@ -379,14 +338,6 @@ fn the_language_answer_round_trips_and_omits_false() {
     assert_eq!(encoded["languages_chosen"], true);
     let decoded: SettingsV2 = serde_json::from_value(encoded).expect("decode settings");
     assert_eq!(decoded, settings);
-    let legacy = serde_json::json!({
-        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
-        "languages_chosen": true, "subjects": [],
-    });
-    assert!(
-        serde_json::from_value::<SettingsV2>(legacy).is_err(),
-        "v1 cannot name it"
-    );
     let unknown = serde_json::json!({
         "schema": SETTINGS_SCHEMA, "revision": 1, "paused": false,
         "languages_chosen": "yes", "subjects": [],
@@ -413,14 +364,6 @@ fn the_places_answer_round_trips_omits_false_and_grants_nothing() {
     assert!(!site.configured() && !site.allows_suggestion());
     let app = StableIdentity::linux_app(LinuxAdapter::Fcitx, "telegram").expect("app");
     assert!(!settings.resolve_identity(&app).allows_suggestion());
-    let legacy = serde_json::json!({
-        "schema": SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
-        "places_chosen": true, "subjects": [],
-    });
-    assert!(
-        serde_json::from_value::<SettingsV2>(legacy).is_err(),
-        "v1 cannot name it"
-    );
 }
 
 #[test]
@@ -799,13 +742,13 @@ fn maximum_shape_settings_fit_storage_and_wire_limits() {
 #[test]
 fn strict_json_rejects_unknown_fields_and_unsafe_combinations() {
     let unknown = br#"{
-      "schema":"badi.settings.v1","revision":0,"paused":true,"subjects":[],
+      "schema":"badi.settings.v2","revision":0,"paused":true,"subjects":[],
       "cloud":"allow"
     }"#;
     assert!(serde_json::from_slice::<SettingsV2>(unknown).is_err());
 
     let invalid = br#"{
-      "schema":"badi.settings.v1","revision":1,"paused":false,
+      "schema":"badi.settings.v2","revision":1,"paused":false,
       "subjects":[{"identity":{"kind":"browser_origin","adapter":"chromium",
       "scheme":"https","host":"example.com","port":443},"permissions":{
       "suggest":"allow","display":"block","context_read":"allow","learn":"block",
@@ -816,7 +759,7 @@ fn strict_json_rejects_unknown_fields_and_unsafe_combinations() {
 }
 
 #[test]
-fn legacy_v1_document_migrates_atomically_to_canonical_v2_on_load() {
+fn unrecognized_settings_schema_on_disk_fails_closed_without_rewriting() {
     let temporary = tempdir().expect("temporary directory");
     let paths = StoragePaths::new(
         temporary.path().join("config/badi"),
@@ -824,39 +767,30 @@ fn legacy_v1_document_migrates_atomically_to_canonical_v2_on_load() {
     )
     .expect("paths");
     let storage = PrivateStorage::open(paths.clone()).expect("private storage");
-    let legacy = format!(
-        r#"{{
-          "schema":"{SETTINGS_SCHEMA_V1}","revision":1,"paused":false,
-          "subjects":[{{"identity":{{"kind":"browser_origin","adapter":"chromium",
-          "scheme":"https","host":"example.com","port":443}},"permissions":{{
-          "suggest":"allow","display":"allow","context_read":"allow","learn":"block",
-          "retention":{{"mode":"none"}}}}}}]
-        }}"#
-    );
-    fs::write(paths.settings_path(), legacy).expect("seed legacy settings");
+    let retired_v1 = br#"{
+      "schema":"badi.settings.v1","revision":1,"paused":false,
+      "subjects":[{"identity":{"kind":"browser_origin","adapter":"chromium",
+      "scheme":"https","host":"example.com","port":443},"permissions":{
+      "suggest":"allow","display":"allow","context_read":"allow","learn":"block",
+      "retention":{"mode":"none"}}}]
+    }"#;
+    fs::write(paths.settings_path(), retired_v1).expect("seed retired v1 settings");
     fs::set_permissions(
         paths.settings_path(),
         fs::Permissions::from_mode(PRIVATE_FILE_MODE),
     )
-    .expect("private legacy settings");
+    .expect("private settings file");
 
-    let settings = storage
+    let error = storage
         .settings_store()
         .expect("settings store")
         .load_or_initialize()
-        .expect("migrate settings");
-    assert_eq!(settings.schema, SETTINGS_SCHEMA);
-    assert_eq!(settings.revision, 1);
-    assert!(
-        settings
-            .resolve_identity(&identity("example.com"))
-            .allows_suggestion()
+        .expect_err("retired v1 settings must fail closed");
+    assert!(matches!(error, SettingsStoreError::Json(_)));
+    assert_eq!(
+        fs::read(paths.settings_path()).expect("preserved settings"),
+        retired_v1
     );
-
-    let persisted: serde_json::Value =
-        serde_json::from_slice(&fs::read(paths.settings_path()).expect("read migrated settings"))
-            .expect("migrated JSON");
-    assert_eq!(persisted["schema"], SETTINGS_SCHEMA);
     assert!(
         fs::read_dir(paths.config_dir())
             .expect("config directory")
@@ -866,6 +800,13 @@ fn legacy_v1_document_migrates_atomically_to_canonical_v2_on_load() {
                 .to_string_lossy()
                 .ends_with(".tmp"))
     );
+    drop(storage);
+
+    let Err(startup) = crate::control_plane::ControlPlane::open(paths) else {
+        panic!("retired v1 settings must stop control-plane startup");
+    };
+    assert_eq!(startup.startup_name(), "json");
+    assert!(startup.restart_cannot_help());
 }
 
 #[test]
@@ -1124,7 +1065,7 @@ fn clear_retry_requires_a_successful_directory_sync_after_visible_absence() {
 }
 
 #[test]
-fn context_words_need_v2_keep_per_subject_off_canonical_and_stay_off_until_chosen() {
+fn context_words_keep_per_subject_off_canonical_and_stay_off_until_chosen() {
     let site = identity("mail.example");
     let other = identity("docs.example");
     let mut settings = settings_with(SubjectRule {
@@ -1159,9 +1100,4 @@ fn context_words_need_v2_keep_per_subject_off_canonical_and_stay_off_until_chose
         unsorted.validate(),
         Err(crate::settings::SettingsValidationError::ContextWordsOffNotCanonical)
     );
-    let v1 = serde_json::json!({
-        "schema": crate::settings::SETTINGS_SCHEMA_V1, "revision": 1, "paused": false,
-        "context_words": true, "subjects": [],
-    });
-    assert!(serde_json::from_value::<SettingsV2>(v1).is_err());
 }

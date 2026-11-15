@@ -4,17 +4,16 @@ use std::path::{Path, PathBuf};
 use badi_broker::settings::{SETTINGS_SCHEMA, SettingsV2, StableIdentity};
 use serde_json::{Value, json};
 
-fn schema_path(version: u8) -> PathBuf {
+fn schema_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("schemas")
-        .join(format!("badi.settings.v{version}.schema.json"))
+        .join("badi.settings.v2.schema.json")
 }
 
-fn validator(version: u8) -> jsonschema::Validator {
-    let schema: Value = serde_json::from_str(
-        &fs::read_to_string(schema_path(version)).expect("settings schema file"),
-    )
-    .expect("settings schema JSON");
+fn validator() -> jsonschema::Validator {
+    let schema: Value =
+        serde_json::from_str(&fs::read_to_string(schema_path()).expect("settings schema file"))
+            .expect("settings schema JSON");
     jsonschema::validator_for(&schema).expect("settings schema compiles")
 }
 
@@ -29,7 +28,7 @@ fn permissions() -> Value {
 }
 
 #[test]
-fn v2_schema_accepts_mixed_exact_identities_while_v1_remains_immutable() {
+fn v2_schema_accepts_mixed_exact_identities() {
     let document = json!({
         "schema": "badi.settings.v2",
         "revision": 7,
@@ -55,8 +54,7 @@ fn v2_schema_accepts_mixed_exact_identities_while_v1_remains_immutable() {
             }
         ]
     });
-    assert!(validator(2).is_valid(&document));
-    assert!(!validator(1).is_valid(&document));
+    assert!(validator().is_valid(&document));
 
     let decoded: SettingsV2 = serde_json::from_value(document).expect("typed v2 settings");
     decoded.validate().expect("valid v2 settings");
@@ -68,50 +66,30 @@ fn v2_schema_accepts_mixed_exact_identities_while_v1_remains_immutable() {
 }
 
 #[test]
-fn legacy_v1_deserialization_is_lossless_and_canonicalizes_only_the_schema() {
-    let legacy = json!({
-        "schema": "badi.settings.v1",
-        "revision": 3,
-        "paused": false,
-        "subjects": [{
-            "identity": {
-                "kind": "browser_origin",
-                "adapter": "chromium",
-                "scheme": "https",
-                "host": "example.com",
-                "port": 443
-            },
-            "permissions": permissions()
-        }]
-    });
-    assert!(validator(1).is_valid(&legacy));
-
-    let migrated: SettingsV2 = serde_json::from_value(legacy).expect("migrate v1 settings");
-    assert_eq!(migrated.schema, SETTINGS_SCHEMA);
-    assert_eq!(migrated.revision, 3);
-    assert_eq!(migrated.subjects.len(), 1);
-    assert!(matches!(
-        migrated.subjects[0].identity,
-        StableIdentity::BrowserOrigin { .. }
-    ));
-}
-
-#[test]
-fn v1_schema_tag_cannot_smuggle_a_linux_application_rule() {
-    let invalid = json!({
-        "schema": "badi.settings.v1",
-        "revision": 1,
-        "paused": false,
-        "subjects": [{
-            "identity": {
-                "kind": "linux_app",
-                "adapter": "fcitx",
-                "app_id": "omawrite"
-            },
-            "permissions": permissions()
-        }]
-    });
-    assert!(serde_json::from_value::<SettingsV2>(invalid).is_err());
+fn unrecognized_settings_schemas_including_retired_v1_are_rejected() {
+    let schema = validator();
+    for tag in ["badi.settings.v1", "badi.settings.v3", "badi.settings"] {
+        let document = json!({
+            "schema": tag,
+            "revision": 3,
+            "paused": false,
+            "subjects": [{
+                "identity": {
+                    "kind": "browser_origin",
+                    "adapter": "chromium",
+                    "scheme": "https",
+                    "host": "example.com",
+                    "port": 443
+                },
+                "permissions": permissions()
+            }]
+        });
+        assert!(!schema.is_valid(&document), "schema accepted {tag}");
+        assert!(
+            serde_json::from_value::<SettingsV2>(document).is_err(),
+            "Rust accepted {tag}"
+        );
+    }
 }
 
 #[test]
@@ -135,7 +113,7 @@ fn linux_application_learning_is_rejected_until_personalization_is_versioned() {
             }
         }]
     });
-    assert!(!validator(2).is_valid(&document));
+    assert!(!validator().is_valid(&document));
 
     let decoded: SettingsV2 = serde_json::from_value(document).expect("typed v2 settings");
     assert!(decoded.validate().is_err());
@@ -157,17 +135,14 @@ fn linux_application_segments_match_the_formal_schema() {
                 "permissions": permissions()
             }]
         });
-        assert!(
-            !validator(2).is_valid(&document),
-            "schema accepted {app_id}"
-        );
+        assert!(!validator().is_valid(&document), "schema accepted {app_id}");
         let decoded: SettingsV2 = serde_json::from_value(document).expect("typed invalid settings");
         assert!(decoded.validate().is_err(), "Rust accepted {app_id}");
     }
 }
 
 #[test]
-fn all_linux_apps_is_an_optional_v2_only_boolean() {
+fn all_linux_apps_is_an_optional_boolean() {
     let mut document = json!({
         "schema": "badi.settings.v2",
         "revision": 4,
@@ -175,13 +150,13 @@ fn all_linux_apps_is_an_optional_v2_only_boolean() {
         "all_linux_apps": true,
         "subjects": []
     });
-    assert!(validator(2).is_valid(&document));
+    assert!(validator().is_valid(&document));
     let decoded: SettingsV2 = serde_json::from_value(document.clone()).expect("typed settings");
     decoded.validate().expect("valid settings");
     assert!(decoded.all_linux_apps && !decoded.all_web_origins);
     assert_eq!(serde_json::to_value(&decoded).expect("encoded"), document);
     document["all_linux_apps"] = json!("yes");
-    assert!(!validator(2).is_valid(&document));
+    assert!(!validator().is_valid(&document));
     assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
     document["all_linux_apps"] = json!(false);
     let encoded =
@@ -191,14 +166,10 @@ fn all_linux_apps_is_an_optional_v2_only_boolean() {
         encoded.get("all_linux_apps").is_none(),
         "off is the canonical absence"
     );
-    let legacy = json!({"schema": "badi.settings.v1", "revision": 4, "paused": false,
-                        "all_linux_apps": true, "subjects": []});
-    assert!(!validator(1).is_valid(&legacy));
-    assert!(serde_json::from_value::<SettingsV2>(legacy).is_err());
 }
 
 #[test]
-fn suggestion_length_is_an_optional_v2_only_choice() {
+fn suggestion_length_is_an_optional_choice() {
     let mut document = json!({
         "schema": "badi.settings.v2",
         "revision": 4,
@@ -206,7 +177,7 @@ fn suggestion_length_is_an_optional_v2_only_choice() {
         "suggestion_length": "short",
         "subjects": []
     });
-    assert!(validator(2).is_valid(&document));
+    assert!(validator().is_valid(&document));
     let decoded: SettingsV2 = serde_json::from_value(document.clone()).expect("typed");
     decoded.validate().expect("valid settings");
     assert_eq!(
@@ -216,7 +187,7 @@ fn suggestion_length_is_an_optional_v2_only_choice() {
     assert_eq!(serde_json::to_value(&decoded).expect("encoded"), document);
 
     document["suggestion_length"] = json!("normal");
-    assert!(validator(2).is_valid(&document));
+    assert!(validator().is_valid(&document));
     let encoded = serde_json::to_value(
         serde_json::from_value::<SettingsV2>(document.clone()).expect("normal"),
     )
@@ -227,21 +198,17 @@ fn suggestion_length_is_an_optional_v2_only_choice() {
     );
     for invalid in [json!("long"), json!("medium"), json!(8)] {
         document["suggestion_length"] = invalid;
-        assert!(!validator(2).is_valid(&document));
+        assert!(!validator().is_valid(&document));
         assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
     }
     // Producers never write null; typed decoding reads it as absence, as it
     // does for every optional settings key.
     document["suggestion_length"] = json!(null);
-    assert!(!validator(2).is_valid(&document));
-    let legacy = json!({"schema": "badi.settings.v1", "revision": 4, "paused": false,
-                        "suggestion_length": "short", "subjects": []});
-    assert!(!validator(1).is_valid(&legacy));
-    assert!(serde_json::from_value::<SettingsV2>(legacy).is_err());
+    assert!(!validator().is_valid(&document));
 }
 
 #[test]
-fn first_run_answers_are_optional_v2_only_booleans() {
+fn first_run_answers_are_optional_booleans() {
     for key in ["languages_chosen", "places_chosen"] {
         let mut document = json!({
             "schema": "badi.settings.v2",
@@ -250,13 +217,13 @@ fn first_run_answers_are_optional_v2_only_booleans() {
             key: true,
             "subjects": []
         });
-        assert!(validator(2).is_valid(&document), "{key}");
+        assert!(validator().is_valid(&document), "{key}");
         let decoded: SettingsV2 = serde_json::from_value(document.clone()).expect("typed settings");
         decoded.validate().expect("valid settings");
         // The decoded answer encodes back as true, never dropped.
         assert_eq!(serde_json::to_value(&decoded).expect("encoded"), document);
         document[key] = json!("yes");
-        assert!(!validator(2).is_valid(&document), "{key}");
+        assert!(!validator().is_valid(&document), "{key}");
         assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
         document[key] = json!(false);
         let encoded =
@@ -266,15 +233,11 @@ fn first_run_answers_are_optional_v2_only_booleans() {
             encoded.get(key).is_none(),
             "false is the canonical absence of {key}"
         );
-        let legacy = json!({"schema": "badi.settings.v1", "revision": 4, "paused": false,
-                            key: true, "subjects": []});
-        assert!(!validator(1).is_valid(&legacy), "{key}");
-        assert!(serde_json::from_value::<SettingsV2>(legacy).is_err());
     }
 }
 
 #[test]
-fn all_web_origins_is_an_optional_v2_only_boolean() {
+fn all_web_origins_is_an_optional_boolean() {
     let mut document = json!({
         "schema": "badi.settings.v2",
         "revision": 4,
@@ -282,14 +245,14 @@ fn all_web_origins_is_an_optional_v2_only_boolean() {
         "all_web_origins": true,
         "subjects": []
     });
-    assert!(validator(2).is_valid(&document));
+    assert!(validator().is_valid(&document));
     let decoded: SettingsV2 = serde_json::from_value(document.clone()).expect("typed settings");
     decoded.validate().expect("valid settings");
     assert!(decoded.all_web_origins);
     assert_eq!(serde_json::to_value(&decoded).expect("encoded"), document);
 
     document["all_web_origins"] = json!("yes");
-    assert!(!validator(2).is_valid(&document));
+    assert!(!validator().is_valid(&document));
     assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
 
     // Off is the canonical absence of the property.
@@ -298,24 +261,12 @@ fn all_web_origins_is_an_optional_v2_only_boolean() {
     assert!(!off.all_web_origins);
     let encoded = serde_json::to_value(&off).expect("encoded");
     assert!(encoded.get("all_web_origins").is_none());
-    assert!(validator(2).is_valid(&encoded));
-
-    for value in [true, false] {
-        let legacy = json!({
-            "schema": "badi.settings.v1",
-            "revision": 4,
-            "paused": false,
-            "all_web_origins": value,
-            "subjects": []
-        });
-        assert!(!validator(1).is_valid(&legacy));
-        assert!(serde_json::from_value::<SettingsV2>(legacy).is_err());
-    }
+    assert!(validator().is_valid(&encoded));
 }
 
 #[test]
 fn language_overrides_match_the_schema_and_do_not_grant_access() {
-    let schema = validator(2);
+    let schema = validator();
     let oversized: serde_json::Map<String, Value> =
         (0..65).map(|i| (format!("app{i}"), json!("en"))).collect();
     for (overrides, valid) in [
@@ -331,10 +282,10 @@ fn language_overrides_match_the_schema_and_do_not_grant_access() {
         (json!({"app.1invalid": "en"}), false),
         (Value::Object(oversized), false),
     ] {
-        let mut document = json!({"schema": SETTINGS_SCHEMA, "revision": 1,
+        let document = json!({"schema": SETTINGS_SCHEMA, "revision": 1,
             "paused": false, "subjects": [], "language_overrides": overrides});
         assert_eq!(schema.is_valid(&document), valid);
-        let decoded = serde_json::from_value::<SettingsV2>(document.clone());
+        let decoded = serde_json::from_value::<SettingsV2>(document);
         assert_eq!(decoded.as_ref().is_ok_and(|s| s.validate().is_ok()), valid);
         if valid {
             let settings = decoded.expect("valid overrides");
@@ -345,14 +296,12 @@ fn language_overrides_match_the_schema_and_do_not_grant_access() {
             .expect("app");
             assert!(!settings.resolve_identity(&app).allows_suggestion());
         }
-        document["schema"] = json!("badi.settings.v1");
-        assert!(serde_json::from_value::<SettingsV2>(document).is_err());
     }
 }
 
 #[test]
 fn writing_languages_and_healing_choices_match_the_schema() {
-    let schema = validator(2);
+    let schema = validator();
     for (field, value, valid) in [
         (
             "writing_languages",
@@ -384,7 +333,7 @@ fn writing_languages_and_healing_choices_match_the_schema() {
             valid || unordered,
             "{field} {value}"
         );
-        let decoded = serde_json::from_value::<SettingsV2>(document.clone());
+        let decoded = serde_json::from_value::<SettingsV2>(document);
         assert_eq!(
             decoded.as_ref().is_ok_and(|s| s.validate().is_ok()),
             valid,
@@ -401,8 +350,6 @@ fn writing_languages_and_healing_choices_match_the_schema() {
                 assert_eq!(written[field], value);
             }
         }
-        document["schema"] = json!("badi.settings.v1");
-        assert!(serde_json::from_value::<SettingsV2>(document).is_err());
     }
     let default: SettingsV2 = serde_json::from_value(json!({"schema": SETTINGS_SCHEMA,
         "revision": 1, "paused": false, "subjects": []}))

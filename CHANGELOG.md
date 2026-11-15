@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Retired the on-disk `badi.settings.v1` migration and schema ([ADR 0007](docs/decisions/0007-retire-protocol-v1.md) step 4); an unrecognized settings schema on disk now fails broker startup closed as a configuration error reported by `badi doctor`.
+
 - The Fcitx addon's request ids now carry their session, so a broker refusal
   retires the request only in the field that sent it, and a refused
   `session.open` leaves that field closed so its next request opens again.
