@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -316,6 +317,50 @@ void brokerRefusalRetiresOnlyWhatItNames() {
     state.focusOut();
     check(state.refuseRequest(suggestRequestId(update.coordinates)) == RefusedRequest::None,
           "an unfocused binding holds no request");
+
+    // Bindings count focus epochs and revisions from one each, so two fields
+    // hold the same coordinates numbers; only the session tells them apart.
+    auto first = focusedState();
+    SessionState second;
+    check(second.focusIn("6ba7b810-9dad-11d1-80b4-00c04fd430c8", "input-context-2", "omawrite", kSalt),
+          "a second field is focused");
+    const auto firstUpdate = explicitContext(first);
+    const auto secondUpdate = explicitContext(second);
+    check(firstUpdate.coordinates.focusEpoch == secondUpdate.coordinates.focusEpoch &&
+              firstUpdate.coordinates.revision == secondUpdate.coordinates.revision &&
+              suggestRequestId(firstUpdate.coordinates) != suggestRequestId(secondUpdate.coordinates),
+          "equal epochs and revisions in two sessions ask with different ids");
+    check(second.refuseRequest(suggestRequestId(firstUpdate.coordinates)) == RefusedRequest::None &&
+              first.refuseRequest(suggestRequestId(firstUpdate.coordinates)) == RefusedRequest::Suggestion,
+          "a refusal retires only the session that sent the request");
+    check(second.showSuggestion(suggestionFor(secondUpdate), 100) && first.showSuggestion(suggestionFor(firstUpdate), 100),
+          "both fields show a suggestion");
+    const auto firstAccept = first.requestAcceptance(100, kOwnedPanel);
+    const auto secondAccept = second.requestAcceptance(100, kOwnedPanel);
+    check(firstAccept && secondAccept && firstAccept->controlId != secondAccept->controlId &&
+              second.refuseRequest(firstAccept->controlId) == RefusedRequest::None && second.acceptancePending(),
+          "another session's refused acceptance leaves this one in flight");
+
+    constexpr std::uint64_t kLargestCounter = (std::uint64_t{1} << 53U) - 1U; // the wire's safe-integer bound
+    const Coordinates widest{
+        .sessionId = kSession, .focusEpoch = kLargestCounter, .revision = kLargestCounter, .fingerprint = {}};
+    for (const auto *kind : {"suggest", "accept", "dismiss", "cancel", "close", "revise", "revise.accept",
+                             "revise.dismiss"}) {
+        check(validOpaqueId(sessionRequestId(kind, widest)), "every request id fits the wire's id limit");
+    }
+    check(validOpaqueId(sessionRequestId("alternative", widest) + "." +
+                        std::to_string(std::numeric_limits<std::uint64_t>::max())) &&
+              validOpaqueId(suggestRequestId(widest) + ".context"),
+          "the longest alternative and context ids fit too");
+
+    BrokerSession broker;
+    check(!broker.refuseOpen(sessionOpenRequestId(kSession)), "nothing open, nothing to refuse");
+    broker.open(firstUpdate.coordinates);
+    check(!broker.refuseOpen(sessionOpenRequestId("6ba7b810-9dad-11d1-80b4-00c04fd430c8")) && broker.opened &&
+              !broker.refuseOpen(suggestRequestId(firstUpdate.coordinates)) && broker.opened,
+          "another session's open or a request refusal keeps this session open");
+    check(broker.refuseOpen(sessionOpenRequestId(kSession)) && !broker.opened,
+          "a refused session.open leaves the binding closed so the next request opens again");
 }
 
 void suggestionClearMatchesOptionalWireField() {

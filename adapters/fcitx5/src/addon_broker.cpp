@@ -544,6 +544,10 @@ void BadiAddon::reportStale(const CommitPrepare &prepare) {
 // retires it, which only ever withdraws.
 void BadiAddon::onRefusal(const RequestRefusal &refusal) {
     for (auto &[_, binding] : bindings_) {
+        if (binding.broker.refuseOpen(refusal.requestId)) {
+            debug_.record("session_refused", binding.state.appId(), refusal.reason);
+            continue;
+        }
         switch (binding.state.refuseRequest(refusal.requestId)) {
         case RefusedRequest::None:
             break;

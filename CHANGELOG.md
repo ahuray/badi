@@ -8,6 +8,10 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- The Fcitx addon's request ids now carry their session, so a broker refusal
+  retires the request only in the field that sent it, and a refused
+  `session.open` leaves that field closed so its next request opens again.
+
 - Prediction Lab cleanup no longer reports a runtime the kernel is reaping
   (state `X`, parent 0, group −1) as an uninspectable process, which failed
   "Could not confirm cleanup of the owned model process" under load; the

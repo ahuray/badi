@@ -685,12 +685,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       (the trial machine still shows the first-run language question), rows
       and the site draft surviving a poll, and Writer superseding a slow
       spelling request.
-- [ ] Broker `error` frames carry no session, and the Fcitx addon's request
-      ids repeat across sessions, so the addon retires a refused id in every
-      binding holding it (this only withdraws). Echo the session coordinates
-      in `error`, or make ids per session, so the match is exact. A refused
-      `session.open` also leaves the binding thinking it is open until the
-      authority change that follows.
 - [ ] Structure left by the review, each only when its file is next touched:
       the Fcitx `Binding` (about 50 fields, one expiry timer for notices,
       suggestions and revisions) as small reset-able parts and one retire

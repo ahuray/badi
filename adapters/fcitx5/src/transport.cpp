@@ -459,7 +459,7 @@ serializeSessionOpenEnvelope(const Coordinates &coordinates,
     }
     auto opening = coordinates;
     opening.revision = 0;
-    return serialized(envelope("session.open", "fcitx.open." + coordinates.sessionId, monoMs,
+    return serialized(envelope("session.open", sessionOpenRequestId(coordinates.sessionId), monoMs,
                                Json{{"target", target}, {"activation", "always"}}, &opening));
 }
 
@@ -682,7 +682,7 @@ public:
         if (!ready()) return false;
         return queue(envelope(
             "session.close",
-            "fcitx.close." + std::to_string(coordinates.focusEpoch), nowMs(),
+            sessionRequestId("close", coordinates), nowMs(),
             Json{{"reason", "session_closed"}}, &coordinates));
     }
 
@@ -710,7 +710,7 @@ public:
         if (!ready()) return false;
         return queue(envelope(
             "suggest.cancel",
-            "fcitx.cancel." + std::to_string(coordinates.focusEpoch) + "." + std::to_string(coordinates.revision),
+            sessionRequestId("cancel", coordinates),
             nowMs(), Json{{"fingerprint", coordinates.fingerprint}, {"reason", "cancelled"}}, &coordinates));
     }
 
