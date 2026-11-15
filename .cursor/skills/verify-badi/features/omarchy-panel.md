@@ -15,7 +15,7 @@ The **b** mark on the Omarchy bar opens Badi's settings and shows whether sugges
 
 ## How to get to it (user POV)
 
-- Left-click the **b** mark. The popout shows the model pill, a mode such as `SUGGESTING` or `PAUSED`, and the pause switch.
+- Left-click the **b** mark. The popout shows the model pill, a mode such as `Suggesting` or `Paused`, and the pause switch.
 - Right-click the mark. Suggestions pause and the mark dims. Right-click again resumes.
 - With the popout focused, j and k move, h and l change a row, and `/` searches.
 - Compact rows are Languages, Suggestion length and context, plus All settings (`a`). The Snoozed row appears only while a snooze is running. History shows the week's bars and word counts while the popout is open. All settings opens the Writing model row, the "most this week" line, and Forget usage statistics. `badi model` lists the same models; `badi model use` switches one.
