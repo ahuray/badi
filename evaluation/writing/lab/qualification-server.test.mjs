@@ -176,6 +176,17 @@ test('diagnostics receive only server-held cases/configuration and measured flag
   assert.equal(measured.recommendation.status, 'no_qualified_model');
 });
 
+test('a production-path configuration is refused before diagnostics replace earlier measurements', async t => {
+  let called = false;
+  const lab = await setup(t, { qualificationDiagnostics: async () => { called = true; throw new Error('not reached'); } });
+  const production = { ...config, id: 'production', mode: 'production_boundary' };
+  const result = await run(lab, { configs: [production] });
+  const response = await lab.post('/api/qualification/diagnose', { run_id: result.id, config_id: production.id, duration_seconds: 30 });
+  assert.equal(response.status, 422);
+  assert.match((await response.json()).error, /streamed mode/u);
+  assert.equal(called, false);
+});
+
 test('diagnostic shared slot excludes inference/device/discovery and reset waits for owned cleanup', async t => {
   const entered = gate(), cleanup = gate(); let aborted = false;
   const lab = await setup(t, { qualificationDiagnostics: async options => {

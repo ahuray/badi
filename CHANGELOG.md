@@ -8,6 +8,13 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Qwen3.5-0.8B passed the Lab's download, hash, local-metadata, native
+  non-thinking template, runtime load, memory and cleanup checks, then failed
+  the synthetic instruction development gate (3/8 lexical passes, none on
+  time, no useful addition). Custom instructions stay unavailable.
+  Lab runtime diagnostics now refuse production-path modes, which report no
+  stream counters and so could never show a model exercised.
+
 - The Prediction Lab estimates dense Qwen3.5 memory from its attention and
   recurrent state under the pinned CPU runtime. Downloaded metadata must
   independently pass the same checks; missing or conflicting dimensions

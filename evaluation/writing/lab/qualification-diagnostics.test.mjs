@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { runDiagnostics } from './qualification-diagnostics.mjs';
-import { workerRequest } from './server.mjs';
+import { FIXED_MODES, workerRequest } from './server.mjs';
 
 class Clock {
   time = 0;
@@ -208,6 +208,14 @@ test('duration, resource hook and worker exclusivity are checked before work', a
   const first = runDiagnostics(concurrent);
   await assert.rejects(runDiagnostics(concurrent), /already running/u);
   await concurrent.clock.finish(first);
+});
+
+test('production-path modes are refused before any load: they report no stream counters', async () => {
+  for (const mode of FIXED_MODES) {
+    const input = setup();
+    await assert.rejects(runDiagnostics({ ...input, config: { ...config, mode } }), /streamed mode/u);
+    assert.equal(input.worker.starts, 0);
+  }
 });
 
 test('30-minute mode is genuinely timed, serial, resource checked, and request bounded', async () => {
