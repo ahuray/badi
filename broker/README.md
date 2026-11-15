@@ -166,6 +166,22 @@ and `paused` while every grant is already withheld; `badictl` prints these as
 - `health.status`, `badictl status` and `badictl overview` (under
   `broker`) list `snoozes`: each `subject` identity and its `remaining_ms`.
 
+## Withhold ordering: formal check
+
+Pause (runtime and settings), the desktop hold, screen-share grace and snooze
+are modelled in TLA+ by the
+[verify-badi-formal-withhold](../.cursor/skills/verify-badi-formal-withhold/SKILL.md)
+skill. [Withhold.tla](../.cursor/skills/verify-badi-formal-withhold/Withhold.tla)
+states that no suggestion is admitted while any withhold applies, that ending
+one withhold lifts no other, and that a snooze starts only for one clear
+subject. When a change touches the functions in that skill's Coverage table, run
+`.cursor/skills/verify-badi-formal-withhold/check.sh` (needs `java` and `curl`;
+it fetches a checksum-pinned TLC jar). It runs TLC, then the `withhold_` tests
+in `src/engine/tests/withhold.rs` against a running broker. The skill says how
+to read a counterexample and how to bring the model up to date. `npm run formal:check`
+fails when one of those functions changes, until the model is confirmed
+again and its hash recorded.
+
 ## Style learning (opt-in)
 
 Off by default (`style_learning` omitted). With `badi style on` and a site

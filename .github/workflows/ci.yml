@@ -380,7 +380,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bash-builtins libreadline-dev
-      - name: Run docs, editor, desktop, accessibility, Omarchy and writing checks
+      - name: Run docs, formal sync, editor, desktop, accessibility, Omarchy and writing checks
         run: npm run check
       - name: Check whitespace
         # The whole tree against the empty tree: a clean checkout has no
@@ -388,3 +388,26 @@ jobs:
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD -- . ':!packaging/licenses'
       - name: Check shell scripts
         run: git ls-files -z '*.sh' '*.bash' | xargs -0 shellcheck -S warning
+
+  # TLC on every formal model. The sync check (npm run formal:check) runs in
+  # Repository checks, and the Rust job runs the models' broker tests.
+  formal:
+    name: Formal model / TLC
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Cache the pinned TLC jar
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/badi
+          key: tlc-${{ hashFiles('.cursor/skills/verify-badi-formal-*/check.sh') }}
+      - name: Model-check every formal skill
+        run: |
+          for check in .cursor/skills/verify-badi-formal-*/check.sh; do
+            echo "=== $check ==="
+            "$check" --tlc-only
+          done

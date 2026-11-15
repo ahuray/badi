@@ -50,6 +50,7 @@ mod spelling;
 mod stats;
 mod style;
 mod type_through;
+mod withhold;
 mod word_start;
 
 struct CountingProvider {
