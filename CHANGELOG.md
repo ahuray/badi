@@ -8,6 +8,11 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Prediction Lab cleanup no longer reports a runtime the kernel is reaping
+  (state `X`, parent 0, group −1) as an uninspectable process, which failed
+  "Could not confirm cleanup of the owned model process" under load; the
+  worker tests wait for an orphaned runtime's new parent to reap it.
+
 - Qwen3.5-0.8B passed the Lab's download, hash, local-metadata, native
   non-thinking template, runtime load, memory and cleanup checks, then failed
   the synthetic instruction development gate (3/8 lexical passes, none on

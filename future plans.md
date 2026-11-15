@@ -708,13 +708,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       once the Lab calls `propose_outcome`, and move the remaining inline
       tests into `<module>/tests.rs` when those files are next touched.
 
-- [ ] The Lab test "process exit rejects the active request and a later
-      request starts a fresh process" (`worker.test.mjs`) failed once in CI
-      with "Could not confirm cleanup of the owned model process" (#110, a
-      docs-only change) and passed on rerun and in three local runs. It
-      failed the same way once locally on 2026-10-23 inside a full `npm run
-      check` (the screen-share hold, no Lab change) and passed twice alone.
-      Find the timing that `cleanupRuntime` races after the fixture's exit.
 - [ ] `adapters/neovim/broker.test.mjs` timed out once in CI waiting for
       `paused` after `badi pause` and an explicit request (#118, a change
       outside Neovim), and passed on rerun and in three local runs. If it

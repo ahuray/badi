@@ -113,6 +113,17 @@ async function makeWorker(t, mode = 'normal', options = {}) {
 const request = (id = 'fixture-request') => ({ schema: 'badi.prediction-lab.request.v1', id,
   before: 'Synthetic text', language: 'en', context: '', style_examples: [], config: { mode: 'context', budget_ms: 550 } });
 function reaped(pid) { assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH'); }
+// An orphaned runtime is reaped by its new parent, not the worker, possibly
+// after cleanup returns. Until then it must already be gone by the identity
+// cleanup relies on: dead, a zombie, or exiting with its executable released.
+async function orphanReaped(pid) {
+  for (let i = 0; i < 50; i++) {
+    try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') break; throw error; }
+    assert.equal(await processIdentity(pid), null, 'cleanup left the orphaned runtime running');
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  reaped(pid);
+}
 
 test('worker negotiates readiness, matches response IDs and reaps its owned process on stop', async t => {
   const worker = await makeWorker(t);
@@ -253,6 +264,9 @@ test('malformed process metadata is an inspection error rather than evidence of 
   for (const broken of ['', 'malformed', `${process.pid} (name) S wrong fields`, actual.replace(/^\d+/, '1')]) {
     assert.throws(() => parseProcessStat(process.pid, broken), /Malformed/iu);
   }
+  const reaping = `${process.pid} (llama-server) X 0 -1 -1 0 -1 4228108 117 0 0 0 0 0 0 0 20 0 0 0 137088 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 17 5 0 0 0 0 0 0 0 0 0 0 0 0 15\n`;
+  assert.equal(parseProcessStat(process.pid, reaping), null, 'a task being reaped is gone, not malformed');
+  assert.equal(parseProcessStat(process.pid, reaping.replace(' X ', ' x ')), null);
   await assert.rejects(processIdentity(-1), /Invalid/iu);
   assert.equal(await processIdentity(0xffffffff), null);
 });
@@ -313,7 +327,7 @@ test('a thread mismatch refuses readiness after retaining exact runtime ownershi
     && /4 requested, 2 actual/u.test(error.cause?.message));
   await assert.rejects(worker.stop(), /ownership and cleanup/u);
   const runtimePid = Number(await readFile(worker.fixtureRuntimePidPath, 'utf8'));
-  reaped(runtimePid);
+  await orphanReaped(runtimePid);
   assert.equal(worker.executions.length, 0);
   assert.ok(worker.cleanups.some(value => !value.completed && value.requested_threads === 4 && value.actual_threads === 2));
   await assert.rejects(worker.start(), /ownership and cleanup/u);

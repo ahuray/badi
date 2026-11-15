@@ -20,6 +20,9 @@ export function parseProcessStat(pid, value) {
   const end = typeof value === 'string' ? value.lastIndexOf(')') : -1;
   if (typeof value !== 'string' || !value.startsWith(`${pid} (`) || end < 0) throw new Error('Malformed model process stat.');
   const parts = value.slice(end + 2).trim().split(/\s+/u);
+  // A task the kernel is reaping reports state X with parent 0 and group -1:
+  // it is already gone, so it identifies no process.
+  if (parts[0] === 'X' || parts[0] === 'x') return null;
   if (!/^[RSDZTtXxKWPI]$/u.test(parts[0] ?? '') || !/^\d+$/u.test(parts[1] ?? '')
     || !/^\d+$/u.test(parts[2] ?? '') || !/^[1-9]\d*$/u.test(parts[19] ?? '')
     || !Number.isSafeInteger(Number(parts[1])) || !Number.isSafeInteger(Number(parts[2]))) {
@@ -34,6 +37,7 @@ export async function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 1 || pid > 0xffffffff) throw new Error('Invalid model process PID.');
   try {
     const identity = parseProcessStat(pid, await readFile(`/proc/${pid}/stat`, 'utf8'));
+    if (!identity) return null;
     return { ...identity, executable: await readlink(`/proc/${pid}/exe`),
       executable_key: executableKey(await stat(`/proc/${pid}/exe`, { bigint: true })) };
   } catch (error) {
