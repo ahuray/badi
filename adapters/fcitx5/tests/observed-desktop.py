@@ -169,6 +169,8 @@ def session(root, report):
             self.apps = {FIXTURE_APP}
             self.requested = []
             self.role = 'text'
+            self.gnome_app = None
+            self.gnome_error = 'unsupported_app'
 
         def budget(self):
             if time.monotonic() >= self.deadline:
@@ -178,6 +180,10 @@ def session(root, report):
             self.budget()
             self.inspections += 1
             self.requested.append(app)
+            if app is None:
+                if self.gnome_app is None:
+                    raise Denied(self.gnome_error)
+                app = self.gnome_app
             if app not in self.apps:
                 raise Denied('unsupported_app')
             return {'bus': ':1.synthetic', 'path': f'/synthetic/field/{self.field}',
@@ -350,7 +356,7 @@ def session(root, report):
             listener.setblocking(False)
             try:
                 fcitx = subprocess.Popen(['fcitx5', '-D', '-k', '--disable=all',
-                                          '--enable=dbus,dbusfrontend,keyboard,unicode,badi'],
+                                          '--enable=dbus,dbusfrontend,ibusfrontend,keyboard,unicode,badi'],
                                          stdin=subprocess.DEVNULL, stdout=fcitx_log, stderr=fcitx_log)
                 hello_frame = bytearray()
 
@@ -1418,6 +1424,207 @@ def session(root, report):
                       'notice, Tab types one word and Ctrl+Right the rest, and a correction erases '
                       'exactly the typo before typing its fix')
 
+        # Unnamed IBus contexts on GNOME (ADR 0017): GTK 4 and GNOME's Wayland
+        # bridge talk to Fcitx's IBus frontend with frontendName() == "ibus"
+        # and program() == "".
+        def ibus_registered():
+            return bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus',
+                'org.freedesktop.DBus', 'NameHasOwner', GLib.Variant('(s)', ('org.freedesktop.IBus',)),
+                None, Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
+
+        wait(ibus_registered, 'private Fcitx IBus service registration')
+
+        class IBusContext:
+            # PREEDIT | AUXILIARY | LOOKUP_TABLE | FOCUS | SURROUNDING_TEXT
+            CAPABILITIES = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)
+
+            def __init__(self, client='gtk-im'):
+                self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+                self.events = []
+                self.path, = self.call('/org/freedesktop/IBus', 'org.freedesktop.IBus',
+                                       'CreateInputContext', '(s)', (client,))
+                self.subscription = self.bus.signal_subscribe(
+                    None, 'org.freedesktop.IBus.InputContext', None, self.path, None,
+                    Gio.DBusSignalFlags.NONE, self.on_signal, None)
+                self.ic('SetCapabilities', '(u)', (self.CAPABILITIES,))
+                self.ic('FocusIn')
+
+            def call(self, path, interface, method, signature=None, values=None):
+                reply = self.bus.call_sync(
+                    'org.freedesktop.IBus', path, interface, method,
+                    GLib.Variant(signature, values) if signature else None, None,
+                    Gio.DBusCallFlags.NONE, 3000, None)
+                return reply.unpack() if reply is not None else ()
+
+            def ic(self, method, signature=None, values=None):
+                return self.call(self.path, 'org.freedesktop.IBus.InputContext', method, signature, values)
+
+            def on_signal(self, _conn, _sender, _path, _interface, name, parameters, _data):
+                self.events.append((name, parameters.unpack()))
+
+            def close(self):
+                try:
+                    self.ic('FocusOut')
+                    self.call(self.path, 'org.freedesktop.IBus.Service', 'Destroy')
+                finally:
+                    self.bus.signal_unsubscribe(self.subscription)
+
+            def text(self, value, cursor=None, anchor=None):
+                cursor = len(value) if cursor is None else cursor
+                anchor = cursor if anchor is None else anchor
+                attrs = GLib.Variant('(sa{sv}av)', ('IBusAttrList', {}, []))
+                ibus_text = GLib.Variant('(sa{sv}sv)', ('IBusText', {}, value, attrs))
+                self.ic('SetSurroundingText', '(vuu)', (ibus_text, cursor, anchor))
+
+            def key(self, symbol, modifiers=0):
+                handled, = self.ic('ProcessKeyEvent', '(uuu)', (symbol, 0, modifiers))
+                self.ic('ProcessKeyEvent', '(uuu)', (symbol, 0, modifiers | (1 << 30)))
+                return handled
+
+            def candidate(self):
+                for name, values in reversed(self.events):
+                    if name == 'HideLookupTable':
+                        return None
+                    if name == 'UpdateLookupTable':
+                        table, visible = values
+                        return table[7][0][2] if visible and table[7] else None
+                return None
+
+            def commits(self):
+                return [values[0][2] for name, values in self.events if name == 'CommitText']
+
+        if context is not None:
+            context.close()
+            context = None
+        backend.apps.update({'chromium', 'libreoffice'})
+        backend.gnome_app, backend.browser, backend.uri, backend.role = 'chromium', True, ALLOWED_URI, 'text'
+        backend.value, backend.caret = PREFIX, None
+
+        # 1. Unnamed non-IBus frontend (dbusfrontend with empty program) never inspects, even on GNOME.
+        daemon.observer.desktop = 'gnome'
+        inspections_before, updates_before = backend.inspections, updates()
+        unidentified = reason_count('unidentified_app')
+        unnamed_dbus = desktop.InputContext('')
+        try:
+            unnamed_dbus.text(PREFIX)
+            quiet(.25)
+            assert not unnamed_dbus.key(desktop.TAB) and not unnamed_dbus.key(ord(' '), CONTROL | SHIFT)
+            quiet(.1)
+            assert backend.inspections == inspections_before and updates() == updates_before
+            assert unnamed_dbus.candidate() is None and unnamed_dbus.commits() == []
+            assert reason_count('unidentified_app') > unidentified
+        finally:
+            unnamed_dbus.close()
+
+        # 2. Unnamed IBus outside GNOME (None or Hyprland) is denied by the observer without calling backend.metadata.
+        for non_gnome in (None, 'hyprland'):
+            daemon.observer.desktop = non_gnome
+            inspections_before, updates_before = backend.inspections, updates()
+            unidentified = reason_count('unidentified_app')
+            ibus = IBusContext()
+            try:
+                ibus.text(PREFIX)
+                wait(lambda: reason_count('unidentified_app') > unidentified, 'non-GNOME unnamed IBus denied')
+                assert not ibus.key(desktop.TAB) and not ibus.key(ord(' '), CONTROL | SHIFT)
+                quiet(.1)
+                assert backend.inspections == inspections_before and updates() == updates_before
+                assert ibus.candidate() is None and ibus.commits() == []
+            finally:
+                ibus.close()
+
+        # 3. On GNOME, unnamed IBus adopts observed Chromium and LibreOffice Writer fields, suggests and commits.
+        daemon.observer.desktop = 'gnome'
+        ibus = IBusContext()
+        try:
+            dispatched = reason_count('display_dispatched')
+            backend.field += 1
+            daemon.observer.invalidate('fixture_field_changed')
+            ibus.text(PREFIX)
+            wait(lambda: reason_count('display_dispatched') > dispatched,
+                 'unnamed IBus GNOME observed Chromium suggestion', timeout=6)
+            assert backend.requested[-1] == 'chromium' and None in backend.requested, \
+                'addon sent frontend="ibus" (None) on inspect, then bound chromium on snapshot'
+            assert ibus.key(desktop.TAB)
+            wait(lambda: ibus.commits() == [' for'], 'unnamed IBus GNOME Tab word commit')
+
+            # Switching to an observed LibreOffice Writer paragraph rebinds to libreoffice on the same IBus context.
+            render_result['value'] = True
+            renders_before = len(render_calls)
+            backend.gnome_app, backend.browser, backend.uri, backend.role = 'libreoffice', False, '', 'paragraph'
+            backend.value, backend.caret = PREFIX, None
+            backend.field += 1
+            daemon.observer.invalidate('window_changed')
+            ibus.text(PREFIX)
+            wait(lambda: len(render_calls) > renders_before,
+                 'unnamed IBus GNOME observed LibreOffice Writer preview', timeout=6)
+            render_result['value'] = False
+            assert render_calls[-1]['binding']['app_id'] == 'libreoffice'
+            assert ibus.key(RIGHT, CONTROL)
+            wait(lambda: ibus.commits() == [' for', SUFFIX], 'unnamed IBus GNOME LibreOffice Ctrl+Right commit')
+
+            # Locked GNOME, mismatched PID/window, and manual-only / terminal apps fail closed and retire the session.
+            for gnome_app, gnome_error, expected_reason in (
+                    (None, 'desktop_locked', 'ime_parity_observer_unavailable'),
+                    (None, 'app_mismatch', 'ime_parity_observer_unavailable'),
+                    (None, 'unsupported_app', 'unidentified_app'),
+                    ('org.gnome.texteditor', 'unsupported_app', 'editor_transaction_unavailable'),
+                    ('com.github.xournalpp.xournalpp', 'unsupported_app', 'editor_transaction_unavailable'),
+                    ('com.mitchellh.ghostty', 'unsupported_app', 'editor_transaction_unavailable')):
+                backend.apps.update({'org.gnome.texteditor', 'com.github.xournalpp.xournalpp', 'com.mitchellh.ghostty'})
+                backend.gnome_app, backend.gnome_error = gnome_app, gnome_error
+                backend.browser, backend.uri, backend.role = False, '', 'text'
+                backend.field += 1
+                before_reason, updates_before = reason_count(expected_reason), updates()
+                daemon.observer.invalidate('window_changed')
+                ibus.text(PREFIX)
+                wait(lambda: reason_count(expected_reason) > before_reason,
+                     f'unnamed IBus GNOME rejects {gnome_app or gnome_error}')
+                assert not ibus.key(desktop.TAB) and not ibus.key(ord(' '), CONTROL | SHIFT)
+                quiet(.15)
+                assert ibus.commits() == [' for', SUFFIX]
+                assert updates() == updates_before, 'unnamed IBus never falls back to manual or typed-line'
+        finally:
+            render_result['value'] = False
+            ibus.close()
+            backend.apps.difference_update({'org.gnome.texteditor', 'com.github.xournalpp.xournalpp',
+                                            'com.mitchellh.ghostty'})
+            backend.gnome_app = None
+            daemon.observer.desktop = None
+
+        # 4. Named or malformed-program IBus contexts keep programAppId authoritative even on GNOME.
+        daemon.observer.desktop = 'gnome'
+        backend.gnome_app, backend.browser, backend.uri, backend.role = 'chromium', True, ALLOWED_URI, 'text'
+        backend.apps.discard('libreoffice')
+        named_ibus = IBusContext('libreoffice')
+        try:
+            requested_len = len(backend.requested)
+            unavailable_before = reason_count('ime_parity_observer_unavailable')
+            unidentified_before = reason_count('unidentified_app')
+            named_ibus.text(PREFIX)
+            wait(lambda: reason_count('ime_parity_observer_unavailable') > unavailable_before,
+                 'named IBus context passes program() instead of frontend="ibus"')
+            assert reason_count('unidentified_app') == unidentified_before
+            assert backend.requested[requested_len:] == ['libreoffice']
+        finally:
+            named_ibus.close()
+            backend.apps.add('libreoffice')
+        inspections_before = backend.inspections
+        unidentified = reason_count('unidentified_app')
+        malformed_ibus = IBusContext('/usr/bin/python3')
+        try:
+            malformed_ibus.text(PREFIX)
+            quiet(.15)
+            assert backend.inspections == inspections_before
+            assert reason_count('unidentified_app') > unidentified
+        finally:
+            malformed_ibus.close()
+            backend.gnome_app = None
+            daemon.observer.desktop = None
+        checks.append('Unnamed IBus on GNOME resolves observed Chromium and LibreOffice Writer fields, commits via '
+                      'Tab/Ctrl+Right, keeps named/malformed IBus program() authoritative, and rejects unnamed dbus, '
+                      'non-GNOME desktops, locked GNOME, mismatched PIDs, manual-only apps and terminals without '
+                      'opening manual or typed-line paths')
+
         # A correction is negotiated on IME-parity observed sessions too
         # (ADR 0011): one bound to the typed text shows as typo → fix.
         broker_metrics = control('status')['metrics']
@@ -1786,7 +1993,8 @@ def main():
                                    # IME-parity apps also hold app rules: a manual
                                    # request would be authorized if ever sent.
                                    for app in sorted((*UNAVAILABLE_APPS, *IME_PARITY_APPS, *UNOBSERVED_FAMILY_PROGRAMS.values(),
-                                                      FIXTURE_APP, 'omawrite', 'telegram', 'com.mitchellh.ghostty')))]}
+                                                      FIXTURE_APP, 'com.github.xournalpp.xournalpp', 'libreoffice',
+                                                      'omawrite', 'telegram', 'com.mitchellh.ghostty')))]}
         private_file(root / 'config/badi/settings.json', json.dumps(settings))
         private_file(root / 'runtime/badi/debug-control.json', json.dumps({
             'id': '550e8400-e29b-41d4-a716-446655440000', 'expires_at': int(time.time()) + 180}))
@@ -1796,9 +2004,14 @@ def main():
         # the panel under test. This config belongs only to the private process.
         private_file(root / 'config/fcitx5/config', '[Behavior]\nShowInputMethodInformation=False\n'
                      'showInputMethodInformationWhenFocusIn=False\n')
+        # Denying GetConnectionUnixProcessID makes Fcitx's ibusfrontend leave
+        # CreateInputContext('gtk-im') with program() == "", matching GNOME's
+        # unnamed Wayland text-input relay (ADR 0017).
         private_file(root / 'bus.conf', '<busconfig><type>session</type><keep_umask/><listen>unix:tmpdir=/tmp</listen>'
                      '<auth>EXTERNAL</auth><policy context="default"><allow send_destination="*" eavesdrop="true"/>'
-                     '<allow eavesdrop="true"/><allow own="*"/></policy></busconfig>')
+                     '<allow eavesdrop="true"/><allow own="*"/>'
+                     '<deny send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus" '
+                     'send_member="GetConnectionUnixProcessID"/></policy></busconfig>')
         environment = {**os.environ, 'HOME': str(root / 'home'), 'XDG_RUNTIME_DIR': str(root / 'runtime'),
                        'XDG_CONFIG_HOME': str(root / 'config'), 'XDG_DATA_HOME': str(root / 'data'),
                        'XDG_CACHE_HOME': str(root / 'cache'), 'FCITX_CONFIG_HOME': str(root / 'config/fcitx5'),

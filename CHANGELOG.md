@@ -8,6 +8,13 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- On GNOME, unnamed `ibus` input contexts (`program()` empty, `frontendName() ==
+  "ibus"`) now take the focused window's verified canonical `app_id` from the
+  GNOME observer for observed fields only
+  ([ADR 0017](docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)), keeping
+  the manual and typed-line paths closed and leaving named contexts, other
+  frontends and other desktops unchanged.
+
 - Allowed per-app opt-in style learning and personalization aggregates for non-terminal Linux apps (`badi style app ID on [DAYS]|off`), while keeping terminals, shells and sensitive fields fail-closed against style, context-word and personalization learning.
 
 - In Zen (`zen` and `zen-twilight`), the Fcitx addon now corroborates exact

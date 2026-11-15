@@ -974,9 +974,9 @@ def generic_report(plan):
     elif badi_install.observer_desktop() == "gnome":
         print("Field observer: GNOME, through Badi's Shell extension, which you enable yourself: log out and back "
               f"in so GNOME Shell finds it, then run gnome-extensions enable {badi_install.GNOME_EXTENSION}; badi "
-              "doctor says whether it answers. Observed fields (Chromium-based apps, Zen, VS Code) still get no "
-              "suggestions on GNOME: GNOME hands Fcitx no app name for them, an open decision. Fcitx's manual "
-              "fields, the editors and the Writer spelling extension work.")
+              "doctor says whether it answers. GNOME has no preview position yet, so observed fields show "
+              f"suggestions in the Fcitx panel. Start Chromium-based apps with {badi_install.OBSERVED_FLAG}, and "
+              "allow each app or site with badi app or badi site.")
     elif badi_install.observer_desktop() == "kwin":
         print("Field observer: KDE Plasma, through a KWin script it loads (no preview position yet, so observed "
               "fields show suggestions in the Fcitx panel). Start Chromium-based apps with "

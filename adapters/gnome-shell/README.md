@@ -47,8 +47,10 @@ observer's expectations and parses it with Node when Node is installed.
 real headless GNOME Shell; the observer runbook has the
 [command and results](../accessibility/README.md#tests).
 
-The observer can follow GNOME's focus, but GNOME's observed fields still get
-no suggestions: the Shell relays every Wayland text-input app to Fcitx, and
-Fcitx names no program for that input context, so the addon has no app id
-to join to the observer's answer. That is an open decision in
-[future plans](<../../future plans.md>).
+GNOME Shell relays Wayland `text-input-v3` apps to Fcitx's `ibus` frontend with
+no program name; for those unnamed `ibus` contexts only, the addon asks the
+GNOME observer for the focused window's verified `app_id` and opens observed
+fields in Fcitx's panel while keeping the manual and typed-line paths closed
+([ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)).
+A live GNOME graphical-session trial remains in
+[future plans](<../../future plans.md>) (step 6).

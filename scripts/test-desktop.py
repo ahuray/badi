@@ -1086,6 +1086,9 @@ class DesktopTests(unittest.TestCase):
                 report = desktop.health_report()
                 self.assertEqual([item['code'] for item in report['problems']], [problem] if problem else [])
                 self.assertIn(desktop.OBSERVER_GNOME_NOTE, report['notes'])
+                self.assertIn('ADR 0017', desktop.OBSERVER_GNOME_NOTE)
+                self.assertIn('Fcitx panel', desktop.OBSERVER_GNOME_NOTE)
+                self.assertNotIn('no app name', desktop.OBSERVER_GNOME_NOTE)
                 self.assertIn('Field observer: ready · GNOME Shell', desktop.doctor_text(report))
                 if problem == 'gnome_extension_inactive':
                     self.assertIn('gnome-extensions enable badi-focus@ahuray.github.io', report['problems'][0]['action'])

@@ -139,11 +139,19 @@ private:
         void (BadiAddon::*revisionStep)(Binding &) = nullptr;
         std::unique_ptr<::fcitx::EventSourceTime> revisionTimer;
         std::unique_ptr<::fcitx::EventSourceTime> revisionNoticeTimer;
+        // An unnamed IBus context (program() empty, frontendName() == "ibus"):
+        // only an observed field verified by the GNOME observer may open here
+        // (ADR 0017); Manual and TypedLine never activate.
+        bool unnamedIbus = false;
         // An applied revision's selection and text, until the field reads so.
         std::optional<std::pair<SelectionWindow, std::string>> revisionExpected;
         std::unique_ptr<::fcitx::EventSourceTime> revisionReadBackTimer;
 
         [[nodiscard]] bool observed() const { return !observedFocus.is_null(); }
+        [[nodiscard]] bool observationCandidate() const {
+            return unnamedIbus ? (state.appId().empty() || unnamedIbusObservedApp(state.appId()))
+                               : nativeObservationAvailable(state.appId());
+        }
     };
 
     static WireCallbacks callbacksFor(BadiAddon *addon);
@@ -188,7 +196,8 @@ private:
     void observeLater(Binding &binding, bool explicitRequest = false, bool retry = false, bool early = false);
     void inspectField(Binding &binding);
     void inspected(Binding &binding, const Json &reply);
-    void bindObservedField(Binding &binding, const Json &focus, NativeEditTarget editTarget);
+    void bindObservedField(Binding &binding, const Json &focus, NativeEditTarget editTarget,
+                           std::string_view resolvedAppId = {});
     void denyEditing(Binding &binding);
     void observerUnavailable(Binding &binding, const Json &error = nullptr);
     void observerInvalidated(const Json &event);

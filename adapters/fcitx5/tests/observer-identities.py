@@ -33,9 +33,11 @@ def mismatches(state_source, observer_source):
     browsers = addon_list(state_source, 'kImeParityBrowsers')
     desktop = addon_list(state_source, 'kImeParityDesktopApps')
     native = addon_list(state_source, 'kImeParityNativeApps')
+    observed_exact = addon_list(state_source, 'kObservedNativeApps')
     apps = observer_apps(observer_source)
     web = {app for app, flags in apps.items() if flags.get('web')}
     observed_native = {app for app, flags in apps.items() if flags.get('observed_only') and not flags.get('web')}
+    exact_native = {app for app, flags in apps.items() if not flags.get('web') and not flags.get('observed_only')}
     observed_browsers = {app for app in web if apps[app].get('browser')}
     problems = []
     if missing := sorted((browsers | desktop) - web):
@@ -44,6 +46,9 @@ def mismatches(state_source, observer_source):
         problems.append(f'observer web rules the addon does not classify as IME-parity: {unclassified}')
     if native != observed_native:
         problems.append(f'IME-parity native ids and observed-only native rules differ: {sorted(native ^ observed_native)}')
+    if observed_exact != exact_native:
+        problems.append('observed native-exact ids and observer native rules differ: '
+                        f'{sorted(observed_exact ^ exact_native)}')
     if wrong_kind := sorted(((browsers & web) - observed_browsers) | (desktop & observed_browsers)):
         problems.append(f'IME-parity class differs from the observer browser flag: {wrong_kind}')
     return problems

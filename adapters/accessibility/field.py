@@ -202,15 +202,21 @@ class FieldBackend:
         With `check_lock`, the session lock query runs while the field is
         read, and its denial replaces the field's result. `caret_rect` is the
         caret rectangle the app gave its input method, a fallback for
-        calibration when the field reports no glyph extents.
+        calibration when the field reports no glyph extents. When `app_id` is
+        None (an unnamed IBus context on GNOME; ADR 0017), the active window's
+        unique matching app rule supplies it inside the same lock check.
         """
         self.budget()
-        app = self.desktop.app(app_id)
+        app = None if app_id is None else self.desktop.app(app_id)
         with self.desktop.lock_query() if check_lock else contextlib.nullcontext():
+            if app is None:
+                app_id, app, window = self.desktop.focused_app()
+                return self.field_metadata(app_id, app, calibrate, caret_rect, window=window)
             return self.field_metadata(app_id, app, calibrate, caret_rect)
 
-    def field_metadata(self, app_id, app, calibrate, caret_rect=None):
-        window = self.desktop.window(app)
+    def field_metadata(self, app_id, app, calibrate, caret_rect=None, window=None):
+        if window is None:
+            window = self.desktop.window(app)
         node = self.focused(window["pid"], app.browser, app.gecko)
         node.clear_cache()
         flags = node.get_state_set()

@@ -14,6 +14,12 @@ Json inspectRequest(std::string_view appId) {
     return Json{{"op", "inspect"}, {"app_id", appId}};
 }
 
+Json unnamedIbusInspectRequest(bool selection) {
+    auto request = Json{{"op", "inspect"}, {"frontend", "ibus"}};
+    if (selection) request["selection"] = true;
+    return request;
+}
+
 Json snapshotRequest(const Json &focus, bool window) {
     auto request = Json{{"op", "snapshot"}, {"binding", focus.value("binding", Json())},
                         {"policy_target", focus.value("target", Json())}};
@@ -158,6 +164,18 @@ std::optional<NativeEditTarget> inspectedEditTarget(const Json &focus, std::stri
     if (kind == "desktop_application" && target.value("app_id", Json()) == app)
         return NativeEditTarget::DesktopApplication;
     return std::nullopt;
+}
+
+std::optional<std::pair<std::string, NativeEditTarget>> unnamedIbusEditTarget(const Json &focus,
+                                                                               bool selection) {
+    if (!focus.is_object() || !focus.contains("binding") || !focus["binding"].is_object()) return std::nullopt;
+    const auto app = focus["binding"].value("app_id", Json());
+    if (!app.is_string()) return std::nullopt;
+    const auto &appId = app.get_ref<const std::string &>();
+    if (!validLinuxAppId(appId) || !unnamedIbusObservedApp(appId)) return std::nullopt;
+    const auto editTarget = selection ? revisionEditTarget(focus, appId) : inspectedEditTarget(focus, appId);
+    if (!editTarget || !nativeEditingAvailable(appId, *editTarget, NativeEditPath::Observed)) return std::nullopt;
+    return std::make_pair(appId, *editTarget);
 }
 
 // Exactly Fcitx's text before the caret; or, when the observer could serialize
@@ -376,7 +394,7 @@ bool invalidates(const Json &event, std::string_view appId) {
     const auto app = event.is_object() ? event.value("app_id", Json()) : Json();
     if (!app.is_string()) return true;
     const auto &named = app.get_ref<const std::string &>();
-    return named.empty() || named == appId;
+    return appId.empty() || named.empty() || named == appId;
 }
 
 bool InspectionSchedule::reinspectAfterInvalidation(bool fieldChanged) {

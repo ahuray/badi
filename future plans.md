@@ -164,18 +164,14 @@ Standing user decisions:
 - native Linux apps may opt into style learning per app
   (`badi style app ID on [DAYS]`, default off); terminals and shells
   (`Ghostty`, `foot`, `bash`) and sensitive fields never learn style samples
-  or context words (2026-11-15).
-
-Open decisions, for the user:
-- **GNOME app identity.** GNOME relays every Wayland text-input app (GTK 4,
-  Chromium, Electron) to Fcitx through its IBus frontend with no program
-  name (checked under headless GNOME Shell 48.7 with Fcitx 5.1.12), so the
-  addon has no app id and denies the field. Badi's GNOME extension knows the
-  focused app, verified by the observer's identity rule. Taking the app id
-  from the observer for exactly such an unnamed IBus context would open
-  GNOME's observed fields, but moves app identity from Fcitx to the observer
-  there ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)).
-  Allow that, or leave GNOME to Fcitx's manual fields and the editors.
+  or context words (2026-11-15);
+- on GNOME only, when an input context has an empty `InputContext::program()`
+  and `InputContext::frontendName() == "ibus"`, the addon asks the GNOME
+  observer (`frontend: "ibus"`) for the focused window's verified canonical
+  `app_id` and opens observed fields only in that epoch, keeping the manual
+  and terminal typed-line paths closed and leaving non-empty `program()` and
+  every other frontend and desktop unchanged (2026-11-15,
+  [ADR 0017](docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)).
 
 ## Next steps, in order
 
@@ -463,10 +459,14 @@ publish need the user's go-ahead first; the rest can start at once.
        and output scale mapped onto the caret calibration;
      - GNOME has one: Badi's own Shell extension
        ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)),
-       proved against headless GNOME Shell 46 and 48. Its observed fields
-       wait on the GNOME app-id decision below; after it, a GNOME VM must
-       show an observed Chromium field suggesting with zero wrong-field
-       edits;
+       proved against headless GNOME Shell 46 and 48, and unnamed `ibus`
+       contexts now take the focused window's verified app id from the GNOME
+       observer for observed fields only
+       ([ADR 0017](docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)).
+       Still open: a GNOME 48 VM must show an observed Chromium field
+       suggesting in Fcitx's panel with zero wrong-field edits, a locked
+       session and another window denying, and no manual fallback on unnamed
+       `ibus` contexts;
      - AT-SPI's own process id is a debugging aid, and its application name
        is not the app id;
    - in a VM with GNOME 48 (Debian 13) and Plasma: `im-config -n fcitx5`

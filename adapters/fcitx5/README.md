@@ -18,6 +18,14 @@ observer wire details.
   that browser's own executable under each, so Google Chrome stays out. VS
   Code 1.140's `com.microsoft.VSCode` to `code` and every `libreoffice-*` to
   `libreoffice`. That one id serves policy, sessions, debug and the observer.
+  When `InputContext::program()` is empty and `InputContext::frontendName()` is
+  `"ibus"` (GNOME's `text-input-v3` relay;
+  [ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)),
+  the manual and typed-line paths stay closed and `inspect` asks with
+  `frontend: "ibus"` so the GNOME observer can supply the verified window's
+  canonical `app_id` for observed apps (`unnamedIbusObservedApp`) in that epoch
+  alone; any invalidation, denial or `focusOut` drops it back to closed. Every
+  non-empty `program()` and every other unnamed frontend keeps the rule above.
 - **Policy.** Each focus or authority epoch queries broker policy before any
   text is read; only a current grant opens a session.
 - **Keys.** Only Badi's own UI consumes a key:

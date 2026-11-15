@@ -7,7 +7,7 @@ types text, and it changes no accessibility setting or app policy.
 ## App rules
 
 Each supported Fcitx app id maps to one identity rule. The active window's
-process ([Hyprland or KWin](#desktops)) must belong to this user, run the listed executable (from
+process ([Hyprland, KWin or GNOME](#desktops)) must belong to this user, run the listed executable (from
 `/proc/PID/exe`, so a deleted or replaced binary fails) and show the listed
 window class. A rule makes a field eligible; it does not prove the app's
 editing works ([coverage](../../README.md#where-it-works)).
@@ -163,11 +163,17 @@ enables Badi's [extension](../gnome-shell/README.md), which answers
   answer `GetActive` with an explicit `false`. GNOME disables the extension
   while locked, so a locked session is denied twice over.
 - A new `org.gnome.Shell` owner stops the observer; systemd restarts it.
-- No geometry: GNOME fields would show suggestions in the input method's
-  panel. They show none yet: GNOME relays every Wayland text-input app to
-  Fcitx through its IBus frontend with no program name, so the addon has no
-  app id to join to this answer (an open decision in
-  [future plans](<../../future plans.md>)).
+- Unnamed `ibus` inspection
+  ([ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)):
+  GNOME relays Wayland `text-input-v3` apps to Fcitx's `ibus` frontend with an
+  empty program name, so the addon sends `inspect` with `frontend: "ibus"`.
+  Only the `"gnome"` backend accepts that form: inside the dual lock check it
+  matches the focused window against `APPS`, requires a single rule to match both
+  window class and verified process (`app_mismatch` when only one half matches,
+  `unsupported_app` otherwise), and returns that canonical `app_id` in `binding`
+  and `target`.
+- No geometry: observed fields on GNOME show suggestions in Fcitx's panel, never
+  the grey preview.
 
 ### Browser fields
 
@@ -343,13 +349,13 @@ Requests carry `schema: "badi.accessibility.v1"`, an ASCII `id` and an `op`:
 
 | Op | Request adds | Reply `focus` adds |
 | --- | --- | --- |
-| `inspect` | `app_id`, optional `selection: true` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets keep the exact app id and origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
+| `inspect` | `app_id` or `frontend: "ibus"` (GNOME only, [ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)), optional `selection: true` | `binding` `{epoch,bus,path,process_id,app_id,uri}`, `target` (browser targets keep the exact app id and origin; `target_id` hashes bus, path and epoch), `purpose`, `caret`, `selection_count`, `geometry: null`, optional `quiet` |
 | `snapshot` | `binding`, `policy_target`, optional `window: true` or `selection: true` (never both) | `before`, `after`, `total_chars`, optional `scope: "block"`, optional `quiet`, with `window` an optional `window_text`, with `selection` the `selected` text ([selection](#selection-for-a-revision)) |
 | `preview` | `binding`, `policy_target`, `expected_caret`, `expected_total_chars`, `text` (1–66 characters: a suggestion of at most 64, or `→ ` and a correction), `ttl_ms` (1–15000), optional `caret_rect` `{x,y,width,height,scale}`, optional `strong` (how many leading characters Tab takes, less than the whole text; drawn opaque and the rest at 60%) | `total_chars`, `rendered`, optional `quiet` |
 
 `preview` compares the current caret and length with the expected ones before
 drawing. `hide` returns `hidden:true`; `status` returns readiness and the
-focused-window source (`desktop`: `hyprland` or `kwin`) without acquiring
+focused-window source (`desktop`: `hyprland`, `kwin` or `gnome`) without acquiring
 anything, and `health.py` probes it for the installer and `badi doctor`. Readiness does not prove that any app exposes an eligible field.
 
 Failures return `{schema,id,ok:false,error,epoch}` with a content-free code;

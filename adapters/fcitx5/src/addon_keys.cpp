@@ -22,9 +22,11 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     if (event.isRelease()) return literalTabRelease(event);
     const auto key = event.key().normalize();
     const bool tab = key.check(::fcitx::Key(FcitxKey_Tab));
-    const auto app = canonicalProgram(*event.inputContext());
-    debug_.record(tab ? "tab" : "input", app, app.empty() ? "unidentified_app" : "input_received");
     auto *binding = bindingFor(*event.inputContext());
+    const auto app = binding && !binding->state.appId().empty() ? binding->state.appId()
+                                                                : canonicalProgram(*event.inputContext());
+    debug_.record(tab ? "tab" : "input", app,
+                  app.empty() && !(binding && binding->unnamedIbus) ? "unidentified_app" : "input_received");
     if (!binding || !binding->state.focused()) return;
     if (revisionActive(*binding) && revisionKey(event, *binding)) return;
     if (!key.isModifier()) binding->inspection.input(monotonicUs());

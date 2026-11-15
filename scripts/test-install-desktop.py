@@ -1344,6 +1344,8 @@ class GenericInstallTests(unittest.TestCase):
             self.assertIn(['systemctl', '--user', 'restart', 'badi-accessibility.service'], calls)
             self.assertTrue(self.observer_waited and self.runtime_checked)
             self.assertIn('gnome-extensions enable badi-focus@ahuray.github.io', self.output)
+            self.assertIn('Fcitx panel', self.output)
+            self.assertNotIn('no app name', self.output)
             # Enabling an extension is the user's choice: no gnome-extensions or gsettings call.
             self.assertFalse([call for call in calls if call[0] in ('gnome-extensions', 'gsettings', 'gdbus')
                               and 'enable' in ' '.join(map(str, call))])

@@ -52,6 +52,10 @@ std::optional<unsigned> nativeReplacementChars(bool imeParity, std::string_view 
                                                 std::string_view suffix);
 // Whether this app may be inspected by the observer at all.
 bool nativeObservationAvailable(std::string_view appId);
+// Apps the observer itself has an exact identity rule for, which an unnamed
+// IBus context on GNOME may adopt from an observed field (ADR 0017). Manual-only
+// native apps, terminals and unavailable apps stay out.
+bool unnamedIbusObservedApp(std::string_view appId);
 bool nativeEditingAvailable(std::string_view appId, NativeEditTarget target,
                             NativeEditPath path);
 // Content-free debug reasons. IME-parity apps never fall back to the
@@ -613,6 +617,11 @@ public:
                  std::string appId, std::string fingerprintSalt,
                  NativeEditTarget target = NativeEditTarget::DesktopApplication,
                  NativeEditPath path = NativeEditPath::Manual);
+    // An unnamed IBus input context before the observer identifies its field
+    // (ADR 0017): focused on the observed path only, with no app id or edit
+    // target, so neither the manual contract nor a terminal's typed line can
+    // open until an observed field is bound.
+    bool focusInUnnamed(std::string sessionId, std::string targetId, std::string fingerprintSalt);
     void focusOut();
     void invalidateContext();
     void denyEditing();
@@ -622,6 +631,9 @@ public:
     // native exact class may use that path. False, and unfocused, for an
     // invalid identity, as focusIn.
     bool retireObservation(std::string sessionId, std::string targetId, std::string fingerprintSalt);
+    // As retireObservation, for an unnamed IBus context: drops the adopted app
+    // id and returns to an unidentified observed-only session, never Manual.
+    bool retireUnnamedObservation(std::string sessionId, std::string targetId, std::string fingerprintSalt);
     // Retires what the broker's refusal of `requestId` names here.
     RefusedRequest refuseRequest(std::string_view requestId);
     std::optional<ContextUpdate> updateContext(ContextWindow context);
