@@ -65,23 +65,13 @@ void BadiAddon::onAuthority(const AuthoritySnapshot &snapshot) {
         // Authority that changed meanwhile also retires cached text.
         if (changed) {
             for (auto &[_, binding] : bindings_) {
-                binding.zenCommit.clear();
-                binding.surroundingFreshness.capabilityChanged();
+                binding.observation.zenCommit.clear();
+                binding.surrounding.authorityChanged();
             }
         }
         return;
     }
-    for (auto &[_, binding] : bindings_) {
-        // The broker already retired these sessions at the new authority epoch.
-        binding.zenCommit.clear();
-        binding.broker.retire();
-        binding.requestExplicit = false;
-        binding.revisionWaiting.reset();
-        dropHeldTab(binding);
-        binding.state.invalidateContext();
-        binding.surroundingFreshness.capabilityChanged();
-        clearOwnedPanel(binding);
-    }
+    for (auto &[_, binding] : bindings_) retire(binding, RetireReason::AuthorityChanged);
     if (!authorityPaused_) queryFocusedPolicies();
 }
 
@@ -92,13 +82,12 @@ void BadiAddon::onPolicy(std::string_view session, bool allowed, const std::stri
     // The app list mode opens only fields the observer corroborates; the
     // manual unknown-identity path (Tab requests) needs an exact app rule.
     if (allowed && reason == "matched_default" && !binding->observed()) {
-        binding->zenCommit.clear();
         binding->broker.answer(false);
         debug_.record("policy", binding->state.appId(), "app_rule_required");
-        if (binding->revisionWaiting) continueRevision(*binding);
+        if (binding->revision.waiting) return continueRevision(*binding);
+        retire(*binding, RetireReason::PolicyDenied);
         return;
     }
-    if (!allowed) binding->zenCommit.clear();
     binding->broker.answer(allowed, std::move(language), contextWords, reason == "snoozed");
     // An editor with its own Badi integration (Neovim) holds the focused
     // terminal: Tab, the chord and every request stay the editor's. A
@@ -109,8 +98,11 @@ void BadiAddon::onPolicy(std::string_view session, bool allowed, const std::stri
                   : reason == "snoozed"        ? "snoozed"
                                                : "app_disabled");
     // A revision waiting for this policy goes on instead of a context read.
-    if (binding->revisionWaiting) return continueRevision(*binding);
-    if (!allowed) return;
+    if (binding->revision.waiting) return continueRevision(*binding);
+    if (!allowed) {
+        retire(*binding, RetireReason::PolicyDenied);
+        return;
+    }
     if (binding->observed()) requestObservedContext(*binding);
     open(*binding);
 }
@@ -119,17 +111,17 @@ void BadiAddon::onSuggestion(Suggestion suggestion) {
     auto *binding = bindingFor(suggestion.coordinates.sessionId);
     if (!binding || !safeToObserve(*binding) || binding->state.acceptancePending()) return;
     const auto now = monotonicUs();
-    if (binding->showAfterUs > now) {
-        binding->heldSuggestion = std::move(suggestion);
-        const auto session = binding->heldSuggestion->coordinates.sessionId;
-        const auto id = binding->heldSuggestion->suggestionId;
-        if (binding->holdTimer) binding->holdTimer->setEnabled(false);
-        binding->holdTimer = oneShot(binding->showAfterUs - now, [this, session, id] {
+    if (binding->suggestion.showAfterUs > now) {
+        binding->suggestion.held = std::move(suggestion);
+        const auto session = binding->suggestion.held->coordinates.sessionId;
+        const auto id = binding->suggestion.held->suggestionId;
+        if (binding->suggestion.holdTimer) binding->suggestion.holdTimer->setEnabled(false);
+        binding->suggestion.holdTimer = oneShot(binding->suggestion.showAfterUs - now, [this, session, id] {
             auto *current = bindingFor(session);
-            if (!current || !current->heldSuggestion || current->heldSuggestion->suggestionId != id) return;
-            if (monotonicUs() < current->showAfterUs) return;
-            auto held = std::move(*current->heldSuggestion);
-            current->heldSuggestion.reset();
+            if (!current || !current->suggestion.held || current->suggestion.held->suggestionId != id) return;
+            if (monotonicUs() < current->suggestion.showAfterUs) return;
+            auto held = std::move(*current->suggestion.held);
+            current->suggestion.held.reset();
             presentSuggestion(*current, std::move(held));
         });
         return;
@@ -139,42 +131,44 @@ void BadiAddon::onSuggestion(Suggestion suggestion) {
 
 void BadiAddon::presentSuggestion(Binding &binding, Suggestion suggestion) {
     if (!safeToObserve(binding) || binding.state.acceptancePending()) return;
-    if (suggestion.replaceBefore && (binding.surroundingEcho.withdrawn() || binding.zenCommit.active())) {
+    if (suggestion.replaceBefore &&
+        (binding.surrounding.echo.withdrawn() || binding.observation.zenCommit.active())) {
         return debug_.record("suggestion_blocked", binding.state.appId(), "replacement_unavailable");
     }
     // SessionState keeps IME-parity apps off this unobserved display path.
     if (!binding.observed()) return displaySuggestion(std::move(suggestion));
-    const auto generation = binding.observationGeneration;
+    const auto generation = binding.observation.generation;
     const auto id = suggestion.suggestionId;
-    const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus),
-        [this, suggestion, focus = binding.observedFocus, generation](const Json &reply) {
+    const bool sent = accessibility_->request(snapshotRequest(binding.observation.focus),
+        [this, suggestion, focus = binding.observation.focus, generation](const Json &reply) {
             auto *current = bindingFor(suggestion.coordinates.sessionId);
-            if (current && safeToObserve(*current) && current->observationGeneration == generation &&
+            if (current && safeToObserve(*current) && current->observation.generation == generation &&
                 current->state.coordinates() == suggestion.coordinates)
                 previewIfCorroborated(*current, suggestion, focus, reply);
         });
-    if (sent) binding.pendingSuggestion = id;
+    if (sent) binding.suggestion.pendingId = id;
     else debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_unavailable");
 }
 
-void BadiAddon::previewIfCorroborated(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply) {
+void BadiAddon::previewIfCorroborated(Binding &binding, const Suggestion &suggestion, const Json &focus,
+                                      const Json &reply) {
     if (binding.state.acceptancePending()) return;
     if (!observerAnswered(reply) || !reply["focus"].is_object()) {
-        binding.zenCommit.clear();
+        binding.observation.zenCommit.clear();
         return debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_unavailable");
     }
     const auto &observed = reply["focus"];
     auto context = rawContext(binding, observed);
     const bool corroborated = context &&
-        (binding.zenCommit.active()
+        (binding.observation.zenCommit.active()
              ? (matchesObservedFocus(focus, observed, true) &&
-                binding.zenCommit.corroborate(binding.state.appId(), *context, observed))
+                binding.observation.zenCommit.corroborate(binding.state.appId(), *context, observed))
              : observerCorroborates(focus, observed, *context));
     if (!corroborated || !matchesCapturedContext(binding.state.lastContext(), context)) {
-        binding.zenCommit.clear();
+        binding.observation.zenCommit.clear();
         return debug_.record("suggestion_blocked", binding.state.appId(), "observer_display_mismatch");
     }
-    binding.observedFocus = observed;
+    binding.observation.focus = observed;
     showObservedPreview(binding, suggestion);
 }
 
@@ -185,18 +179,18 @@ void BadiAddon::previewIfCorroborated(Binding &binding, const Suggestion &sugges
 void BadiAddon::showObservedPreview(Binding &binding, const Suggestion &suggestion) {
     const auto now = transport_.nowMs();
     if (!safeToObserve(binding) || suggestion.expiresAtMs <= now) return;
-    const auto &focus = binding.observedFocus;
+    const auto &focus = binding.observation.focus;
     const bool sent = accessibility_->request(
         previewRequest(focus, previewText(suggestion), suggestion.expiresAtMs - now, caretRect(*binding.inputContext),
                        previewStrong(suggestion)),
-        [this, suggestion, focus, generation = binding.observationGeneration](const Json &reply) {
+        [this, suggestion, focus, generation = binding.observation.generation](const Json &reply) {
             const bool verified = observerAnswered(reply) && reply["focus"].is_object();
             const bool rendered = verified && reply["focus"].value("rendered", Json()) == true;
             if (!rendered) previewMayBeVisible_ = false;
             auto *current = bindingFor(suggestion.coordinates.sessionId);
             if (!current || !current->inputContext->hasFocus() ||
                 current->state.coordinates() != suggestion.coordinates ||
-                current->observationGeneration != generation) return hidePreview();
+                current->observation.generation != generation) return hidePreview();
             previewed(*current, suggestion, focus, reply, verified, rendered);
         });
     if (sent) previewMayBeVisible_ = true;
@@ -204,12 +198,12 @@ void BadiAddon::showObservedPreview(Binding &binding, const Suggestion &suggesti
 }
 
 void BadiAddon::previewed(Binding &binding, const Suggestion &suggestion, const Json &focus, const Json &reply,
-               bool verified, bool rendered) {
+                          bool verified, bool rendered) {
     if (binding.state.acceptancePending()) return;
     const bool foreignIme = hasForeignImeUi(observePanel(binding));
     if (!verified || !matchesObservedFocus(focus, reply["focus"], true) ||
         !matchesCapturedContext(binding.state.lastContext(), currentContext(binding)) || foreignIme) {
-        binding.zenCommit.clear();
+        binding.observation.zenCommit.clear();
         hidePreview();
         debug_.record("suggestion_blocked", binding.state.appId(),
             !verified ? "observer_display_unavailable" :
@@ -226,25 +220,32 @@ void BadiAddon::displaySuggestion(Suggestion suggestion, bool overlay) {
         !matchesCapturedContext(binding->state.lastContext(), currentContext(*binding)) ||
         !binding->state.showSuggestion(suggestion, transport_.nowMs())) {
         if (overlay) hidePreview();
-        if (binding && binding->state.visibleText().empty()) clearOwnedPanel(*binding);
+        if (binding && binding->state.visibleText().empty()) clearSuggestionUi(*binding);
         return;
     }
     // One display at a time: a stream may move between the panel and the
     // grey preview once the caret is calibrated, and an earlier one left
     // showing would show other text than Tab accepts.
-    if (overlay) removeOwnedPanel(*binding);
-    else hidePreview();
-    binding->overlayOwned = overlay;
-    binding->pendingSuggestion.reset();
-    clearTypeThrough(*binding);
+    clearNotice(*binding);
+    clearRevisionUi(*binding);
+    if (overlay) {
+        (void)binding->panel.clear(binding->inputContext);
+    } else {
+        hidePreview();
+        binding->panel.overlayOwned = false;
+    }
+    binding->panel.owner = PanelOwner::Suggestion;
+    binding->panel.overlayOwned = overlay;
+    binding->suggestion.pendingId.reset();
+    binding->typeThrough.clearCarry();
     if (!overlay) showCandidate(*binding, suggestion);
     // The local lease must also hide UI if the broker stalls before its
     // suggestion.clear arrives. Only this exact candidate may be retired.
     const auto now = transport_.nowMs();
-    binding->expiryTimer = oneShot((suggestion.expiresAtMs > now ? suggestion.expiresAtMs - now : 0) * 1000,
+    binding->suggestion.expiryTimer = oneShot((suggestion.expiresAtMs > now ? suggestion.expiresAtMs - now : 0) * 1000,
         [this, coordinates = suggestion.coordinates, suggestionId = suggestion.suggestionId] {
             auto *current = bindingFor(coordinates.sessionId);
-            if (current && current->state.clearSuggestionIf(coordinates, suggestionId)) clearOwnedPanel(*current);
+            if (current && current->state.clearSuggestionIf(coordinates, suggestionId)) clearSuggestionUi(*current);
         });
     binding->inputContext->updateUserInterface(::fcitx::UserInterfaceComponent::InputPanel);
     debug_.record("suggestion", binding->state.appId(), overlay ? "display_overlay" : "display_dispatched");
@@ -258,9 +259,9 @@ void BadiAddon::displaySuggestion(Suggestion suggestion, bool overlay) {
     // normal broker grant for the suggestion just displayed. A display
     // that no longer starts with that word leaves the held Tab dropped
     // and the suggestion standing.
-    if (binding->heldTab) {
-        const std::string rest(binding->heldTabRest);
-        dropHeldTab(*binding);
+    if (binding->typeThrough.heldTab) {
+        const std::string rest(binding->typeThrough.heldTabRest);
+        binding->typeThrough.dropHeldTab();
         if (heldTabMatchesRest(rest, suggestion)) {
             debug_.record("decision", binding->state.appId(), "tab_held_accepted");
             requestAcceptance(*binding, true);
@@ -280,10 +281,10 @@ void BadiAddon::showCandidate(Binding &binding, const Suggestion &suggestion) {
         }));
     list->setGlobalCursorIndex(-1);
     auto &panel = binding.inputContext->inputPanel();
-    binding.ownedAuxiliary.clear();
-    panel.setAuxUp(::fcitx::Text(binding.ownedAuxiliary));
+    binding.panel.auxiliary.clear();
+    panel.setAuxUp(::fcitx::Text(binding.panel.auxiliary));
     panel.setCandidateList(std::move(list));
-    binding.ownedCandidates = panel.candidateList();
+    binding.panel.candidates = panel.candidateList();
 }
 
 void BadiAddon::onAlternativeList(AlternativeList list) {
@@ -293,19 +294,24 @@ void BadiAddon::onAlternativeList(AlternativeList list) {
         !binding->state.showAlternativeList(list, transport_.nowMs())) {
         return;
     }
+    clearNotice(*binding);
+    clearRevisionUi(*binding);
+    hidePreview();
+    binding->panel.overlayOwned = false;
+    binding->panel.owner = PanelOwner::Suggestion;
     const auto &live = *binding->state.alternativeList();
     showAlternativeCandidates(*binding, live);
     // Hide the list when its lease ends, as for a suggestion.
     const auto now = transport_.nowMs();
     const auto suggestionId = live.suggestionId;
-    binding->expiryTimer = oneShot(
+    binding->suggestion.expiryTimer = oneShot(
         (live.expiresAtMs > now ? live.expiresAtMs - now : 0) * 1000,
         [this, coordinates = live.coordinates, suggestionId] {
             auto *current = bindingFor(coordinates.sessionId);
             if (current && current->state.alternativeList() &&
                 current->state.alternativeList()->suggestionId == suggestionId) {
                 current->state.clearAlternativeList();
-                clearOwnedPanel(*current);
+                clearSuggestionUi(*current);
             }
         });
     binding->inputContext->updateUserInterface(::fcitx::UserInterfaceComponent::InputPanel);
@@ -329,20 +335,20 @@ void BadiAddon::showAlternativeCandidates(Binding &binding, const AlternativeLis
     }
     candidates->setGlobalCursorIndex(-1);
     auto &panel = binding.inputContext->inputPanel();
-    binding.ownedAuxiliary.clear();
-    panel.setAuxUp(::fcitx::Text(binding.ownedAuxiliary));
+    binding.panel.auxiliary.clear();
+    panel.setAuxUp(::fcitx::Text(binding.panel.auxiliary));
     panel.setCandidateList(std::move(candidates));
-    binding.ownedCandidates = panel.candidateList();
+    binding.panel.candidates = panel.candidateList();
 }
 
 bool BadiAddon::requestAlternativePick(Binding &binding, std::string word,
                                        const PanelObservation &panel) {
     const auto request = binding.state.requestAlternativePick(std::move(word), transport_.nowMs(), panel);
     if (!request || !transport_.requestAlternativePick(*request)) {
-        clearOwnedPanel(binding);
+        clearSuggestionUi(binding);
         return false;
     }
-    binding.requestExplicit = true;
+    binding.suggestion.requestExplicit = true;
     debug_.record("request", binding.state.appId(), "alternative_pick_requested");
     return true;
 }
@@ -356,24 +362,24 @@ void BadiAddon::onClear(const ClearNotice &clear) {
         // was answered without a suggestion: no Tab may be held for that
         // acceptance any more (at most one hold each), and a Tab already
         // held is dropped with it.
-        if (binding->heldTab) debug_.record("decision", binding->state.appId(), "tab_held_dropped");
-        binding->typeThroughAutomatic = false;
-        dropHeldTab(*binding);
+        if (binding->typeThrough.heldTab) debug_.record("decision", binding->state.appId(), "tab_held_dropped");
+        binding->typeThrough.automatic = false;
+        binding->typeThrough.dropHeldTab();
     }
-    if (!binding->state.editingAvailable()) return clearOwnedPanel(*binding);
+    if (!binding->state.editingAvailable()) return clearSuggestionUi(*binding);
     debug_.record("clear", binding->state.appId(), clear.reason);
-    if (current && binding->pendingSuggestion &&
-        (!clear.suggestionId || *clear.suggestionId == *binding->pendingSuggestion)) {
+    if (current && binding->suggestion.pendingId &&
+        (!clear.suggestionId || *clear.suggestionId == *binding->suggestion.pendingId)) {
         // A broker cancellation can arrive before the preview RPC returns.
         // Retire that asynchronous candidate even though it is not visible.
-        return cancelForInput(*binding);
+        return retire(*binding, RetireReason::InputChanged);
     }
     // A miss is announced only when the user asked: an automatic request
     // that finds nothing stays quiet on every path, terminals included.
-    if (current && !clear.suggestionId && binding->requestExplicit) {
+    if (current && !clear.suggestionId && binding->suggestion.requestExplicit) {
         if (const auto text = clearNoticeText(clear.reason)) return showNotice(*binding, *text);
     }
-    if (binding->state.clearSuggestionIf(clear.coordinates, clear.suggestionId)) clearOwnedPanel(*binding);
+    if (binding->state.clearSuggestionIf(clear.coordinates, clear.suggestionId)) clearSuggestionUi(*binding);
 }
 
 void BadiAddon::onCommitPrepare(const CommitPrepare &prepare) {
@@ -400,7 +406,7 @@ void BadiAddon::corroborateCommit(Binding &binding, const CommitPrepare &prepare
         // for it to finish before sending the one fresh commit snapshot;
         // never reuse its display check or extend either authority lease.
         if (monotonicUs() >= deadline) return refuseCommit(prepare, &binding);
-        binding.commitTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
+        binding.suggestion.commitTimer = instance_->eventLoop().addTimeEvent(CLOCK_MONOTONIC, 0, kTimerAccuracyUs,
             [this, prepare, deadline](::fcitx::EventSourceTime *timer, std::uint64_t) {
                 if (accessibility_->pending() && monotonicUs() < deadline) {
                     timer->setNextInterval(5'000);
@@ -412,30 +418,31 @@ void BadiAddon::corroborateCommit(Binding &binding, const CommitPrepare &prepare
                 else reportStale(prepare);
                 return true;
             });
-        binding.commitTimer->setNextInterval(5'000);
-        binding.commitTimer->setOneShot();
+        binding.suggestion.commitTimer->setNextInterval(5'000);
+        binding.suggestion.commitTimer->setOneShot();
         return;
     }
-    const bool sent = accessibility_->request(snapshotRequest(binding.observedFocus),
-        [this, prepare, focus = binding.observedFocus, generation = binding.observationGeneration](const Json &reply) {
+    const bool sent = accessibility_->request(snapshotRequest(binding.observation.focus),
+        [this, prepare, focus = binding.observation.focus, generation = binding.observation.generation](const Json &reply) {
             auto *current = bindingFor(prepare.coordinates.sessionId);
             const bool answered = observerAnswered(reply) && reply["focus"].is_object();
             auto context = current && answered ? rawContext(*current, reply["focus"]) : std::nullopt;
             bool corroborated = false;
-            if (current && current->observationGeneration == generation && context && answered) {
-                if (current->zenCommit.active()) {
+            if (current && current->observation.generation == generation && context && answered) {
+                if (current->observation.zenCommit.active()) {
                     corroborated = matchesObservedFocus(focus, reply["focus"], true) &&
-                                   current->zenCommit.corroborate(current->state.appId(), *context, reply["focus"]);
+                                   current->observation.zenCommit.corroborate(
+                                       current->state.appId(), *context, reply["focus"]);
                 } else {
                     corroborated = observerCorroborates(focus, reply["focus"], *context);
                 }
             }
             if (corroborated) {
-                current->observedFocus = reply["focus"];
+                current->observation.focus = reply["focus"];
                 return applyCommitPrepare(prepare);
             }
             if (current) {
-                current->zenCommit.clear();
+                current->observation.zenCommit.clear();
                 debug_.record("commit_blocked", current->state.appId(),
                     answered ? "observer_dispatch_mismatch" : "observer_dispatch_unavailable");
             }
@@ -458,26 +465,26 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
     const std::string shown(binding->state.visibleText());
     const auto dispatch = binding->state.authorizeCommit(prepare, transport_.nowMs(), observePanel(*binding));
     if (!dispatch) {
-        binding->zenCommit.clear();
+        binding->observation.zenCommit.clear();
         return reportStale(prepare);
     }
-    clearOwnedPanel(*binding);
+    clearSuggestionUi(*binding);
     // The broker may carry the rest after a word (ADR 0004).
     const bool word = !dispatch->replaceBefore && prepare.acceptance == "word" &&
                        shown.starts_with(dispatch->text);
-    binding->typedThrough = word;
-    binding->typeThroughRest = word ? shown.substr(dispatch->text.size()) : std::string();
+    binding->typeThrough.active = word;
+    binding->typeThrough.rest = word ? shown.substr(dispatch->text.size()) : std::string();
     // Only a rest that returns on its own may hold a quick second Tab.
-    binding->typeThroughAutomatic =
+    binding->typeThrough.automatic =
         word && (binding->observed() || binding->state.editPath() == NativeEditPath::TypedLine);
-    binding->typeThroughWaits = 0;
+    binding->typeThrough.waits = 0;
     if (word) {
         if (const auto previous = binding->state.lastContext())
-            binding->typeThroughBase = previous->context.before;
-        binding->typeThroughTyped = dispatch->text;
+            binding->typeThrough.base = previous->context.before;
+        binding->typeThrough.typed = dispatch->text;
     } else {
-        binding->typeThroughBase.clear();
-        binding->typeThroughTyped.clear();
+        binding->typeThrough.base.clear();
+        binding->typeThrough.typed.clear();
     }
     std::string terminalErase;
     std::optional<std::string> correctionExpected;
@@ -486,7 +493,7 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
         if (appendOnly && !correctsAfterChecks(binding->state.appId())) return refuseCommit(prepare, binding);
         // fcitx5-qt applies the delete request to its own copy of the text,
         // which its echo cleared (SurroundingEcho): the typo would stay.
-        if (binding->surroundingEcho.withdrawn() || binding->zenCommit.active()) {
+        if (binding->surrounding.echo.withdrawn() || binding->observation.zenCommit.active()) {
             debug_.record("commit_blocked", binding->state.appId(), "replacement_unavailable");
             return refuseCommit(prepare, binding);
         }
@@ -500,7 +507,7 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
             // Backspace key sends DEL to the program, so the same DELs, one
             // per tracked scalar of the typo, lead the one commit that types
             // the correction, in order (ADR 0009).
-            binding->typedLine.erase(*count);
+            binding->terminal.line.erase(*count);
             debug_.record("commit", binding->state.appId(), "terminal_backspaces", *count);
             terminalErase = std::string(*count, '\x7f');
         } else {
@@ -510,28 +517,30 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
             // and the commit as two edits that page script could split
             // (ADR 0011), so its own text is read back afterwards.
             if (appendOnly) {
-                correctionExpected = context->before.substr(0, context->before.size() - dispatch->replaceBefore->size()) +
-                                     dispatch->text;
+                correctionExpected =
+                    context->before.substr(0, context->before.size() - dispatch->replaceBefore->size()) +
+                    dispatch->text;
             }
         }
     }
     if (!dispatch->replaceBefore && !dispatch->replaceSelection && binding->observed() &&
         zenPostCommitApp(binding->state.appId())) {
-        if (const auto raw = rawContext(*binding, binding->observedFocus)) {
-            binding->zenCommit.record(binding->state.appId(), binding->observedFocus, *raw, dispatch->text);
+        if (const auto raw = rawContext(*binding, binding->observation.focus)) {
+            binding->observation.zenCommit.record(
+                binding->state.appId(), binding->observation.focus, *raw, dispatch->text);
         } else {
-            binding->zenCommit.clear();
+            binding->observation.zenCommit.clear();
         }
     } else {
-        binding->zenCommit.clear();
+        binding->observation.zenCommit.clear();
     }
-    if (word || binding->zenCommit.active()) binding->inspection.input(monotonicUs());
+    if (word || binding->observation.zenCommit.active()) binding->observation.schedule.input(monotonicUs());
     // One commit, like typed text. Fcitx cannot see the client apply it,
     // so the result is dispatched-unverified, never applied. A replacement
     // deletes the exact typed suffix first.
     binding->inputContext->commitString(terminalErase + dispatch->text);
     if (binding->state.editPath() == NativeEditPath::TypedLine) {
-        binding->typedLine.type(dispatch->text);
+        binding->terminal.line.type(dispatch->text);
         requestLineAfterPause(*binding);
     }
     debug_.record("commit", binding->state.appId(), "dispatched_unverified");
@@ -543,11 +552,11 @@ void BadiAddon::applyCommitPrepare(const CommitPrepare &prepare) {
 // Waits up to a second for the app to report the corrected text. An update
 // between its two edits (the typo gone, the fix not yet typed) is no verdict.
 void BadiAddon::expectCorrection(Binding &binding, std::string expected) {
-    binding.correctionExpected = std::move(expected);
-    binding.correctionTimer = oneShot(1'000'000, [this, context = binding.inputContext] {
+    binding.readBack.correction = std::move(expected);
+    binding.readBack.correctionTimer = oneShot(1'000'000, [this, context = binding.inputContext] {
         auto *current = bindingFor(*context);
-        if (!current || !current->correctionExpected) return;
-        current->correctionExpected.reset();
+        if (!current || !current->readBack.correction) return;
+        current->readBack.correction.reset();
         debug_.record("commit", current->state.appId(), "correction_unconfirmed");
         if (current->inputContext->hasFocus()) showNotice(*current, notice::kCorrectionUnconfirmed);
     });
@@ -555,7 +564,7 @@ void BadiAddon::expectCorrection(Binding &binding, std::string expected) {
 }
 
 void BadiAddon::readBackCorrection(Binding &binding) {
-    if (!binding.correctionExpected) return;
+    if (!binding.readBack.correction) return;
     // The app's own report of its text, whether or not Badi may still edit
     // there: the observer retires a field once its text changes. Nothing
     // read here leaves the addon; the language only satisfies the window.
@@ -563,16 +572,15 @@ void BadiAddon::readBackCorrection(Binding &binding) {
     if (!surrounding.isValid()) return;
     const auto window = captureContextWindow(surrounding.text(), surrounding.cursor(), surrounding.anchor(),
                                              false, "en");
-    if (!window || !correctionLanded(window->before, *binding.correctionExpected)) return;
-    binding.correctionExpected.reset();
-    if (binding.correctionTimer) binding.correctionTimer->setEnabled(false);
+    if (!window || !correctionLanded(window->before, *binding.readBack.correction)) return;
+    binding.readBack.clearCorrection();
     debug_.record("commit", binding.state.appId(), "correction_confirmed");
 }
 
 void BadiAddon::refuseCommit(const CommitPrepare &prepare, Binding *binding) {
     if (binding) {
-        binding->zenCommit.clear();
-        clearOwnedPanel(*binding);
+        binding->observation.zenCommit.clear();
+        clearSuggestionUi(*binding);
     }
     reportStale(prepare);
 }
@@ -587,6 +595,7 @@ void BadiAddon::reportStale(const CommitPrepare &prepare) {
 void BadiAddon::onRefusal(const RequestRefusal &refusal) {
     for (auto &[_, binding] : bindings_) {
         if (binding.broker.refuseOpen(refusal.requestId)) {
+            binding.observation.zenCommit.clear();
             debug_.record("session_refused", binding.state.appId(), refusal.reason);
             continue;
         }
@@ -595,8 +604,8 @@ void BadiAddon::onRefusal(const RequestRefusal &refusal) {
             break;
         case RefusedRequest::Acceptance:
             debug_.record("commit_blocked", binding.state.appId(), "broker_refused");
-            binding.zenCommit.clear();
-            clearOwnedPanel(binding);
+            binding.observation.zenCommit.clear();
+            clearSuggestionUi(binding);
             break;
         case RefusedRequest::Revision: {
             const auto text = revisionClearNotice(refusal.reason);
@@ -605,10 +614,10 @@ void BadiAddon::onRefusal(const RequestRefusal &refusal) {
         }
         case RefusedRequest::Suggestion:
             debug_.record("request_blocked", binding.state.appId(), "broker_refused");
-            binding.zenCommit.clear();
+            binding.observation.zenCommit.clear();
             // The user asked and nothing will answer: say so instead of
             // leaving "thinking" up.
-            if (binding.requestExplicit)
+            if (binding.suggestion.requestExplicit)
                 showNotice(binding, refusal.reason == "paused" ? notice::kPaused : notice::kRequestFailed);
             break;
         }
@@ -617,22 +626,7 @@ void BadiAddon::onRefusal(const RequestRefusal &refusal) {
 
 void BadiAddon::onDisconnected() {
     authorityPaused_ = true;
-    for (auto &[_, binding] : bindings_) {
-        // Sessions, revisions, candidates, commit grants and in-flight
-        // observer replies end with the connection. Fcitx's surrounding
-        // text does not, so an explicit request after reconnect may read
-        // it once fresh policy reopens the session.
-        binding.zenCommit.clear();
-        binding.broker.retire();
-        ++binding.observationGeneration;
-        binding.observationExplicit = false;
-        binding.requestExplicit = false;
-        binding.revisionWaiting.reset();
-        dropHeldTab(binding);
-        binding.state.invalidateContext();
-        binding.surroundingFreshness.transportLost();
-        clearOwnedPanel(binding);
-    }
+    for (auto &[_, binding] : bindings_) retire(binding, RetireReason::Disconnected);
 }
 
 } // namespace badi::fcitx5

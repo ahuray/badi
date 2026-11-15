@@ -28,7 +28,10 @@ BadiAddon::BadiAddon(::fcitx::Instance *instance)
 
 BadiAddon::~BadiAddon() {
     handlers_.clear();
-    for (auto &[_, binding] : bindings_) clearOwnedPanel(binding);
+    for (auto &[_, binding] : bindings_) {
+        retire(binding, RetireReason::FocusReset);
+        binding.readBack.clearCorrection();
+    }
     accessibility_.reset();
     transport_.disconnect();
 }
@@ -122,26 +125,13 @@ void BadiAddon::focusIn(::fcitx::InputContext &inputContext) {
     const auto salt = randomSalt();
     if (!sessionId || !salt || (appId.empty() && !unnamedIbus)) return;
     auto &binding = bindings_[contextId];
-    closeBrokerSession(binding);
-    clearOwnedPanel(binding);
+    // Retires all per-focus parts while keeping an IME-parity correction's
+    // read-back alive across a page-split blur/focus (ADR 0011).
+    retire(binding, RetireReason::FocusReset);
     binding.inputContext = &inputContext;
-    binding.unnamedIbus = unnamedIbus;
-    binding.pendingBrokerStart = false;
-    stopObserving(binding);
-    binding.observationExplicit = false;
-    binding.requestExplicit = false;
-    dropHeldTab(binding);
-    binding.dismissedContext.reset();
-    clearTypeThrough(binding);
-    binding.inspection.focusIn(monotonicUs());
-    binding.revisionWaiting.reset();
-    binding.revisionExpected.reset();
-    // An IME-parity correction's read-back (correctionExpected) outlives
-    // focus: a page that moves focus between its two edits split it, and
-    // its notice must still say so (ADR 0011).
-    binding.surroundingFreshness.focusIn();
-    binding.surroundingEcho.reset();
-    binding.typedLine.clear();
+    binding.observation.unnamedIbus = unnamedIbus;
+    binding.observation.schedule.focusIn(monotonicUs());
+    binding.surrounding.focusIn();
     if (unnamedIbus) {
         if (!binding.state.focusInUnnamed(*sessionId, contextId, *salt)) {
             bindings_.erase(contextId);
@@ -170,22 +160,15 @@ void BadiAddon::focusOut(::fcitx::InputContext &inputContext) {
                                                                 : canonicalProgram(inputContext);
     debug_.record("blur", app, "focus_left");
     if (!binding) return;
-    closeBrokerSession(*binding);
-    dropHeldTab(*binding);
-    dropLiteralTabs(*binding);
-    clearOwnedPanel(*binding);
-    binding->revisionWaiting.reset();
-    binding->state.focusOut();
-    binding->surroundingFreshness.focusOut();
-    binding->surroundingEcho.reset();
-    stopObserving(*binding);
+    if (binding->literalTab.count > 0) debug_.record("decision", app, "literal_tab_dropped");
+    retire(*binding, RetireReason::FocusReset);
 }
 
 void BadiAddon::destroy(::fcitx::InputContext &inputContext) {
     const auto found = bindings_.find(uuidString(inputContext.uuid()));
     if (found == bindings_.end()) return;
-    closeBrokerSession(found->second);
-    clearOwnedPanel(found->second);
+    retire(found->second, RetireReason::FocusReset);
+    found->second.readBack.clearCorrection();
     bindings_.erase(found);
 }
 
@@ -194,36 +177,36 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     const auto app = binding && !binding->state.appId().empty() ? binding->state.appId()
                                                                 : canonicalProgram(inputContext);
     debug_.record("context", app,
-        app.empty() && !(binding && binding->unnamedIbus) ? "unidentified_app" :
+        app.empty() && !(binding && binding->observation.unnamedIbus) ? "unidentified_app" :
         allowsNativeContext(binding ? fieldCapabilities(*binding) : inputContext.capabilityFlags())
             ? "context_received" : "field_denied");
     if (!binding) return;
-    binding->surroundingFreshness.surroundingTextUpdated();
-    binding->surroundingEcho.surroundingTextUpdated(inputContext.capabilityFlags());
+    binding->surrounding.freshness.surroundingTextUpdated();
+    binding->surrounding.echo.surroundingTextUpdated(inputContext.capabilityFlags());
     // The app's own report of its text after an IME-parity correction or a
     // revision.
     readBackCorrection(*binding);
     readBackRevision(*binding);
     const auto digest = surroundingDigest(inputContext.surroundingText());
-    if (digest != binding->surroundingDigest) {
-        binding->surroundingDigest = digest;
-        binding->zenCommit.clear();
+    const bool digestChanged = digest != binding->surrounding.digest;
+    if (digestChanged) {
+        binding->surrounding.digest = digest;
+        binding->observation.zenCommit.clear();
         // The observer may skip an intermediate edit during a fast
         // delete/retype. This ends only the local until-edit decline;
         // the broker still enforces timed quiet and fresh edit authority.
-        binding->dismissedContext.reset();
+        binding->suggestion.dismissedContext.reset();
         const auto now = monotonicUs();
-        binding->inspection.input(now);
+        binding->observation.schedule.input(now);
         if (now != 0) {
-            const auto pause = binding->typedThrough ? InspectionSchedule::kTypeThroughPauseUs
-                                                     : InspectionSchedule::kTypingPauseUs;
-            binding->showAfterUs = now + pause;
+            const auto pause = binding->typeThrough.active ? InspectionSchedule::kTypeThroughPauseUs
+                                                           : InspectionSchedule::kTypingPauseUs;
+            binding->suggestion.showAfterUs = now + pause;
         }
-        binding->heldSuggestion.reset();
-        if (binding->holdTimer) binding->holdTimer->setEnabled(false);
-    } else if (binding->zenCommit.active()) {
-        const auto raw = rawContext(*binding, binding->observedFocus);
-        if (!raw || !binding->zenCommit.matchesFcitx(*raw)) binding->zenCommit.clear();
+        binding->suggestion.clearHeld();
+    } else if (binding->observation.zenCommit.active()) {
+        const auto raw = rawContext(*binding, binding->observation.focus);
+        if (!raw || !binding->observation.zenCommit.matchesFcitx(*raw)) binding->observation.zenCommit.clear();
     }
     // Unavailable apps never hold editing context. Toolkit publication must
     // not erase their explicit, timed unavailable notice. Classify the app
@@ -235,6 +218,7 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     if (revisionSurvives(*binding)) return;
     const bool unchangedObserved = binding->observed() &&
         matchesCapturedContext(binding->state.lastContext(), currentContext(*binding));
+    if (digestChanged) clearNotice(*binding);
     invalidateChangedContext(*binding);
     // A field we already corroborate can start the model on this key.
     // Re-read that field directly; a second inspection would only repeat
@@ -244,7 +228,7 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     // ends its observation anyway; the typing pause is the fallback. A
     // suggestion still waits out the typing pause.
     if (!unchangedObserved) {
-        const bool awaitReport = binding->observed() && binding->inspection.fieldReportsEdits();
+        const bool awaitReport = binding->observed() && binding->observation.schedule.fieldReportsEdits();
         // Foreign preedit must go through inspection, which yields and
         // resumes when the composition clears. A direct read would skip that.
         if (binding->observed() && binding->broker.opened && binding->broker.policyAllowed &&
@@ -253,7 +237,7 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
             requestObservedContext(*binding, true);
         } else {
             observeLater(*binding, false, false,
-                         !awaitReport && (binding->observed() || binding->inspection.inspectsOnInput()));
+                         !awaitReport && (binding->observed() || binding->observation.schedule.inspectsOnInput()));
         }
     }
 }
@@ -263,19 +247,21 @@ void BadiAddon::capabilityChanged(::fcitx::InputContext &inputContext, ::fcitx::
     auto *binding = bindingFor(inputContext);
     const auto app = binding && !binding->state.appId().empty() ? binding->state.appId()
                                                                 : canonicalProgram(inputContext);
-    const bool activeUnnamed = binding && binding->unnamedIbus;
+    const bool activeUnnamed = binding && binding->observation.unnamedIbus;
     // fcitx5-qt's withdrawal right after sending the text changes nothing
     // the field is judged by; see SurroundingEcho.
-    if (binding && (!app.empty() || activeUnnamed) && binding->surroundingEcho.capabilityChanged(before, after)) {
+    if (binding && (!app.empty() || activeUnnamed) && binding->surrounding.echo.capabilityChanged(before, after)) {
         debug_.record("authority", app, "surrounding_echo");
         return;
     }
     debug_.record("authority", app, "capabilities_changed");
     if (!binding || (app.empty() && !activeUnnamed)) return;
-    if (after & ::fcitx::CapabilityFlag::PasswordOrSensitive) binding->pendingBrokerStart = false;
-    binding->zenCommit.clear();
+    if (after & ::fcitx::CapabilityFlag::PasswordOrSensitive) binding->observation.pendingBrokerStart = false;
+    binding->observation.zenCommit.clear();
+    if (binding->revisionActive()) cancelRevision(*binding);
     // Capability changes can leave the previous widget's buffer cached.
-    binding->surroundingFreshness.capabilityChanged();
+    binding->surrounding.capabilityChanged();
+    clearNotice(*binding);
     invalidateChangedContext(*binding);
     observerInvalidated(Json{{"app_id", app}});
 }
@@ -284,16 +270,18 @@ void BadiAddon::foreignUiUpdated(::fcitx::InputContext &input) {
     auto *binding = bindingFor(input);
     if (!binding || !input.hasFocus() || !binding->state.focused()) return;
     if (foreignImeActive(*binding)) {
-        binding->zenCommit.clear();
-        if (binding->state.lastContext() || binding->overlayOwned || !binding->ownedAuxiliary.empty()) {
-            binding->waitingForForeignUi = true;
-            cancelForInput(*binding);
+        binding->observation.zenCommit.clear();
+        const bool hadRevision = binding->revisionActive();
+        if (hadRevision) cancelRevision(*binding);
+        if (hadRevision || binding->state.lastContext() || binding->panel.ownsSurface()) {
+            binding->observation.waitingForForeignUi = true;
+            retire(*binding, RetireReason::InputChanged);
         }
         return;
     }
-    if (binding->waitingForForeignUi) {
-        binding->waitingForForeignUi = false;
-        observeLater(*binding, binding->observationExplicit);
+    if (binding->observation.waitingForForeignUi) {
+        binding->observation.waitingForForeignUi = false;
+        observeLater(*binding, binding->observation.explicitRequest);
     }
 }
 
