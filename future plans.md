@@ -373,8 +373,8 @@ publish need the user's go-ahead first; the rest can start at once.
    item ships or is declined in a recorded user decision.
 2. **Get the fcitx5-qt surrounding-text bug fixed upstream.** Since
    fcitx5-qt 5.1.16
-   ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec),
-   unchanged on its `master` branch), an input-method update that does not ask
+   ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec)),
+   an input-method update that does not ask
    for the surrounding text clears fcitx5-qt's copy and withdraws
    `SurroundingText`. The addon now keeps observed Qt fields suggesting
    through that echo, but Qt drops Fcitx's delete request against the
@@ -385,7 +385,7 @@ publish need the user's go-ahead first; the rest can start at once.
    2026-10-20; on 2026-10-24 it had no reply and `master` no fix, so a fix
    would ship in 5.1.17 at the earliest. Debian forky and sid ship 5.1.16
    too; Debian 13 (5.1.9) and Ubuntu 24.04 to 26.10 (5.1.4–5.1.15) predate
-   the change. The patch is offered upstream as
+   the change. The patch was offered upstream as
    [fcitx/fcitx5-qt#92](https://github.com/fcitx/fcitx5-qt/pull/92)
    (2026-11-02), with a live A/B on this machine: a locally built patched
    plugin restored the spelling replacement in Omawrite (the file read
@@ -395,7 +395,10 @@ publish need the user's go-ahead first; the rest can start at once.
    with the patched plugin the correction preview showed and Tab landed
    `address`; with the system plugin no correction was offered. On
    2026-11-15 PR #92 still awaited maintainer review and a follow-up check-in
-   was posted. Still open: only the PR landing in a shipped fcitx5-qt.
+   was posted; upstream maintainer `wengxt` merged PR #92 on 2026-11-16
+   (commit `357ded98b9958e77026ae072a7340d0cd20843a9`). Still waiting only on
+   a shipped `fcitx5-qt` release (5.1.17+; Arch `extra/fcitx5-qt` is still
+   `5.1.16-2`) before re-verifying Omawrite and Telegram.
    *Done when* a shipped fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
@@ -403,12 +406,22 @@ publish need the user's go-ahead first; the rest can start at once.
    s2idle suspend and resume with a Tab right after passed on 2026-11-02,
    and a VT switch away and back with a Tab right after passed on
    2026-11-03, zero wrong-field or stale edits both times
-   ([session helper](adapters/session/README.md#tested-with)). Still open:
-   several monitors when a second display is at hand. Restarts, undo, pause,
+   ([session helper](adapters/session/README.md#tested-with)). A bounded
+   two-output live trial on 2026-11-16 (`eDP-1` scale `2` plus `HEADLESS-3`
+   `1920x1080@60` at scales `1` and `1.25` via `hyprctl output create
+   headless`, installed `d8cfa70`) passed output creation, window move to
+   `HEADLESS-3`, calibrated inline overlay and clean Tab acceptance on
+   `HEADLESS-3` at both scales, password-field denial, and output removal
+   with zero wrong-field or stale edits
+   ([Fcitx matrix](adapters/fcitx5/README.md#tested-with),
+   [observer matrix](adapters/accessibility/README.md#tested-with)); that
+   boundary is a virtual `headless wl_output`, not a physical second
+   display. Still open:
+   several monitors on a physical second display with someone present. Restarts, undo, pause,
    composition, stale focus, Ghostty's typed line and fractional scaling
    passed on 2026-10-19 ([matrix](adapters/fcitx5/README.md#tested-with)).
-   *Done when* the multi-monitor rows show zero wrong-field or stale edits
-   and the [session helper](adapters/session/README.md) runbook records
+   *Done when* the physical multi-monitor rows show zero wrong-field or stale
+   edits and the [session helper](adapters/session/README.md) runbook records
    them.
 4. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    CI builds and namcap-checks the package on every change, and the licence

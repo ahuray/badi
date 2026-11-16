@@ -423,6 +423,30 @@ What the live trials established, beyond those cells:
   - Ghostty's typed line survives a broker restart; an Fcitx restart starts
     a new line.
   - At fractional scale 1.5 the grey text sits on the caret's baseline.
+- **Two-output headless trial** (Chromium `155.0.8059.84`, installed
+  `d8cfa70`, 2026-11-16, isolated profile on `127.0.0.1`), with `eDP-1`
+  (`2880x1800`, scale `2`, `0x0`) plus virtual `HEADLESS-3` (`1920x1080@60`
+  via `hyprctl output create headless` and `hl.monitor`, placed at `x=1440`
+  under `hyprmoncfgd` at `y=-90` scale `1` and `y=18` scale `1.25`):
+  - Creating `HEADLESS-3` (`monitoraddedv2`) while a suggestion showed on
+    `eDP-1` retired the preview immediately (`window_changed`) and `Tab`
+    committed nothing stale (`ghost_visible: false`). Reconfiguring
+    `HEADLESS-3` via `hl.monitor` emitted no `monitoraddedv2` and left the
+    unchanged `eDP-1` preview valid.
+  - Moving Chromium from `eDP-1` to `HEADLESS-3` (`movewindowv2`) retired the
+    `eDP-1` preview (`window_changed`) and immediate `Tab` (`0.253 s`)
+    committed nothing stale.
+  - On `HEADLESS-3` at scale `1` and fractional scale `1.25`, typing in the
+    `<textarea>` rendered the calibrated inline grey overlay (`rendered: true`,
+    `0` `monitor_unmatched`, `preview mapped: true`) and `Tab` committed one
+    word cleanly; `<input type="password">` sent nothing (`field_denied` /
+    `ime_parity_unobserved`, and `sensitive_field` on mid-transition focus).
+  - Removing `HEADLESS-3` (`hyprctl output remove HEADLESS-3`,
+    `monitorremovedv2`) while a suggestion showed retired it immediately
+    (`window_changed`) and `Tab` at `0.125 s` committed nothing stale, leaving
+    `eDP-1`, `omarchy-shell lock status` and `badi doctor` healthy.
+  - Boundary: virtual `headless wl_output` only; a physical second display
+    with someone present remains untried.
 - **Literal Tab** (Chromium 154, 2026-10-20): Ctrl+Shift+Tab with a
   suggestion showing reached the page as one plain Tab; with none showing,
   the chord stayed Chromium's.
@@ -443,7 +467,8 @@ What the live trials established, beyond those cells:
 
 Not yet tried live:
 - a real suspend and resume, and a VT switch;
-- several monitors, and non-US keyboard groups;
+- a physical second monitor (only `eDP-1` plus virtual `headless wl_output`
+  tried), and non-US keyboard groups;
 - a horizontally scrolled 100 CSS px input, which showed nothing on two
   explicit requests;
 - Google's search box (consent wall).
