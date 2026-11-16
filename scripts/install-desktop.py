@@ -39,8 +39,25 @@ OMARCHY_REPAIR_HOOKS = ("post-boot.d", "post-update.d")
 SYSTEM_APPLICATIONS = Path("/usr/share/applications")
 
 
-def run(command, **kwargs):
-    return subprocess.run(command, check=True, **kwargs)
+def run(command, check=True, **kwargs):
+    return subprocess.run(command, check=check, **kwargs)
+
+
+def reset_failed(unit):
+    """Clear a unit's failed state when systemd already has it loaded."""
+    result = run(["systemctl", "--user", "reset-failed", unit],
+                 capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        return
+    state = run(["systemctl", "--user", "show", "--property=ActiveState", "--value", unit],
+                capture_output=True, text=True, check=False)
+    if state.returncode == 0 and state.stdout.strip() != "failed":
+        return
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+    raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
 
 
 def observed_config_target(home, config_home, filename):
@@ -881,12 +898,12 @@ def restart(plan, installation):
     run(["systemctl", "--user", "daemon-reload"])
     # badi-broker.service starts on demand when the user types or asks; leave
     # login autostart as the user's explicit `badi autostart on|off` choice.
-    run(["systemctl", "--user", "reset-failed", "badi-broker.service"])
+    reset_failed("badi-broker.service")
     run(["systemctl", "--user", "restart", "badi-broker.service"])
     probe = wait_model(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")
     if not plan.session_disabled:
         run(["systemctl", "--user", "enable", SESSION_SERVICE])
-        run(["systemctl", "--user", "reset-failed", SESSION_SERVICE])
+        reset_failed(SESSION_SERVICE)
         run(["systemctl", "--user", "restart", SESSION_SERVICE])
         plan.session_ready = wait_session_helper(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")
     if not plan.native:
@@ -897,7 +914,7 @@ def restart(plan, installation):
     require_unlocked()
     if not plan.accessibility_enabled:
         run(["systemctl", "--user", "enable", "badi-accessibility.service"])
-    run(["systemctl", "--user", "reset-failed", "badi-accessibility.service"])
+    reset_failed("badi-accessibility.service")
     run(["systemctl", "--user", "restart", "badi-accessibility.service"])
     wait_accessibility(home / ".local/lib/badi/accessibility/daemon.py", runtime / "badi/accessibility.sock")
     if plan.args.observed_app:
@@ -925,7 +942,7 @@ def restart_generic(plan):
     if not plan.accessibility_enabled:
         run(["systemctl", "--user", "enable", "badi-accessibility.service"])
     if plan.observer_session:
-        run(["systemctl", "--user", "reset-failed", "badi-accessibility.service"])
+        reset_failed("badi-accessibility.service")
         run(["systemctl", "--user", "restart", "badi-accessibility.service"])
         wait_accessibility(home / ".local/lib/badi/accessibility/daemon.py", runtime / "badi/accessibility.sock")
     plan.fcitx_process = badi_install.fcitx_bus_process()

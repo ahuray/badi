@@ -52,5 +52,8 @@ no program name; for those unnamed `ibus` contexts only, the addon asks the
 GNOME observer for the focused window's verified `app_id` and opens observed
 fields in Fcitx's panel while keeping the manual and typed-line paths closed
 ([ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)).
-A live GNOME graphical-session trial remains in
-[future plans](<../../future plans.md>) (step 5).
+Verified live in a Debian 13.7 GNOME 48.7 Wayland VM: `badi doctor` reports
+`gnome_extension_inactive` while disabled and `Field observer: ready · GNOME
+Shell` once enabled, lock unexports the interface (`desktop_locked`), and
+Chromium `156.0.8078.79` and GTK3 Writer resolve via `frontend: "ibus"`
+([Debian tested-with](../../packaging/debian/README.md#tested-with)).

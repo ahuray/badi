@@ -405,12 +405,13 @@ def gnome_extension_state():
     try:
         result = subprocess.run(["busctl", "--user", "--timeout=1s", "call", "org.gnome.Shell",
                                  "/io/github/ahuray/badi/Focus", "io.github.ahuray.badi.Focus1", "GetFocus"],
-                                capture_output=True, text=True, timeout=2)
+                                capture_output=True, text=True, timeout=2,
+                                env={**os.environ, "LC_ALL": "C"})
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode == 0:
         return "ready" if result.stdout.startswith("ubtussb 1 ") else "other_version"
-    return "absent" if "Unknown" in result.stderr or "No such" in result.stderr else None
+    return "absent" if any(phrase in result.stderr for phrase in ("Unknown", "No such", "does not exist")) else None
 
 
 def observer_probe(endpoint, expected_pid):

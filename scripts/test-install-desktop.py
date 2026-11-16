@@ -1104,6 +1104,28 @@ class FullInstallTests(FullInstall, unittest.TestCase):
                 self.assertEqual(stopped.exception.code, 2)
                 command.assert_not_called()
 
+    def test_reset_failed_ignores_unloaded_unit_and_raises_on_failed_unit(self):
+        for active, should_raise in (('inactive', False), ('failed', True)):
+            with self.subTest(active=active):
+                calls = []
+                def execute(command, **kwargs):
+                    calls.append(command)
+                    if 'reset-failed' in command:
+                        return subprocess.CompletedProcess(command, 1, '', 'Failed to reset failed state of unit badi-broker.service: Unit badi-broker.service not loaded.\n')
+                    return subprocess.CompletedProcess(command, 0, f'{active}\n', '')
+                with patch.object(installer.subprocess, 'run', side_effect=execute), \
+                     contextlib.redirect_stderr(io.StringIO()) as err:
+                    if should_raise:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            installer.reset_failed('badi-broker.service')
+                        self.assertIn('not loaded', err.getvalue())
+                    else:
+                        installer.reset_failed('badi-broker.service')
+                self.assertEqual(calls, [
+                    ['systemctl', '--user', 'reset-failed', 'badi-broker.service'],
+                    ['systemctl', '--user', 'show', '--property=ActiveState', '--value', 'badi-broker.service'],
+                ])
+
 
 class ObservedAppInstallTests(FullInstall, unittest.TestCase):
     def install_observed(self, root, apps):
