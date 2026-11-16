@@ -53,4 +53,4 @@ GNOME observer for the focused window's verified `app_id` and opens observed
 fields in Fcitx's panel while keeping the manual and typed-line paths closed
 ([ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)).
 A live GNOME graphical-session trial remains in
-[future plans](<../../future plans.md>) (step 6).
+[future plans](<../../future plans.md>) (step 5).

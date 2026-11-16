@@ -324,9 +324,8 @@ a word in view, such as a name from the thread or a term from a coding session.
   that still overruns its 350 ms fails as `operation_timeout`. The text is
   spacing-collapsed and cut at a word.
 
-The debug trace records only `window_text_chars`. Live results are in
-[Tested with](#tested-with); a real mail client and the Claude desktop app are
-not yet tested ([backlog](<../../future plans.md>)).
+The debug trace records only `window_text_chars`. Live results, including Gmail
+and the Claude desktop app, are in [Tested with](#tested-with).
 
 ## Socket contract
 
@@ -405,8 +404,11 @@ its monitor.
   on G's line marks the caret; its parent, the editor widget, must contain
   both and bounds the drawing.
 - **Gecko** reports F, D and E in logical pixels and G in device pixels, with F
-  at the window origin. The caret is `x = (G.x + G.width)/s`, `y = G.y/s`. A tile
-  narrower than Zen's minimum content width fails and uses the panel.
+  at the window origin (`F.height` may exceed `window.height` when Gecko's
+  accessible frame spans browser chrome, which `gecko_calibrated_geometry`
+  accepts and the earlier Chromium scale gate rejected). The caret is
+  `x = (G.x + G.width)/s`, `y = G.y/s`. A tile narrower than Zen's minimum
+  content width fails and uses the panel.
 - **Native windows (LibreOffice).** AT-SPI `WINDOW` coordinates are logical
   pixels relative to the toplevel, so F must be exactly `(0, 0)` and the
   window's size. E must contain G and F must contain E; the caret is
@@ -582,7 +584,9 @@ acceptance results per app.
 
 | What (installed commit, date) | Result | Boundary |
 | --- | --- | --- |
-| Window words, Chromium 154 (`26f4366`, 2026-10-20), a disposable mail-style page | The reply field read 385 characters of the thread; "Marin" finished as "Marinella" and "Okonk" as "Okonkwo"; a name only in the To input was never offered; a word learned in two note fields finished in the reply; `badi context site … off` stopped window text and learned words; the panel asked before context was chosen | Not a real mail client or the Claude desktop app |
+| Window words, Gmail in Brave Origin `1:1.99.57-1` and Claude desktop `5.11492.5-1` (`ebe40fe`, 2026-11-15, content-free `badi debug on`) | Standalone empty Gmail Compose read `window_chars: 50` (`window_words: 2`), UI stem `Recipi` finished window word `Recipients` in the inline overlay and Tab committed `ents` (draft discarded); `claude-desktop` Wayland new-chat composer read `window_chars: 534` (`window_words: 20`), UI stem `Custom` finished window word `Customize` in the inline overlay and Tab committed `ize` (composer cleared) | Static UI words only; zero user mail or chat text read or logged |
+| Gecko calibrated preview, Zen Twilight `1.25t.20261113-1` (`ebe40fe`, 2026-11-15, `eDP-1` `2880x1800` scale 2) | `gecko_calibrated_geometry` and glyph-order `ltr` direction passed (`frame={0,0,701,495}` vs `window_size=[701,418]`, `document={186,8,507,479}`, `field={226,179,418,254}`, `glyph={1086,392,24,53}`, `JetBrainsMono Nerd Font` 15 pt) and mapped both chip and inline grey previews | Isolated profile with `GNOME_ACCESSIBILITY=1` |
+| Window words, Chromium 154 (`26f4366`, 2026-10-20), a disposable mail-style page | The reply field read 385 characters of the thread; "Marin" finished as "Marinella" and "Okonk" as "Okonkwo"; a name only in the To input was never offered; a word learned in two note fields finished in the reply; `badi context site … off` stopped window text and learned words; the panel asked before context was chosen | Disposable local page; Gmail and Claude desktop covered above |
 | Window words, Zen 1.23.3b, Brave Origin 1.97 (tab and `--app`), VS Code 1.142 (`f180653`, 2026-10-20) | Zen read 197 characters and finished 3 of 3; Brave finished names from the thread; VS Code read 175 characters (explorer and tab labels) and finished names from its screen-reader textarea | Isolated profiles, one page or scratch file each |
 | GNOME backend, headless GNOME Shell 48.7 (Debian 13.7) and 46.0 (Ubuntu 24.04) in containers (2026-11-03) | Both GTK 4 windows' pid and app id; only the focused one passed the identity rule; a locked session denied `desktop_locked` and unexported the extension; logind's Unlock brought answers back; a disabled extension denied `desktop_unavailable`; 3 of 3 runs on each. Under the same Shell with Fcitx 5.1.12, a focused GTK 4 entry's input context had an empty program name | Headless Shell with a GDM and logind stand-in, no Fcitx addon or real app: GNOME's observed fields wait on the app-id decision |
 | KWin backend, headless `kwin_wayland --virtual` 6.3.6 in a Debian 13.7 container with `CAP_SYS_NICE` (2026-11-03) | Two GTK 4 windows reported pid and app id on activation; the identity rule accepted only the active one; `GetActive` true denied `desktop_locked`; an unloaded script denied `desktop_unavailable` | Headless compositor, no AT-SPI field, Fcitx or real app: no Plasma session has run observed fields yet |

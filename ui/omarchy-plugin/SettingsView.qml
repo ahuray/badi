@@ -55,6 +55,8 @@ Item {
     search.text = ""
     siteDraft = ""
     if (siteInput) siteInput.text = ""
+    siteInputFocused = false
+    siteInput = null
     flick.contentY = 0
     controller.showAll = false
     controller.pickedLanguages = null
@@ -580,9 +582,24 @@ Item {
                 foreground: view.foreground
                 font.family: view.fontFamily
                 font.pixelSize: Style.font.bodySmall
-                Component.onCompleted: { text = view.siteDraft; view.siteInput = siteField }
+                Component.onCompleted: {
+                  text = view.siteDraft
+                  view.siteInput = siteField
+                  view.siteInputFocused = activeFocus
+                }
+                Component.onDestruction: if (view.siteInput === siteField) {
+                  view.siteInputFocused = false
+                  view.siteInput = null
+                }
                 onTextChanged: view.siteDraft = text
-                onActiveFocusChanged: view.siteInputFocused = activeFocus
+                onActiveFocusChanged: {
+                  if (activeFocus) {
+                    view.siteInput = siteField
+                    view.siteInputFocused = true
+                  } else if (view.siteInput === siteField) {
+                    view.siteInputFocused = false
+                  }
+                }
                 Keys.onReturnPressed: function(event) {
                   if (controller.setSite(text, (event.modifiers & Qt.ShiftModifier) ? "block" : "allow")) text = ""
                 }

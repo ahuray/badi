@@ -1172,6 +1172,40 @@ def session(root, report):
         checks.append('Zen Twilight (`zen-twilight`): held second Tab chains `S1 + S2` while Fcitx stays at '
                       'pre-commit text')
 
+        # Live Gecko (`zen-twilight`) lag on back-to-back Tab #2: on `commitString(' your')`,
+        # Gecko emits `SurroundingText` with its pre-Tab-#2 text (`PREFIX + ' for'`, one commit
+        # behind `PREFIX + ' for your'`). Both arrival orders rebase `zenCommit` so the 3rd-word
+        # remainder `'time'` stays visible without `observer_context_mismatch` and Tab #3 commits it.
+        for gecko_first, order_name in ((True, 'before'), (False, 'after')):
+            change(PREFIX, new_field=True)
+            wait(lambda: context.candidate() == SHOWN, 'zen-twilight 3-word candidate (' + order_name + ')')
+            calls, commits = provider_calls(), context.commits()
+            mismatch = reason_count('observer_context_mismatch')
+            assert context.key(desktop.TAB), 'zen-twilight Tab #1'
+            wait(lambda: context.commits() == [*commits, ' for'], 'zen-twilight Tab #1 committed')
+            observer_only(PREFIX + ' for')
+            wait(lambda: context.candidate() == 'your time', 'zen-twilight remainder after Tab #1')
+            assert context.key(desktop.TAB), 'zen-twilight Tab #2'
+            wait(lambda: context.commits() == [*commits, ' for', ' your'], 'zen-twilight Tab #2 committed')
+            if gecko_first:
+                context.text(PREFIX + ' for')
+                observer_only(PREFIX + ' for your')
+            else:
+                observer_only(PREFIX + ' for your')
+                wait(lambda: context.candidate() == 'time', 'zen-twilight remainder before late SurroundingText')
+                context.text(PREFIX + ' for')
+                quiet(.15)
+            wait(lambda: context.candidate() == 'time',
+                 'zen-twilight 3rd-word remainder after pre-Tab-#2 SurroundingText (' + order_name + ')')
+            assert reason_count('observer_context_mismatch') == mismatch, \
+                'pre-Tab-#2 SurroundingText rebase caused no observer_context_mismatch (' + order_name + ')'
+            assert provider_calls() == calls, 'rebased remainder used type-through carry without model call'
+            assert context.key(desktop.TAB), 'zen-twilight Tab #3 commits 3rd word after rebase'
+            wait(lambda: context.commits() == [*commits, ' for', ' your', ' time'],
+                 'zen-twilight Tab #3 committed (' + order_name + ')')
+        checks.append('Zen Twilight (`zen-twilight`): pre-Tab-#2 `SurroundingText` lag after Tab #2 rebases '
+                      '`zenCommit` so the 3rd-word remainder stays visible and Tab #3 commits cleanly')
+
         # Page script altering OR dropping the committed word fails closed and clears the pending suffix.
         open_context('zen')
         for bad_value, detail in ((PREFIX + ' fox', 'altered commit'),

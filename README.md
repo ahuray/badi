@@ -87,8 +87,8 @@ around the caret.
 
 | App | Notes | Tested |
 | --- | --- | --- |
-| Chromium and Brave Origin, including Omarchy's web apps (HEY, X, Basecamp, Zoom) in either browser | Any website you allow, including rich editors (ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE, CodeMirror), iframes and shadow roots | Chromium 152–155, Brave Origin 1.96–1.98 |
-| Zen and Zen Twilight | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b, 1.23.3b; Zen Twilight 1.24t |
+| Chromium and Brave Origin, including Omarchy's web apps (HEY, X, Basecamp, Zoom) in either browser | Any website you allow, including rich editors (ProseMirror, Lexical, Slate, Draft.js, Quill, CKEditor 5, TinyMCE, CodeMirror), iframes and shadow roots | Chromium 152–155, Brave Origin 1.96–1.99 |
+| Zen and Zen Twilight | Grey preview; Ctrl+Z undoes an acceptance alone | Zen 1.23b, 1.23.3b; Zen Twilight 1.24t, 1.25t |
 | VS Code, Cursor | Needs `"editor.editContext": false` in VS Code | VS Code 1.140 and 1.142, Cursor 3.21 |
 | Codex desktop | Composer | 26.930 |
 | LibreOffice Writer | Document paragraphs; Calc gets nothing. Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word, Alt+F7 shows one for the word at the caret, Alt+F7 again replaces it in one undo step | 26.8, 26.8.1 |
@@ -101,8 +101,8 @@ around the caret.
 | foot (Omarchy's default terminal) | `badi app foot on`; the line you type, as in Ghostty, including `teh → the` corrections | foot 1.28.0 |
 | Neovim | Badi plugin; prose buffers, inline preview, exact spelling replacement, one-step undo. Installed characterwise selection revision is live-tested in foot with a clean startup, real model and synthesized terminal keys ([limits](adapters/neovim/README.md#tested-with)). Continuations/spelling are live with the real model under LazyVim in foot and Ghostty, including Ctrl+Shift+Space; in Ghostty it takes over from the typed line while focused | 0.12.5, 0.12.6 |
 | Discord | Composer; install with `--observed-app discord`, then relaunch Discord | 1.0.166 |
-| Grok Bot | Ready, but its composer is untested | 0.35 |
-| Claude desktop | Ready, but its composer is untested; `badi app com.anthropic.claude on`, then relaunch it with the flag below | 2.42304 (Electron 44) |
+| Grok Bot | Composer; `badi app grok-bot on`, then relaunch it with the flag below | 1.1.0 |
+| Claude desktop | Composer and window words; `badi app com.anthropic.claude on`, then relaunch it with the flag below | 5.11492.5 |
 
 **Not yet:**
 - Firefox and Gecko builds other than Zen and Zen Twilight.

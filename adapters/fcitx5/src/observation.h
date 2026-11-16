@@ -6,7 +6,9 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace badi::fcitx5 {
 
@@ -98,31 +100,49 @@ bool observerCorroborates(const nlohmann::json &captured, const nlohmann::json &
 // snapshot after an append-only commitString until the next keystroke (ADR 0003).
 bool zenPostCommitApp(std::string_view appId);
 
-// Tracks Badi's own append-only commitString suffix in an observed Zen field
-// while Gecko still reports the pre-commit surrounding text to Fcitx. Badi's
-// consumed acceptance and alternative-selection keys on a shown remainder keep
-// it; focus loss, an authority or connection reset, a field-identity or
-// surrounding-text change, any key reaching the app, Escape, explicit invoke,
-// selection revision, a refused request, or any observer snapshot that differs
-// by even one character from `preCommit.before + committed` clears it.
+enum class ZenFcitxUpdate {
+    Cleared,
+    Unchanged,
+    Rebased,
+};
+
+// Tracks Badi's own append-only commitString steps in an observed Zen field
+// while Gecko still reports the pre-commit or an earlier step's surrounding
+// text to Fcitx. Badi's consumed acceptance and alternative-selection keys on
+// a shown remainder keep it; when Fcitx catches up to an intermediate prefix of
+// cumulative back-to-back commits (`1 <= k < steps.size()`, collapsed caret at
+// the end with empty `after`), `updateFcitx` rebases forward to the remaining
+// steps. Catching up completely, focus loss, an authority or connection reset,
+// a field-identity or epoch regression, any other surrounding-text change, any
+// key reaching the app, Escape, explicit invoke, selection revision, a refused
+// request, or any observer snapshot that differs by even one character clears it.
 class ZenPendingCommit {
 public:
     void record(std::string_view appId, const nlohmann::json &observedField,
                 const ContextWindow &rawFcitx, std::string_view committed);
     void clear();
     [[nodiscard]] bool active() const { return active_; }
+    [[nodiscard]] const std::string &language() const { return preCommit_.language; }
     [[nodiscard]] bool sameField(const nlohmann::json &focus) const;
     [[nodiscard]] bool matchesFcitx(const ContextWindow &rawFcitx) const;
+    [[nodiscard]] ZenFcitxUpdate updateFcitx(std::string_view appId,
+                                             const ContextWindow &rawFcitx);
     [[nodiscard]] bool corroborate(std::string_view appId, ContextWindow &context,
                                    const nlohmann::json &observed);
     [[nodiscard]] bool applyToCorroborated(std::string_view appId, ContextWindow &context,
                                            const nlohmann::json &observed) const;
 
 private:
+    struct Step {
+        std::string text;
+        std::size_t scalars = 0;
+    };
+
     bool active_ = false;
+    std::string appId_;
     nlohmann::json field_;
     ContextWindow preCommit_;
-    std::string committed_;
+    std::vector<Step> steps_;
     std::size_t committedScalars_ = 0;
     std::string expectedBefore_;
 };

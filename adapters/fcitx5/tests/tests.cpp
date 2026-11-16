@@ -2238,22 +2238,147 @@ void zenPostCommitAgreementIsNarrowAndFailsClosed() {
                   corroboratedFirst.head == 13 && !observedRequestBlocked(afterFirst, corroboratedFirst, false, true),
               "corroborated post-commit context carries the committed word and caret");
 
-        // Second consecutive Tab while Gecko still reports the pre-commit SurroundingText.
+        // Chained second Tab while Gecko still reports the pre-commit SurroundingText.
         pending.record(app, afterFirst, raw, " your");
         check(pending.active() && pending.matchesFcitx(raw), "chained second Tab accumulates S1 + S2");
+        check(pending.updateFcitx(app, raw) == ZenFcitxUpdate::Unchanged && pending.active(),
+              "unchanged Fcitx snapshot keeps cumulative steps intact");
+
+        // Live Gecko behavior on back-to-back Tab #2: SurroundingText updates one step behind (preCommit + S1).
+        auto caughtFirst = *captureContextWindow("thank you for", 13, 13, true, "en");
+        caughtFirst.identityKnown = true;
+        check(pending.updateFcitx(app, caughtFirst) == ZenFcitxUpdate::Rebased && pending.active() &&
+                  !pending.matchesFcitx(raw) && pending.matchesFcitx(caughtFirst),
+              "intermediate preCommit + S1 SurroundingText rebases pending state forward to S2");
         const auto afterSecond = makeField(app, 3, 18, 18, "thank you for your");
-        auto corroboratedSecond = raw;
+        auto corroboratedSecond = caughtFirst;
         check(pending.corroborate(app, corroboratedSecond, afterSecond) && pending.active() &&
                   corroboratedSecond.before == "thank you for your" && corroboratedSecond.anchor == 18 &&
                   corroboratedSecond.head == 18,
-              "chained second Tab corroborates exact fcitx_before + S1 + S2");
+              "rebased S2 corroborates exact caughtFirst + S2 for the third-word remainder");
 
-        // Once Fcitx updates SurroundingText past the pre-commit snapshot, matchesFcitx turns false.
-        auto caughtUp = *captureContextWindow("thank you for your", 18, 18, true, "en");
-        caughtUp.identityKnown = true;
-        check(!pending.matchesFcitx(caughtUp), "Fcitx catching up ends the pre-commit match");
-        pending.clear();
-        check(!pending.active(), "clear retires the pending suffix");
+        // Chained third Tab after rebase, followed by another one-step-behind SurroundingText update.
+        pending.record(app, afterSecond, caughtFirst, " time");
+        auto caughtSecond = *captureContextWindow("thank you for your", 18, 18, true, "en");
+        caughtSecond.identityKnown = true;
+        check(pending.updateFcitx(app, caughtSecond) == ZenFcitxUpdate::Rebased && pending.active(),
+              "third Tab rebases again when Gecko advances from S1 to S1 + S2");
+        const auto afterThird = makeField(app, 4, 23, 23, "thank you for your time");
+        auto corroboratedThird = caughtSecond;
+        check(pending.corroborate(app, corroboratedThird, afterThird) && pending.active() &&
+                  corroboratedThird.before == "thank you for your time" && corroboratedThird.head == 23,
+              "third Tab corroborates after second rebase");
+
+        // Once Fcitx catches up completely to preCommit + all_steps, updateFcitx clears zenCommit.
+        auto caughtAll = *captureContextWindow("thank you for your time", 23, 23, true, "en");
+        caughtAll.identityKnown = true;
+        check(pending.updateFcitx(app, caughtAll) == ZenFcitxUpdate::Cleared && !pending.active(),
+              "Fcitx catching up completely clears the pending commit state");
+    }
+
+    // Multi-step jump rebase (k = 2 of 3), >512-scalar rebase, and fail-closed rebase/epoch/appId checks.
+    {
+        auto base = *captureContextWindow("thank you", 9, 9, true, "en");
+        base.identityKnown = true;
+        ZenPendingCommit jumpPending;
+        jumpPending.record("zen", makeField("zen", 1, 9, 9, "thank you"), base, " for");
+        jumpPending.record("zen", makeField("zen", 2, 13, 13, "thank you for"), base, " your");
+        jumpPending.record("zen", makeField("zen", 3, 18, 18, "thank you for your"), base, " time");
+        auto caughtTwo = *captureContextWindow("thank you for your", 18, 18, true, "en");
+        caughtTwo.identityKnown = true;
+        check(jumpPending.updateFcitx("zen", caughtTwo) == ZenFcitxUpdate::Rebased && jumpPending.active(),
+              "jumping two intermediate steps (k = 2 < 3) rebases forward to S3");
+        auto jumpCtx = caughtTwo;
+        check(jumpPending.corroborate("zen", jumpCtx, makeField("zen", 4, 23, 23, "thank you for your time")) &&
+                  jumpCtx.before == "thank you for your time" && jumpCtx.head == 23,
+              "rebased S3 corroborates after two-step jump");
+
+        // >512-scalar windowing across intermediate rebase.
+        const std::string longPrefix = std::string(510, 'a') + "thank you";
+        auto longBase = *captureContextWindow(longPrefix, 519, 519, true, "en");
+        longBase.identityKnown = true;
+        ZenPendingCommit longRebase;
+        longRebase.record("zen", makeField("zen", 1, 519, 519, longPrefix.substr(longPrefix.size() - 512)),
+                          longBase, " for");
+        const std::string windowAfterFirst = std::string(499, 'a') + "thank you for";
+        longRebase.record("zen", makeField("zen", 2, 523, 523, windowAfterFirst), longBase, " your");
+        auto longCaughtFirst = *captureContextWindow(longPrefix + " for", 523, 523, true, "en");
+        longCaughtFirst.identityKnown = true;
+        check(longRebase.updateFcitx("zen", longCaughtFirst) == ZenFcitxUpdate::Rebased && longRebase.active(),
+              ">512-scalar window rebases intermediate step cleanly");
+        auto longRebasedCtx = longCaughtFirst;
+        const std::string windowAfterSecond = std::string(494, 'a') + "thank you for your";
+        check(longRebase.corroborate("zen", longRebasedCtx, makeField("zen", 3, 528, 528, windowAfterSecond)) &&
+                  longRebasedCtx.before == windowAfterSecond && longRebasedCtx.head == 528,
+              ">512-scalar rebased step corroborates exact 512-scalar tail");
+
+        // Fail-closed updateFcitx cases: 1-char mismatch, non-empty after, paragraphEnd, selection, cursor off end, wrong appId.
+        const auto makeArmedTwoSteps = [&] {
+            ZenPendingCommit armed;
+            armed.record("zen", makeField("zen", 1, 9, 9, "thank you"), base, " for");
+            armed.record("zen", makeField("zen", 2, 13, 13, "thank you for"), base, " your");
+            return armed;
+        };
+        {
+            auto armed = makeArmedTwoSteps();
+            auto wrongChar = *captureContextWindow("thank you fox", 13, 13, true, "en");
+            wrongChar.identityKnown = true;
+            check(armed.updateFcitx("zen", wrongChar) == ZenFcitxUpdate::Cleared && !armed.active(),
+                  "1-character difference in intermediate SurroundingText clears zenCommit");
+        }
+        {
+            auto armed = makeArmedTwoSteps();
+            auto withAfter = *captureContextWindow("thank you forx", 13, 13, true, "en");
+            withAfter.identityKnown = true;
+            check(armed.updateFcitx("zen", withAfter) == ZenFcitxUpdate::Cleared && !armed.active(),
+                  "non-empty after in SurroundingText clears zenCommit");
+        }
+        {
+            auto armed = makeArmedTwoSteps();
+            auto withPara = *captureContextWindow("thank you for\n\n", 13, 13, true, "en");
+            withPara.identityKnown = true;
+            normalizeObservedParagraphEnd(withPara);
+            check(armed.updateFcitx("zen", withPara) == ZenFcitxUpdate::Cleared && !armed.active(),
+                  "paragraphEnd after caret in SurroundingText clears zenCommit");
+        }
+        {
+            auto armed = makeArmedTwoSteps();
+            auto hasSelection = *captureContextWindow("thank you for", 13, 13, true, "en");
+            hasSelection.identityKnown = true;
+            hasSelection.anchor = 9;
+            check(armed.updateFcitx("zen", hasSelection) == ZenFcitxUpdate::Cleared && !armed.active(),
+                  "selection in SurroundingText clears zenCommit");
+        }
+        {
+            auto armed = makeArmedTwoSteps();
+            auto wrongCursor = *captureContextWindow("thank you for", 13, 13, true, "en");
+            wrongCursor.identityKnown = true;
+            wrongCursor.anchor = 12;
+            wrongCursor.head = 12;
+            check(armed.updateFcitx("zen", wrongCursor) == ZenFcitxUpdate::Cleared && !armed.active(),
+                  "cursor off scalar end clears zenCommit");
+        }
+        {
+            auto armed = makeArmedTwoSteps();
+            auto caughtOne = *captureContextWindow("thank you for", 13, 13, true, "en");
+            caughtOne.identityKnown = true;
+            check(armed.updateFcitx("zen-twilight", caughtOne) == ZenFcitxUpdate::Cleared && !armed.active(),
+                  "mismatched Zen appId clears zenCommit on updateFcitx");
+        }
+        {
+            auto armed = makeArmedTwoSteps();
+            auto candidate = base;
+            check(!armed.corroborate("zen-twilight", candidate, makeField("zen-twilight", 3, 18, 18, "thank you for your")) &&
+                      !armed.active(),
+                  "mismatched Zen appId fails closed and clears zenCommit on corroborate");
+        }
+        {
+            auto armed = makeArmedTwoSteps();
+            auto candidate = base;
+            check(!armed.corroborate("zen", candidate, makeField("zen", 1, 18, 18, "thank you for your")) &&
+                      !armed.active(),
+                  "regressed observer epoch fails closed and clears zenCommit");
+        }
     }
 
     // Multi-byte UTF-8 scalars, mid-text after-caret agreement, paragraph ends and >512-scalar windowing.

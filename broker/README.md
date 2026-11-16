@@ -90,7 +90,12 @@ and whether they were dirty (`--version` prints both; packagers may set
   question about where to suggest; like `languages_chosen`, it grants
   nothing.
 - **Connections.** Policy and desktop-signal connections stay open while
-  idle; control and health clients close after 300 s without a request.
+  idle; control and health clients close after 300 s without a request. A
+  recoverable per-request `error` frame (`invalid_message`, `stale`,
+  `no_suggestion`, `expired`) ends only its request id while keeping the v2
+  socket open across concurrent requests and sibling sessions (verified live
+  against `local_model` on `aad8a21`, 2026-11-15, for both `BrokerClient` and
+  multi-session v2).
 
 ## Desktop session signals
 
