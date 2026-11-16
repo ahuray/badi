@@ -6,14 +6,14 @@ Pause stops suggestions until you resume. An app or site that is not allowed nev
 
 - `pause-on` stops suggestions and survives a restart when set with `badi pause`.
 - `pause-resume` allows suggestions again.
-- `access-app` turns an app on or off, or switches allowlist and blocklist.
+- `access-app` turns an app or website on or off, or switches that list between allowlist and blocklist.
 - `access-doctor` reports whether the installed desktop is worth using.
 
 ## How to get to it (user POV)
 
-- Run `badi pause`, `badi resume`, or `badi pause toggle`. Right-click the Omarchy **b** mark for the same pause. `badi resume` also ends every snooze.
-- Run `badi status` to see whether the model is ready and whether apps are allowlisted.
-- Run `badi app NAME on`, `badi app NAME off`, `badi apps allowlist`, or `badi apps blocklist`.
+- Run `badi pause`, `badi resume`, or `badi pause toggle`. Right-click the Omarchy **b** mark for the same pause. `badi resume`, and `badi pause toggle` when that resumes, also end every snooze.
+- Run `badi status` to see whether the model is ready, and whether apps and websites are on an allowlist or a blocklist. `badi app list` and `badi site list` show the rules.
+- Run `badi app NAME on`, `badi app NAME off`, `badi apps allowlist`, or `badi apps blocklist`. `badi site ORIGIN on`, `badi site ORIGIN off`, `badi sites allowlist`, and `badi sites blocklist` do the same for a website.
 - Run `badi doctor` when nothing appears. `badi doctor --json` is the same report for tools.
 
 ## Driving it with verify-badi
@@ -31,7 +31,8 @@ Preconditions:
 ## Gotchas
 
 - The bridge prints `READY` as soon as it connects, including while paused. The pause proof is the later `BLOCKED` line and `paused: true`, not that first `READY`.
-- Pause withholds every app. A snooze withholds one app or site and leaves the others alone. This drive does not start a snooze. `badi resume` ends both a persistent pause and every snooze; `badictl pause off` is only the runtime pause.
+- Pause withholds every app. A snooze withholds one app or site and leaves the others alone. This drive does not start a snooze. `badi resume` ends both a persistent pause and every snooze, and so does `badi pause toggle` when that resumes. `badictl pause off` is only the runtime pause.
+- On the installed desktop, the first typed key in an editable field, and an explicit ask (manual Tab, Ctrl+Shift+Space, or a revision), starts `badi-broker.service` when its socket is absent. A password field does not. The model then stays up until logout or `badi service stop`. A cloud VM has no user service manager, so this start cannot be driven there.
 - `badictl pause` ends when that broker exits. Citing it does not prove `badi pause` across a restart.
 - Allowlist is the default. An app with no rule gets nothing. The headless instance will refuse Neovim, Obsidian, and Fcitx apps.
 - A password field is refused in every mode. Do not use a real password to prove that.
