@@ -12,7 +12,7 @@ field to the active window's process and app id, checked against an exact
 identity rule, and denies while the session is locked. It learned both only
 from Hyprland's IPC and Omarchy's lock status, so on KDE Plasma its unit was
 skipped and Chromium-based apps, Zen, VS Code and Writer's grey preview got
-no observed fields ([future plans](../../future%20plans.md), step 5).
+no observed fields.
 
 Plasma offers two sources of the active window's process and app id:
 
@@ -96,9 +96,14 @@ Plasma offers two sources of the active window's process and app id:
 - On Plasma 6, an app becomes eligible for observed fields where its
   identity rule's executable matches the install: on Debian 13 that is
   Chromium (`/usr/lib/chromium/chromium`), VS Code from Microsoft's package
-  and LibreOffice Writer; the other rules name Arch paths. No Plasma desktop
-  has run that flow live yet, so README coverage stays unclaimed until it
-  does.
+  and GTK3 LibreOffice Writer (`libreoffice-gtk3`, `SAL_USE_VCLPLUGIN=gtk3`,
+  `GTK_IM_MODULE=` unset; `libreoffice-qt6` puts the paragraph past the
+  192-node `tree_limit`); the other rules name Arch paths. Live Debian 13.7
+  Plasma 6.3.6 VM trials now prove observed Chromium and GTK3 Writer fields
+  in Fcitx's panel (`#tested-with` in the
+  [Debian runbook](../../packaging/debian/README.md#tested-with)), while KWin
+  grey preview calibration (§7 above) remains tracked under `Later, by area`
+  in [future plans](../../future%20plans.md).
 - `badi doctor` names the focused-window source (`ready · KWin (KDE
   Plasma 6)`), and says when the observer found none.
 - A same-UID process can unload the script; the next inspection notices

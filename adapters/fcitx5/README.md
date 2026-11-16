@@ -450,6 +450,33 @@ What the live trials established, beyond those cells:
 - **Literal Tab** (Chromium 154, 2026-10-20): Ctrl+Shift+Tab with a
   suggestion showing reached the page as one plain Tab; with none showing,
   the chord stayed Chromium's.
+- **Debian 13.7 KDE Plasma 6.3.6 & GNOME 48.7 Wayland VMs** (Fcitx 5.1.12,
+  `8e6dfab` + packaging/script fixes in `.deb` `0.2.0+r142-1~debian13`,
+  2026-11-16, disposable text in Chromium `156.0.8078.79`, Kate `25.04.3`,
+  Mousepad `0.6.3`, `gnome-text-editor` `48.3` and LibreOffice Writer
+  `25.2.3.2`):
+  - **Plasma 6.3.6** (`kwin_wayland` Virtual Keyboard): observed Chromium
+    (`--force-renderer-accessibility=complete` alone) and GTK3 Writer
+    (`SAL_USE_VCLPLUGIN=gtk3`, `GTK_IM_MODULE=` unset) displayed in Fcitx's
+    panel (`display: "panel"`), `Tab` committed one word and carried the
+    remainder, and `<input type="password">` / password-labelled inputs stayed
+    unacquired; Kate (`kate` and `org.kde.kate`) and Mousepad
+    (`GTK_IM_MODULE=fcitx`) manual `Tab` requests and `Tab` accepts landed;
+    user-local `scripts/install-desktop.py` + `~/.config/environment.d/50-badi-fcitx5.conf`
+    loaded `~/.local/lib/fcitx5/libbadi-fcitx5.so` into KWin-launched
+    `fcitx5` across reboot.
+  - **GNOME 48.7** (`gdm3` 48.0, `im-config` + `kimpanel`): Chromium and GTK3
+    Writer on Wayland `text-input-v3` (`frontend: "ibus"`, `program() == ""`)
+    resolved through [ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)
+    (`awaiting_observed_field` → `inspect` `frontend: "ibus"` → Kimpanel
+    `display: "panel"` + `Tab` commit + remainder carry); native Wayland
+    `gnome-text-editor` with `org.gnome.texteditor` allowed had zero manual
+    broker calls and inserted a literal `\t`; `gnome-text-editor` under
+    `GTK_IM_MODULE=fcitx` (`program: gnome-text-editor`) landed manual `Tab`
+    request + `Tab` accept cleanly.
+  - See [Debian tested-with](../../packaging/debian/README.md#tested-with) for
+    the full Plasma/GNOME matrix, lock-screen denials, Writer VCL boundaries
+    and `apt purge` verification.
 - **Quiet**: Escape quiet across edits, a request during quiet,
   narrow-field quiet before acquisition, and Omawrite's Open File dialog
   (`file_dialog`, explicit requests only).

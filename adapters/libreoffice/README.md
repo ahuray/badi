@@ -19,7 +19,10 @@ remains append-only; this extension never appends.
 
 Alt+F7 sits beside F7 (spelling dialog) and Shift+F7 (online spelling); Writer
 and Omarchy leave it free, Fcitx keeps Ctrl+Shift+Space and Ctrl+Alt+F7 stays a
-VT switch. Writer's *Tools ▸ Customize ▸ Keyboard* can move it.
+VT switch. GNOME's default `<Alt>F7` window-move shortcut
+(`org.gnome.desktop.wm.keybindings begin-move`) intercepts `Alt+F7`; there, use
+the infobar's **Replace** button, *Tools ▸ Add-Ons ▸ Badi: Correct Last Word*,
+or *Tools ▸ Customize ▸ Keyboard* to rebind it.
 
 The proposal (`Badi: adress → address`) appears in an infobar and the document
 is untouched until you accept it. After a replacement, one Ctrl+Z restores the

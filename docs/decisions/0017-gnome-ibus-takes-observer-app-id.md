@@ -29,7 +29,7 @@ the one focused editable AT-SPI object of that exact process.
 
 Opening GNOME's observed fields without weakening named input contexts, other
 frontends, other desktops, or the unknown-identity manual contract needed an
-explicit user decision ([future plans](../../future%20plans.md)).
+explicit user decision.
 
 ## Decision
 
@@ -83,9 +83,9 @@ explicit user decision ([future plans](../../future%20plans.md)).
 
 - Observed fields in Chromium-based apps, Zen, LibreOffice Writer, Telegram and
   Omawrite can bind and suggest in Fcitx's panel on GNOME once the user enables
-  `badi-focus@ahuray.github.io` and allows the site or app; a live GNOME 48 VM
-  session trial remains tracked in [future plans](../../future%20plans.md)
-  (step 5).
+  `badi-focus@ahuray.github.io` and allows the site or app, verified live in a
+  Debian 13.7 GNOME 48.7 Wayland VM for Chromium and GTK3 Writer
+  ([Debian tested-with](../../packaging/debian/README.md#tested-with)).
 - Manual-only GTK/Qt apps launched over Wayland `text-input-v3` on GNOME still
   hand Fcitx an empty `ibus` program name and have no observer rule, so they
   fail closed rather than opening an unidentified manual contract; apps using

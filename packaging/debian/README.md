@@ -9,17 +9,23 @@ published.
 One part of the desktop contract differs from Omarchy's: the
 [field observer](../../adapters/accessibility/README.md) runs only in a
 Hyprland, KDE Plasma 6 or GNOME session. On Plasma it uses a KWin script and
-shows suggestions in Fcitx's panel without the grey preview, not yet tried
-live. On GNOME it uses Badi's [Shell extension](../../adapters/gnome-shell/README.md),
-which the package ships and each user enables; unnamed `ibus` contexts there
+shows suggestions in Fcitx's panel without the grey preview; on GNOME it uses
+Badi's [Shell extension](../../adapters/gnome-shell/README.md) (plus
+`gnome-shell-extension-kimpanel` for Fcitx's panel), unnamed `ibus` contexts
 take the focused window's verified app id from the observer for observed fields
-only ([ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md))
-and show suggestions in Fcitx's panel without the grey preview, not yet tried
-live. Fcitx's
+only ([ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)),
+and suggestions likewise show in Fcitx's panel without the grey preview. Both
+sessions are verified live in Debian 13.7 VMs (`#tested-with`). Fcitx's
 manual fields (a Tab request in an app that hands Fcitx its program name and is
 allowed with `badi app ID on`), Obsidian, Neovim, Bash and the
 [Writer spelling extension](../../adapters/libreoffice/README.md) do not
-need it.
+need it. On GNOME, `<Alt>F7` defaults to moving windows, so Writer spelling
+uses the infobar's **Replace** button, *Tools ▸ Add-Ons*, or a rebound key;
+Writer's observed continuations also require `libreoffice-gtk3`
+(`SAL_USE_VCLPLUGIN=gtk3`) with `GTK_IM_MODULE=` unset, because `libreoffice-qt6`
+puts the paragraph past the 192-node `tree_limit` and `im-config`'s
+`QT_IM_MODULE=fcitx` / `GTK_IM_MODULE=fcitx` reports `soffice.bin` / `soffice`
+instead of `libreoffice-writer`.
 
 ## Build the package
 
@@ -132,7 +138,7 @@ with the build dependencies above and no Node.js. It finds no
   registry offers `zwp_input_method_manager_v2`, where Fcitx's `wayland_v2`
   frontend serves apps (Hyprland, Sway); GNOME and KDE Plasma do not;
 - installs and enables the observer, starting and verifying it only in a
-  Hyprland or KDE Plasma 6 session, and refuses `--observed-app`, which needs
+  Hyprland, KDE Plasma 6 or GNOME session, and refuses `--observed-app`, which needs
   Omarchy's lock status;
 - in a Hyprland session, prints the grey preview's no-animation layer rule
   for both `hyprland.lua` and `hyprland.conf`, leaving compositor
@@ -158,22 +164,84 @@ apt package of a missing dictionary.
 
 ## Tested with
 
-A graphical session first: Debian 13.7 in a QEMU/KVM VM (standard VGA),
-KDE Plasma 6.3.6 on Wayland (`kwin_wayland` 6.3.6), Fcitx 5.1.12 launched
-by KWin as the Virtual Keyboard (`fcitx5-wayland-launcher`), the package
-built from `170c91a`, on 2026-11-03. `badi doctor` reported no problems
-(observer correctly skipped outside Hyprland); the user units ran; a
-manual Fcitx request in Kate 25.04.3 showed the ghost, Tab landed it,
-and the numbered list's digit pick landed too; the Bash adapter in
-Konsole 25.04.2 previewed on Ctrl-X Tab and accepted into the Readline
-buffer without submitting; at the lock screen `kscreenlocker_greet` was
-`app_disabled` and the `--text` trace held none of the typed text. Zero
-wrong-field edits. Not yet tried in a graphical session: a GTK app's
-manual request, the Writer extension, and purge (the container smoke
-covers purge). The VM first exposed the fresh-home broker crash loop
-fixed in `170c91a` (systemd now creates `~/.config/badi`); with 4 GiB
-the broker waited for available memory, as designed, and started at
-8 GiB.
+Live graphical VM trials in Debian 13.7 (QEMU/KVM `-m 8192 -smp 6`, standard
+VGA, local `gemma-3-1b-pt-q4_k_m.gguf` on pinned `llama-b11840`, disposable text,
+`badi debug on --text`):
+
+- **KDE Plasma 6.3.6 Wayland** (2026-11-16, `8e6dfab` + `install-desktop.py`
+  `reset_failed` fix, `kwin_wayland` 6.3.6, Fcitx 5.1.12 Virtual Keyboard,
+  built `.deb` on Rust `1.85.1` / `libfcitx5core-dev` `5.1.12-2` with 9/9 `ctest`
+  passing, upgraded from `170c91a`):
+  - `WAYLAND_DISPLAY=wayland-0` reached `systemd --user` before
+    `graphical-session.target`; `badi-accessibility.service`,
+    `badi-session.service` and `badi-broker.service` started cleanly and
+    `badi doctor` exited 0 (`Field observer: ready · KWin (KDE Plasma 6)`).
+    (Note: `badi-session`'s portal `BindShortcuts` opens Plasma's
+    `systemsettings kcm_keys` prompt on first registration when shortcuts are
+    unbound.)
+  - **Observed Chromium `156.0.8078.79`** (`--temp-profile --password-store=basic --force-renderer-accessibility=complete`
+    alone — no `--ozone-platform=wayland` or `--enable-wayland-ime` required):
+    served `127.0.0.1` `<textarea>` suggested in Fcitx's panel (`display:
+    "panel"`, `rendered: false`), `Tab` committed `following` with zero
+    wrong-field edits and type-through carried the remainder; `<input
+    type="password">` (`field_denied`) and password-labelled text
+    (`sensitive_field`) sent zero text to the broker.
+  - **Window & lock denials:** focusing `konsole` denied `unsupported_app` /
+    `app_mismatch`; `qdbus6 org.freedesktop.ScreenSaver /ScreenSaver Lock`
+    (`kscreenlocker_greet`, `GetActive == true`) denied `desktop_locked` with
+    zero lock-screen text traced; QMP unlock resumed Chromium suggestions.
+  - **Manual native & editors:** Kate `25.04.3` (both `kate` over `dbus` and
+    `org.kde.kate` over `wayland`) and Mousepad `0.6.3` (`GTK_IM_MODULE=fcitx`)
+    each took manual `Tab` requests and `Tab` accepts cleanly; Neovim `0.10.4`
+    in Konsole (`applied`), LibreOffice Writer `25.2.3.2` UNO `Alt+F7`
+    (`adress ` → `address`, single `Ctrl+Z` restored `adress`), and GTK3
+    Writer (`libreoffice-gtk3`, `SAL_USE_VCLPLUGIN=gtk3`, `GTK_IM_MODULE=`
+    unset) observed-paragraph panel suggestion + `Tab` commit passed. Default
+    `libreoffice-qt6`/`kf6` places the paragraph at AT-SPI DFS node 883 (past
+    the 192-node `tree_limit`), and `im-config`'s `QT_IM_MODULE=fcitx` /
+    `GTK_IM_MODULE=fcitx` sends `soffice.bin` / `soffice` via `dbus` rather
+    than `libreoffice-writer` via Wayland.
+  - **Purge & `environment.d` user-local install:** graphical `apt purge -y
+    badi` + reboot left zero packaged files while preserving `~/.config/badi`
+    and `~/.local/share/badi`; running `scripts/install-desktop.py` (fixed for
+    systemd 257's `Unit ... not loaded` on `reset-failed`) + reboot caused
+    KWin-launched `fcitx5` to map `~/.local/lib/fcitx5/libbadi-fcitx5.so` via
+    `~/.config/environment.d/50-badi-fcitx5.conf`, with `badi doctor` exiting
+    0 after `badi service start`.
+  - Earlier Plasma 6.3.6 run (2026-11-03, `170c91a`) also passed the Bash
+    adapter in Konsole `25.04.2` and Kate's numbered-list digit pick.
+- **GNOME 48.7 Wayland** (2026-11-16, `8e6dfab` + `badi-desktop.py` fix rebuilt
+  into `.deb` `0.2.0+r142-1~debian13`, `gnome-shell` 48.7, `mutter` 48.7,
+  `gdm3` 48.0, `im-config -n fcitx5` 5.1.12 + `gnome-shell-extension-kimpanel`):
+  - `WAYLAND_DISPLAY=wayland-0` was exported before `graphical-session.target`;
+    before enabling `badi-focus@ahuray.github.io`, `badi doctor` exited 1
+    reporting `gnome_extension_inactive`; after `gnome-extensions enable
+    badi-focus@ahuray.github.io` and `kimpanel@kde.org`, `badi doctor` exited
+    0 (`Field observer: ready · GNOME Shell`).
+  - **Live ADR 0017 unnamed `ibus`:** Chromium `156.0.8078.79` (`--temp-profile
+    --password-store=basic --force-renderer-accessibility=complete`, Wayland
+    `text-input-v3` → Mutter IBus relay → `frontend: "ibus"`, `program() == ""`)
+    showed `awaiting_observed_field` → `inspect` (`frontend: "ibus"`)
+    resolving `chromium`, Kimpanel suggestion (`display: "panel"`, `rendered:
+    false`), clean `Tab` word commit + remainder carry, and `<input
+    type="password">` (`field_denied`) / password-labelled text
+    (`sensitive_field`) with zero password text traced.
+  - **No manual fallback:** with `org.gnome.texteditor` explicitly allowed,
+    native Wayland `gnome-text-editor` `48.3` (`GTK_IM_MODULE=` unset, unnamed
+    `ibus`) made zero broker requests (`provider_calls` unchanged) and inserted
+    literal `\t`. Under `GTK_IM_MODULE=fcitx` (`program: gnome-text-editor`),
+    manual `Tab` request and `Tab` accept landed cleanly.
+  - **Window, lock & Writer:** `org.gnome.Terminal` denied `unsupported_app` /
+    `app_mismatch`; `org.gnome.ScreenSaver.Lock` (`GetActive == true`)
+    unexported `badi-focus@ahuray.github.io` and denied `desktop_locked` with
+    zero lock-screen text traced; QMP unlock resumed Chromium suggestions.
+    Writer `25.2.3.2` UNO infobar **Replace** (`<Alt>F7` is bound by GNOME's
+    `begin-move`) + single `Ctrl+Z` undo (`adress ` → `address` → `adress`)
+    and GTK3 Writer (`SAL_USE_VCLPLUGIN=gtk3`, `GTK_IM_MODULE=` unset) unnamed
+    `ibus` observed continuation + `Tab` passed.
+  - **Graphical purge:** `apt purge -y badi` + reboot left zero packaged files
+    (and removed `badi-focus@ahuray.github.io`) while keeping
+    `~/.config/badi` and `~/.local/share/badi`.
 
 The container checks below use the pinned images that CI uses, on
 2026-10-23, without a graphical session or user service manager.
@@ -200,14 +268,12 @@ leaves the same tags on both:
 | `spelling-error-in-binary` (13, in `badi-broker`) | Info on Ubuntu, experimental on Debian | Words of the English lexicon compiled into the broker, not messages |
 | `executable-in-usr-lib` | Experimental | The private programs live in `/usr/lib/badi`, as in the Arch package |
 
-Not verified: any GNOME, KDE Plasma or other graphical session; Fcitx
-started by im-config or Plasma with the environment.d directory at a real
-login; the user units under a real user manager, including whether GNOME
-and Plasma export `WAYLAND_DISPLAY` before `graphical-session.target`
-starts them (the broker's `ConditionEnvironment`); the observer, preview and
-Tab acceptance outside Hyprland; an install on Sway; an X11 session, where
-the broker's unit does not start. [Step 5](<../../future plans.md>) covers
-them.
+Not verified in a live graphical session: Ubuntu 24.04; KWin and Mutter grey
+preview calibration (panel fallback is used on both Plasma 6 and GNOME); an
+install on Sway; an X11 session (where the broker's unit does not start); and
+GNOME 50's reported loss of forwarded keys
+([fcitx5#1692](https://github.com/fcitx/fcitx5/issues/1692), affecting Ubuntu
+26.04).
 
 Reproduce a CI run locally, from the checkout:
 

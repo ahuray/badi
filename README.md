@@ -191,19 +191,21 @@ everything. Each user then downloads the writing assets, enables the
 services, chooses Fcitx with `im-config -n fcitx5` and logs in again
 ([steps](packaging/debian/README.md)). Under GNOME or KDE Plasma, Fcitx's
 manual fields, Obsidian, Neovim, Bash and the Writer spelling extension
-work; Chromium-based apps, Zen, VS Code and Writer's grey preview need the
-field observer, which runs in Hyprland and, through a KWin script, KDE
-Plasma 6 sessions
-([ADR 0015](docs/decisions/0015-kwin-script-reports-plasma-focus.md)). On
-Plasma it shows suggestions in Fcitx's panel, with no grey preview, and has
-not been tried in a live session yet; a Debian 13 Plasma 6.3 session ran the
-package's manual fields, the Bash adapter and lock-screen denial
-([tested with](packaging/debian/README.md#tested-with)). On GNOME the
-observer follows focus through Badi's own Shell extension, which you enable
-([extension](adapters/gnome-shell/README.md)), and supplies the verified app id
-for unnamed `ibus` observed fields so suggestions show in Fcitx's panel
-([ADR 0017](docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)). No live
-GNOME session has run Badi yet.
+work; Chromium-based apps, Zen, VS Code and GTK3 Writer (`libreoffice-gtk3`
+with `SAL_USE_VCLPLUGIN=gtk3` and `GTK_IM_MODULE=` unset) need the
+field observer, which runs in Hyprland, KDE Plasma 6
+([ADR 0015](docs/decisions/0015-kwin-script-reports-plasma-focus.md)) and
+GNOME ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md),
+[ADR 0017](docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)). On
+both Plasma and GNOME, observed fields show suggestions in Fcitx's panel
+without the grey preview (`gnome-shell-extension-kimpanel` on GNOME), proven
+live in Debian 13.7 Wayland VMs (KDE Plasma 6.3.6 and GNOME 48.7 with
+Chromium 156, GTK3 Writer, Kate/Mousepad/`gnome-text-editor` manual paths,
+Neovim, Bash, Writer UNO, lock-screen denials, graphical purge and
+user-local `environment.d` login;
+[tested with](packaging/debian/README.md#tested-with)). Grey preview
+calibration on KWin and Mutter, and Ubuntu 24.04 graphical sessions, remain
+unverified.
 
 The installers build user-local files, back up everything they replace and
 restart Badi's services and, on Omarchy, Fcitx. The newest three backups of each installer

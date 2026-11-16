@@ -9,7 +9,7 @@ When an item is done, delete it and record what is now true in the
 keeps the history of what shipped. Evidence lives in the runbooks; this file
 links to it. A tested app version is not a claim about Linux in general.
 
-## Where Badi stands (2026-11-15)
+## Where Badi stands (2026-11-16)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
   and any website, Zen and Zen Twilight, Omarchy web apps in Chromium or Brave,
@@ -28,8 +28,10 @@ links to it. A tested app version is not a claim about Linux in general.
   (step 2). German, French, Spanish, Italian, Dutch and Polish spelling are
   opt-in (`badi spelling`). The closest Omarchy alternative, Oma Tab,
   replaces the input method and ships a 4.8 GB model; of the alternatives
-  found on 2026-10-24, only ibus-llm-assist (IBus) reaches a desktop Badi
-  does not run on yet, GNOME.
+  found on 2026-10-24, ibus-llm-assist (IBus) also runs on GNOME, where
+  Badi now covers observed Chromium and GTK3 Writer fields (in Fcitx's panel,
+  [ADR 0017](docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)),
+  `GTK_IM_MODULE=fcitx` manual fields and Writer/editors on GNOME 48 Wayland.
 - **Interaction:** type-through returns a typed-through remainder in about
   50 ms with no model call, also when a browser re-admits the field
   ([ADR 0004](docs/decisions/0004-type-through-carries-text-not-authority.md));
@@ -92,8 +94,12 @@ links to it. A tested app version is not a claim about Linux in general.
 - **Distribution:** an Arch package candidate (step 4) and a
   [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
   builds, lints and installs in containers (2026-10-23); neither is
-  published, no GNOME session has run Badi, and Plasma has run only the
-  package's manual path (step 5). Without an
+  published, and live Debian 13.7 graphical VM trials (2026-11-16) have now
+  passed in both KDE Plasma 6.3.6 and GNOME 48.7 Wayland sessions (observed
+  Chromium and GTK3 Writer in Fcitx's panel, ADR 0017 unnamed `ibus` and
+  no-manual-fallback, GTK/Qt manual fields, Writer UNO, Neovim, Bash,
+  lock-screen denials, graphical purge and `environment.d` user-local
+  install; [tested with](packaging/debian/README.md#tested-with)). Without an
   installed writing model, the desktop installer lists the models that fit
   the device and lets the user pick one.
 - **Code health:** a full review before the 0.2.0 fresh start (2026-10-24)
@@ -434,54 +440,6 @@ publish need the user's go-ahead first; the rest can start at once.
    install, update and removal on a fresh Omarchy leave nothing behind, the
    panel's model-terms row has been tried live, and publication then waits
    only for the naming review.
-5. **Run Badi in real GNOME and KDE Plasma sessions.** The
-   [Debian and Ubuntu package](packaging/debian/README.md) and the
-   user-local installer pass in Debian 13 and Ubuntu 24.04 containers, and
-   the package now has a first graphical-session run (Plasma, below).
-   Still open:
-   - field observer backends outside Hyprland, so Chromium-based apps, Zen,
-     VS Code and Writer's grey preview suggest there:
-     - KDE Plasma 6 has one: a KWin script of the observer's own reports
-       the focused window's process and app id
-       ([ADR 0015](docs/decisions/0015-kwin-script-reports-plasma-focus.md)),
-       proved against a headless KWin 6.3.6 only
-       ([observer runbook](adapters/accessibility/README.md#tested-with)).
-       Still open: in the Plasma VM, an observed field in Chromium
-       suggests in Fcitx's panel and Tab lands with zero wrong-field edits,
-       a locked session and another window deny, and Kate's manual path is
-       unchanged; then the grey preview, which needs KWin's client geometry
-       and output scale mapped onto the caret calibration;
-     - GNOME has one: Badi's own Shell extension
-       ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md)),
-       proved against headless GNOME Shell 46 and 48, and unnamed `ibus`
-       contexts now take the focused window's verified app id from the GNOME
-       observer for observed fields only
-       ([ADR 0017](docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)).
-       Still open: a GNOME 48 VM must show an observed Chromium field
-       suggesting in Fcitx's panel with zero wrong-field edits, a locked
-       session and another window denying, and no manual fallback on unnamed
-       `ibus` contexts;
-     - AT-SPI's own process id is a debugging aid, and its application name
-       is not the app id;
-   - in a VM with GNOME 48 (Debian 13) and Plasma: `im-config -n fcitx5`
-     or Plasma's Virtual Keyboard starting Fcitx with the environment.d
-     addon directory, the user units, a manual Tab request in a GTK and a Qt
-     app, the editors and Writer, and package install, update and purge.
-     The Plasma half ran on 2026-11-03 (Debian 13.7 VM, Plasma 6.3.6,
-     package from `170c91a`): Virtual Keyboard Fcitx, user units, manual
-     request, ghost, numbered list and pick in Kate, the Bash adapter in
-     Konsole, lock-screen denial, and package install and reinstall all
-     passed with zero wrong-field edits
-     ([tested with](packaging/debian/README.md#tested-with)). Still open:
-     the whole GNOME session, a GTK app's manual request, Writer in a
-     graphical session, and graphical-session purge. On GNOME, Fcitx
-     stands in for IBus (Mutter speaks only text-input-v3) and needs the
-     Kimpanel extension for its panel; Plasma launches Fcitx through
-     input-method-v1. A reported GNOME 50.0–50.3 loss of forwarded keys
-     ([fcitx5#1692](https://github.com/fcitx/fcitx5/issues/1692),
-     unverified) would affect Ubuntu 26.04.
-   *Done when* those pass with zero wrong-field edits and the runbook's
-   tested-with matrix records them.
 
 ## Later, by area
 
@@ -505,6 +463,13 @@ publish need the user's go-ahead first; the rest can start at once.
       a zero glyph box, so its overlay keeps the caret-size fallback.
 - [ ] Browser event cost on large pages (`daemon.py` focus handling and
       `field.py` serialization).
+- [ ] Grey preview calibration on KDE Plasma 6 (KWin) and GNOME (Mutter): map
+      KWin's client geometry and output scale
+      ([ADR 0015](docs/decisions/0015-kwin-script-reports-plasma-focus.md) §7)
+      and Mutter's frame and monitor scale
+      ([ADR 0016](docs/decisions/0016-gnome-shell-extension-reports-focus.md) §7)
+      onto the caret calibration and verify live (observed fields currently use
+      Fcitx's panel on both).
 - [ ] Revise a selection in rich editors (contenteditable with several
       blocks) in Chromium-based apps: the observer refuses them now
       (`unsupported_selection`), since their blocks serialize differently for
@@ -657,7 +622,10 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Terminals other than Ghostty and foot (kitty, Alacritty) on the typed-line
       path ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)),
       each after a live trial of its app id and `commitString`.
-- [ ] Later: a standard tray (other desktops are step 5) and personal snippets.
+- [ ] Later: a standard tray, personal snippets, Ubuntu 24.04 and Sway
+      graphical-session checks, and checking GNOME 50's reported loss of
+      forwarded keys ([fcitx5#1692](https://github.com/fcitx/fcitx5/issues/1692),
+      affecting Ubuntu 26.04).
       Emoji stays with Fcitx: QuickPhrase and the Emoji module, not a Badi
       colon shortcode.
 

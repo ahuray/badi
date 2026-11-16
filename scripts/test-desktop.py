@@ -1099,6 +1099,7 @@ class DesktopTests(unittest.TestCase):
         cases = ((0, 'ubtussb 1 false 42 1234 "org.badi.Test" "wayland" false\n', '', 'ready'),
                  (0, 'ubtussb 2 false 42 1234 "x" "wayland" false\n', '', 'other_version'),
                  (1, '', 'Call failed: Unknown object \'/io/github/ahuray/badi/Focus\'.', 'absent'),
+                 (1, '', 'Call failed: Object does not exist at path “/io/github/ahuray/badi/Focus”', 'absent'),
                  (1, '', 'Failed to connect to bus: No medium found', None))
         for code, stdout, stderr, expected in cases:
             with self.subTest(stderr=stderr), patch.object(
