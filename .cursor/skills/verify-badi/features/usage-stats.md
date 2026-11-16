@@ -4,14 +4,14 @@ Usage statistics count suggestions shown, acceptances that landed, and words tho
 
 ## Sub-features
 
-- `stats-show` reads today's counts, the last seven days, and the leading apps and sites.
-- `stats-after-accept` counts a suggestion when it is shown, and counts the acceptance and the words it saved when that acceptance lands.
+- `stats-show` reads today's counts, the last seven days, the retention window (90 days), and the leading apps and sites.
+- `stats-after-accept` counts a suggestion when it is shown. Each landed commit counts one acceptance, including one per word when a suggestion is taken word by word, and counts the words that commit saved.
 - `stats-forget` deletes every count.
 - `stats-paused` adds nothing while Badi is paused or the app may not suggest.
 
 ## How to get to it (user POV)
 
-- Run `badi stats`. It prints today, the last seven days, each day, and the leading apps and sites.
+- Run `badi stats`. It prints today, the last seven days, a totals row for the 90-day retention window, each of those seven days, and the leading apps and sites.
 - Run `badi stats --json` for the same counts.
 - Run `badi stats forget` to delete them. Counting starts again afterwards.
 - The Omarchy popout's History shows the week's words. Forget usage statistics is under All settings, and Omarchy asks to confirm.

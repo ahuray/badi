@@ -17,10 +17,11 @@ The **b** mark on the Omarchy bar opens Badi's settings and shows whether sugges
 
 ## How to get to it (user POV)
 
-- Left-click the **b** mark. The popout shows the model pill, a mode such as `Suggesting` or `Paused`, and the pause switch.
+- The first time the popout opens, it asks which languages you write in, then where Badi should suggest: every website or only sites you add, and a switch for each supported app it finds. A fresh install allows only Omawrite and Xournal++. Done saves that choice. Closing the popout before Done drops it.
+- Left-click the **b** mark. After those choices, the popout shows the model pill, a mode such as `Suggesting` or `Paused`, and the pause switch.
 - Right-click the mark. Suggestions pause and the mark dims. Right-click again resumes.
-- With the popout focused, j and k move, h and l change a row, and `/` searches.
-- Compact rows are Languages, Suggestion length and context, plus All settings (`a`). The Snoozed row appears only while a snooze is running. History shows the week's bars and word counts while the popout is open. All settings opens the Writing model row, the "most this week" line, and Forget usage statistics. `badi model` lists the same models; `badi model use` switches one.
+- With the popout focused, j and k, or the arrow keys, move. h and l change a row, and `/` searches.
+- Compact rows are Languages, Suggestion length and context, plus All settings (`a`). Until context is chosen, that row asks "Finish words from what you see?" The Snoozed row appears only while a snooze is running. History shows the week's bars and word counts while the popout is open. All settings opens the Writing model row, the "most this week" line, Forget usage statistics, and Websites. In Websites, type an origin: Enter allows it, Shift+Enter blocks it, and x removes a rule. Text in that field stays while the open popout polls. `badi model` lists the same models; `badi model use` switches one.
 
 ## Driving it with verify-badi
 
