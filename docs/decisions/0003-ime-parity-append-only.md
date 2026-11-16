@@ -61,21 +61,23 @@ equivalences for rich editors and one post-commit rule for Zen:
   the caret's own block, which Fcitx's text must end with from a line start;
 - since 2026-11-15 (user decision), in Zen (`zen` and `zen-twilight` only)
   immediately after Badi itself dispatches an append-only `commitString`, Gecko
-  keeps Fcitx's surrounding text at the pre-commit snapshot until the next
-  keystroke while the observer already reads the committed text; in that same
-  input context, field identity and authority epoch, the addon corroborates the
-  field if and only if the observer's plain-text `before` equals exact
-  `fcitx_before + committed_suffix` (accumulating back-to-back word commits
-  while Fcitx's snapshot stays unchanged), `caret` and `total_chars` advance by
-  that suffix's scalar count, and `after` still agrees, using that corroborated
-  `before` and caret as the field context and withholding spelling replacement
-  until Fcitx's surrounding text catches up. Badi's consumed acceptance and
-  alternative-selection keys on a shown remainder keep the pending suffix;
-  focus loss, a different field, an authority or connection reset, a changed
-  Fcitx snapshot, any key reaching the app, Escape, explicit invoke, selection
-  revision, or even a one-character difference (including a dropped commit that
-  leaves the field at `fcitx_before`) clears the pending suffix and fails
-  closed.
+  keeps Fcitx's surrounding text at the pre-commit snapshot or one commit
+  behind while the observer already reads the committed text; in that same
+  input context, field identity and monotonic observer epoch, the addon
+  corroborates the field if and only if the observer's plain-text `before`
+  equals exact `fcitx_before + committed_suffix` (accumulating ordered
+  back-to-back word-commit steps and rebasing forward when Fcitx catches up to
+  an intermediate step prefix with empty `after` and collapsed caret at end),
+  `caret` and `total_chars` advance by that suffix's scalar count, and `after`
+  still agrees, using that corroborated `before` and caret as the field context
+  and withholding spelling replacement until Fcitx's surrounding text catches
+  up completely. Badi's consumed acceptance and alternative-selection keys on a
+  shown remainder keep the pending steps; catching up completely, focus loss, a
+  different field or regressed epoch, an authority or connection reset, any
+  other Fcitx snapshot change, any key reaching the app, Escape, explicit
+  invoke, selection revision, or even a one-character difference (including a
+  dropped commit that leaves the field at `fcitx_before`) clears the pending
+  steps and fails closed.
 
 ## Consequences
 

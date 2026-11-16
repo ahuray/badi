@@ -9,11 +9,11 @@ When an item is done, delete it and record what is now true in the
 keeps the history of what shipped. Evidence lives in the runbooks; this file
 links to it. A tested app version is not a claim about Linux in general.
 
-## Where Badi stands (2026-11-12)
+## Where Badi stands (2026-11-15)
 
 - **Coverage** is ahead of every Linux alternative found: Chromium-based apps
-  and any website, Zen and Zen Twilight, Omarchy web apps in Chromium or Brave, Telegram, Discord,
-  LibreOffice Writer
+  and any website, Zen and Zen Twilight, Omarchy web apps in Chromium or Brave,
+  Telegram, Discord, Grok Bot, Claude desktop, LibreOffice Writer
   (spelling as you type, Alt+F7), Obsidian, Bash, Neovim (including exact
   spelling corrections; live under LazyVim in foot and Ghostty) and, by an
   opt-in rule, the typed line in Ghostty and
@@ -21,7 +21,9 @@ links to it. A tested app version is not a claim about Linux in general.
   ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)); the
   [app sweep](adapters/fcitx5/README.md#tested-with) of 2026-10-20 passed in
   Brave Origin, a web app, Zen, Writer, Obsidian, Neovim, Ghostty and VS
-  Code. Omawrite and other observed Qt fields suggest again despite a
+  Code, and live trials on 2026-11-15 verified Zen Twilight's inline grey
+  preview and post-Tab agreement, Grok Bot's composer, and window-word
+  completions in Gmail and Claude desktop. Omawrite and other observed Qt fields suggest again despite a
   fcitx5-qt 5.1.16 bug, but cannot replace a typo until it is fixed
   (step 2). German, French, Spanish, Italian, Dutch and Polish spelling are
   opt-in (`badi spelling`). The closest Omarchy alternative, Oma Tab,
@@ -87,19 +89,19 @@ links to it. A tested app version is not a claim about Linux in general.
   words learned in that app ([ADR 0010](docs/decisions/0010-context-finishes-words.md));
   prompt-text window context stays Lab-only. Style learning stores sealed
   samples behind `badi style on`, and no prompt reads them yet.
-- **Distribution:** an Arch package candidate (step 5) and a
+- **Distribution:** an Arch package candidate (step 4) and a
   [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
   builds, lints and installs in containers (2026-10-23); neither is
   published, no GNOME session has run Badi, and Plasma has run only the
-  package's manual path (step 6). Without an
+  package's manual path (step 5). Without an
   installed writing model, the desktop installer lists the models that fit
   the device and lets the user pick one.
 - **Code health:** a full review before the 0.2.0 fresh start (2026-10-24)
   fixed every correctness finding it confirmed, with regression tests, and
   removed dormant paths and failed experiments; a second review on
   2026-11-12 fixed the exactness, revocation and test-harness findings it
-  confirmed and collapsed the provider trait to one canonical outcome call.
-  What neither could check live is under [Engineering upkeep](#engineering-upkeep).
+  confirmed and collapsed the provider trait to one canonical outcome call,
+  and the remaining live checks from 2026-10-24 passed on 2026-11-15.
 
 Standing user decisions:
 - IME-parity for Chromium-based apps, Zen and LibreOffice Writer
@@ -156,9 +158,10 @@ Standing user decisions:
   [bench](evaluation/llm-bench/README.md));
 - in Zen (`zen` and `zen-twilight` only), immediately after Badi itself
   commits an append-only word or suggestion while Gecko keeps Fcitx's
-  surrounding text at the pre-commit snapshot until the next keystroke, the
-  addon corroborates exact `fcitx_before + committed_suffix` (including
-  back-to-back word commits) in that same field and epoch and fails closed on
+  surrounding text at the pre-commit snapshot or one commit behind, the
+  addon corroborates exact `fcitx_before + committed_suffix` (accumulating
+  back-to-back word commits and rebasing when Fcitx catches up to an
+  intermediate step) in that same field and epoch and fails closed on
   any difference (2026-11-15,
   [ADR 0003](docs/decisions/0003-ime-parity-append-only.md));
 - native Linux apps may opt into style learning per app
@@ -390,8 +393,9 @@ publish need the user's go-ahead first; the rest can start at once.
    typo), while the system 5.1.16 plugin left the typo untouched. The
    same A/B passed in Telegram's Saved Messages composer (2026-11-02):
    with the patched plugin the correction preview showed and Tab landed
-   `address`; with the system plugin no correction was offered. Still
-   open: only the PR landing in a shipped fcitx5-qt.
+   `address`; with the system plugin no correction was offered. On
+   2026-11-15 PR #92 still awaited maintainer review and a follow-up check-in
+   was posted. Still open: only the PR landing in a shipped fcitx5-qt.
    *Done when* a shipped fixed fcitx5-qt
    restores the replacement in Omawrite (two native undos), and a Qt
    Widgets app (Telegram) has been checked.
@@ -406,30 +410,7 @@ publish need the user's go-ahead first; the rest can start at once.
    *Done when* the multi-monitor rows show zero wrong-field or stale edits
    and the [session helper](adapters/session/README.md) runbook records
    them.
-4. **Check context in a real mail client and the Claude desktop app.** Opt-in
-   context shipped ([ADR 0010](docs/decisions/0010-context-finishes-words.md)).
-   A disposable mail-style page in Chromium 154 passed every check live on
-   2026-10-20 ([observer runbook](adapters/accessibility/README.md#window-words-context-on)),
-   and window words reach Zen and Chromium-based apps since `f180653` (VS
-   Code live). The user's own web mail (Gmail in Brave Origin) was checked
-   on 2026-11-03 in a disposable draft (deleted after, never sent): the
-   ghost showed, Tab landed `reply`, Ctrl+Shift+Space listed
-   `1.interest 2.question 3.comment 4.answer`, digit 2 picked and Tab
-   landed `question`, and `window_chars` (259–894) rode its
-   `context.changed` with up to 18 window words harvested; no window word
-   has finished there yet (the stems tried matched none). The Claude
-   desktop app's composer was checked
-   after its relaunch (2026-11-02): it first exposed an observer bug —
-   its composer sits 26 ancestors below its document, past the origin
-   climb's bound, so every snapshot was denied — fixed in `20366a6`.
-   After that, live: snapshots succeed, the ghost, the numbered list
-   and a digit pick all landed, `window_chars=142` rides its
-   `context.changed`, and window words flow (`window_words=4`); no
-   window word has finished there yet (the stems typed matched none
-   of the four).
-   *Done when* both show a window or learned word finished
-   (`window_chars` on `context.changed` is now recorded for both).
-5. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
+4. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
    CI builds and namcap-checks the package on every change, and the licence
    review is done: [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) ships
    with it and every model download shows its terms first. In a fresh Arch
@@ -440,7 +421,7 @@ publish need the user's go-ahead first; the rest can start at once.
    install, update and removal on a fresh Omarchy leave nothing behind, the
    panel's model-terms row has been tried live, and publication then waits
    only for the naming review.
-6. **Run Badi in real GNOME and KDE Plasma sessions.** The
+5. **Run Badi in real GNOME and KDE Plasma sessions.** The
    [Debian and Ubuntu package](packaging/debian/README.md) and the
    user-local installer pass in Debian 13 and Ubuntu 24.04 containers, and
    the package now has a first graphical-session run (Plasma, below).
@@ -503,10 +484,6 @@ publish need the user's go-ahead first; the rest can start at once.
       Investigate explicit requests in horizontally scrolled, very narrow
       inputs: the installed Chromium trial at 100 CSS px did not establish
       coverage ([tested boundary](adapters/fcitx5/README.md#tested-with)).
-- [ ] Zen showed its suggestion in Fcitx's candidate box, not the overlay,
-      in a fresh profile started with `GNOME_ACCESSIBILITY=1` (2026-10-13,
-      [trial](adapters/fcitx5/README.md#tested-with)). Find which geometry
-      gate declined; the user's own Zen profile is untested since.
 - [ ] Confirm live that the grey preview uses the host font in Telegram.
       A disposable Chromium textarea (2026-10-12, build `7957f16`) set to
       JetBrainsMono NF at 20px reports `family-name` JetBrainsMono NF and
@@ -565,11 +542,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       floating-terminal installer, menu entries for settings and removal,
       default keys for the session helper's `pause-toggle` and
       `open-settings` portal shortcuts, and theme colours for the preview.
-- [ ] [omarchy#12139](https://github.com/omacom/omarchy/pull/12139)
-      (`--enable-wayland-ime` by default) closed unmerged on 2026-10-15:
-      Chromium has used text-input-v3 without the flag since 137. Check live
-      whether Badi's per-app flags can go for current Chromium and Brave;
-      Electron apps on an older Chromium may still need them.
 - [ ] Leftovers of the 2026-10-20 Omarchy 4.0.6 audit: the panel's Fcitx
       theme takes its font size only from Ghostty's config (`fcitx-theme.py`),
       each bar instance registers the `badi-writing` IPC target (several
@@ -661,15 +633,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Browser rich editors: a caret inside a list or quote, EditContext editors
       (VS Code's default, CodeMirror on recent Chromium), multi-paragraph fields
       in Zen (Gecko sends only the caret's paragraph) and Firefox.
-- [ ] Live Zen desktop trial of the post-Tab agreement rule
-      ([ADR 0003](docs/decisions/0003-ime-parity-append-only.md),
-      [addon](adapters/fcitx5/README.md#observed-fields)). The Fcitx addon and
-      its private D-Bus suite now corroborate exact `fcitx_before +
-      committed_suffix` in `zen` and `zen-twilight` while Gecko keeps Fcitx's
-      surrounding text at the pre-commit snapshot; install and verify single
-      and back-to-back Tab acceptances live in Zen with `badi debug on --text`.
-- [ ] Grok Bot composer trial in the signed-in app after a relaunch with
-      `grok-bot-flags.conf`.
 - [ ] More native toolkits through measured integrations.
 - [ ] Extend shell support using
       [Zsh ZLE buffers and `POSTDISPLAY`](https://zsh.sourceforge.io/Doc/Release/Zsh-Line-Editor.html)
@@ -681,18 +644,12 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Terminals other than Ghostty and foot (kitty, Alacritty) on the typed-line
       path ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)),
       each after a live trial of its app id and `commitString`.
-- [ ] Later: a standard tray (other desktops are step 6) and personal snippets.
+- [ ] Later: a standard tray (other desktops are step 5) and personal snippets.
       Emoji stays with Fcitx: QuickPhrase and the Emoji module, not a Badi
       colon shortcode.
 
 ### Engineering upkeep
 
-- [ ] Live-check what the 2026-10-24 trial could not reach, each with
-      `badi debug on --text` and disposable text: a broker `error` frame
-      ending only its request, one language chip on the panel's settings page
-      (the trial machine still shows the first-run language question), rows
-      and the site draft surviving a poll, and Writer superseding a slow
-      spelling request.
 - [ ] Broker structure left by the review: move the remaining inline
       tests into `<module>/tests.rs` when those files are next touched.
 

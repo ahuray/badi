@@ -47,6 +47,8 @@ BADI_OMARCHY_REQUIRE_HOST_CHECKS=1 \
   BADI_QMLLINT=/usr/lib/qt6/bin/qmllint \
   BADI_OMARCHY_ROOT="$omarchy_root" \
   bash "$tests_dir/check-source.sh"
-bash "$tests_dir/run-client-lifecycle.sh"
+BADI_OMARCHY_REQUIRE_HOST_CHECKS=1 \
+  BADI_OMARCHY_ROOT="$omarchy_root" \
+  bash "$tests_dir/run-client-lifecycle.sh"
 
 echo "Badi Omarchy pinned host and lifecycle checks passed"

@@ -239,17 +239,23 @@ bool zenPostCommitApp(std::string_view appId) {
 
 void ZenPendingCommit::clear() {
     active_ = false;
+    appId_.clear();
     field_ = nullptr;
     preCommit_ = ContextWindow{};
-    committed_.clear();
+    steps_.clear();
     committedScalars_ = 0;
     expectedBefore_.clear();
 }
 
 bool ZenPendingCommit::sameField(const Json &focus) const {
-    return active_ && sameObservedFieldIdentity(field_, focus) &&
-           focus.value("purpose", Json()) == "plain_text" &&
-           focus.value("selection_count", Json()) == 0;
+    if (!active_ || !sameObservedFieldIdentity(field_, focus) ||
+        focus.value("purpose", Json()) != "plain_text" ||
+        focus.value("selection_count", Json()) != 0) {
+        return false;
+    }
+    const auto baseEpoch = field_["binding"].value("epoch", Json());
+    const auto focusEpoch = focus["binding"].value("epoch", Json());
+    return baseEpoch.is_number_integer() && focusEpoch.is_number_integer() && focusEpoch >= baseEpoch;
 }
 
 bool ZenPendingCommit::matchesFcitx(const ContextWindow &rawFcitx) const {
@@ -265,6 +271,7 @@ bool ZenPendingCommit::matchesFcitx(const ContextWindow &rawFcitx) const {
 void ZenPendingCommit::record(std::string_view appId, const Json &observedField,
                               const ContextWindow &rawFcitx, std::string_view committed) {
     if (!zenPostCommitApp(appId) || committed.empty() || !rawFcitx.identityKnown ||
+        rawFcitx.anchor != rawFcitx.head ||
         !matchesObservedFocus(observedField, observedField, true)) {
         clear();
         return;
@@ -276,18 +283,19 @@ void ZenPendingCommit::record(std::string_view appId, const Json &observedField,
     }
     Json baselineField;
     ContextWindow baselineContext;
-    std::string nextCommitted;
+    std::vector<Step> nextSteps;
     std::size_t nextScalars = 0;
-    if (active_ && matchesFcitx(rawFcitx) && sameField(observedField)) {
+    if (active_ && appId_ == appId && matchesFcitx(rawFcitx) && sameField(observedField)) {
         auto corroborated = rawFcitx;
         if (!applyToCorroborated(appId, corroborated, observedField)) {
             clear();
             return;
         }
         baselineField = field_;
+        baselineField["binding"]["epoch"] = observedField["binding"]["epoch"];
         baselineContext = preCommit_;
-        nextCommitted = committed_;
-        nextCommitted.append(committed);
+        nextSteps = steps_;
+        nextSteps.push_back(Step{std::string(committed), addedScalars->size()});
         nextScalars = committedScalars_ + addedScalars->size();
     } else {
         if (!observerAgrees(observedField, rawFcitx)) {
@@ -296,7 +304,7 @@ void ZenPendingCommit::record(std::string_view appId, const Json &observedField,
         }
         baselineField = observedField;
         baselineContext = rawFcitx;
-        nextCommitted = std::string(committed);
+        nextSteps.push_back(Step{std::string(committed), addedScalars->size()});
         nextScalars = addedScalars->size();
     }
     if (nextScalars > kMaxBeforeScalars) {
@@ -308,24 +316,107 @@ void ZenPendingCommit::record(std::string_view appId, const Json &observedField,
         clear();
         return;
     }
-    const std::string combined = baselineContext.before + nextCommitted;
+    std::string combined = baselineContext.before;
+    for (const auto &step : nextSteps) combined.append(step.text);
     const auto windowed = scalarWindow(combined, preScalars->size() + nextScalars, kMaxBeforeScalars, 0);
     if (!windowed || windowed->before.empty()) {
         clear();
         return;
     }
     active_ = true;
+    appId_ = std::string(appId);
     field_ = std::move(baselineField);
     preCommit_ = std::move(baselineContext);
-    committed_ = std::move(nextCommitted);
+    steps_ = std::move(nextSteps);
     committedScalars_ = nextScalars;
     expectedBefore_ = std::string(windowed->before);
 }
 
+ZenFcitxUpdate ZenPendingCommit::updateFcitx(std::string_view appId,
+                                             const ContextWindow &rawFcitx) {
+    if (!active_ || !zenPostCommitApp(appId) || appId_ != appId) {
+        clear();
+        return ZenFcitxUpdate::Cleared;
+    }
+    if (matchesFcitx(rawFcitx)) return ZenFcitxUpdate::Unchanged;
+    if (!rawFcitx.identityKnown || rawFcitx.anchor != rawFcitx.head ||
+        preCommit_.anchor != preCommit_.head ||
+        !rawFcitx.after.empty() || !rawFcitx.paragraphEnd.empty() ||
+        !preCommit_.after.empty() || !preCommit_.paragraphEnd.empty() ||
+        rawFcitx.language != preCommit_.language ||
+        rawFcitx.multiline != preCommit_.multiline) {
+        clear();
+        return ZenFcitxUpdate::Cleared;
+    }
+    const auto preScalars = decodeUtf8(preCommit_.before);
+    const auto currentScalars = decodeUtf8(rawFcitx.before);
+    if (!preScalars || !currentScalars || preCommit_.head < preScalars->size()) {
+        clear();
+        return ZenFcitxUpdate::Cleared;
+    }
+    std::string prefixText;
+    std::size_t prefixScalars = 0;
+    for (std::size_t k = 1; k <= steps_.size(); ++k) {
+        prefixText.append(steps_[k - 1].text);
+        prefixScalars += steps_[k - 1].scalars;
+        if (preCommit_.head > std::numeric_limits<std::size_t>::max() - prefixScalars) break;
+        const auto expectedHead = preCommit_.head + prefixScalars;
+        if (rawFcitx.head != expectedHead) continue;
+        if (expectedHead <= kMaxBeforeScalars
+                ? currentScalars->size() != expectedHead
+                : currentScalars->size() != kMaxBeforeScalars) {
+            break;
+        }
+        const std::string combined = preCommit_.before + prefixText;
+        const auto windowed = scalarWindow(combined, preScalars->size() + prefixScalars,
+                                           kMaxBeforeScalars, 0);
+        if (!windowed || rawFcitx.before != windowed->before) break;
+        if (k == steps_.size()) {
+            clear();
+            return ZenFcitxUpdate::Cleared;
+        }
+        if (!field_.is_object() || !field_.value("caret", Json()).is_number_integer() ||
+            !field_.value("total_chars", Json()).is_number_integer()) {
+            clear();
+            return ZenFcitxUpdate::Cleared;
+        }
+        const auto baseCaret = field_["caret"].get<std::int64_t>();
+        const auto baseTotal = field_["total_chars"].get<std::int64_t>();
+        const auto delta = static_cast<std::int64_t>(prefixScalars);
+        if (baseCaret < 0 || baseTotal < baseCaret ||
+            baseCaret > std::numeric_limits<std::int64_t>::max() - delta ||
+            baseTotal > std::numeric_limits<std::int64_t>::max() - delta) {
+            clear();
+            return ZenFcitxUpdate::Cleared;
+        }
+        steps_.erase(steps_.begin(), steps_.begin() + static_cast<std::ptrdiff_t>(k));
+        committedScalars_ -= prefixScalars;
+        field_["caret"] = baseCaret + delta;
+        field_["total_chars"] = baseTotal + delta;
+        if (field_.contains("before")) field_["before"] = rawFcitx.before;
+        preCommit_.before = rawFcitx.before;
+        preCommit_.anchor = rawFcitx.anchor;
+        preCommit_.head = rawFcitx.head;
+        std::string remainingCombined = preCommit_.before;
+        for (const auto &step : steps_) remainingCombined.append(step.text);
+        const auto nextWindow = scalarWindow(remainingCombined,
+                                             currentScalars->size() + committedScalars_,
+                                             kMaxBeforeScalars, 0);
+        if (!nextWindow || nextWindow->before.empty()) {
+            clear();
+            return ZenFcitxUpdate::Cleared;
+        }
+        expectedBefore_ = std::string(nextWindow->before);
+        return ZenFcitxUpdate::Rebased;
+    }
+    clear();
+    return ZenFcitxUpdate::Cleared;
+}
+
 bool ZenPendingCommit::applyToCorroborated(std::string_view appId, ContextWindow &context,
                                            const Json &observed) const {
-    if (!active_ || !zenPostCommitApp(appId) || !matchesFcitx(context) || !sameField(observed) ||
-        !observed.value("scope", Json()).is_null() ||
+    if (!active_ || !zenPostCommitApp(appId) || appId_ != appId || !matchesFcitx(context) ||
+        !sameField(observed) || !observed.value("scope", Json()).is_null() ||
         !observed.value("caret", Json()).is_number_integer() ||
         !observed.value("total_chars", Json()).is_number_integer()) {
         return false;
@@ -352,7 +443,10 @@ bool ZenPendingCommit::applyToCorroborated(std::string_view appId, ContextWindow
 
 bool ZenPendingCommit::corroborate(std::string_view appId, ContextWindow &context,
                                    const Json &observed) {
-    if (applyToCorroborated(appId, context, observed)) return true;
+    if (applyToCorroborated(appId, context, observed)) {
+        field_["binding"]["epoch"] = observed["binding"]["epoch"];
+        return true;
+    }
     clear();
     return false;
 }

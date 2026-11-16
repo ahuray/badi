@@ -159,6 +159,7 @@ private:
     bool safeToObserve(const Binding &binding) const;
     std::optional<ContextWindow> currentContext(const Binding &binding) const;
     std::optional<ContextWindow> rawContext(const Binding &binding, const Json &observed) const;
+    std::optional<ContextWindow> zenSurroundingWindow(const Binding &binding) const;
     std::string_view unavailableContextReason(const Binding &binding) const;
     void invalidateChangedContext(Binding &binding);
     void showNotice(Binding &binding, std::string_view message);

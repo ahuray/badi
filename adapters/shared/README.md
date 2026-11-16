@@ -20,7 +20,13 @@ request starts the local model when it is not already running. Opening or
 focusing an editor does not, and neither does the session helper. Repeated
 requests retain the same session with newer coordinates so the broker can
 avoid already-shown synonyms. A changed selection, dismissal or reconnect
-ends that session; no revision text is replayed or carried through typing.
+ends that session; no revision text is replayed or carried through typing. A
+recoverable broker `error` frame rejects only the request id it names, leaving
+sibling requests, sessions and the socket open (verified live against
+`local_model` on `aad8a21`, 2026-11-15: a protocol-rejected `revise()` left
+concurrent `checkPolicy()` and a subsequent `local_model` `suggest()` intact on
+the same `BrokerClient` socket, and sibling-session `stale`/`no_suggestion`
+errors left an in-flight `local_model` request unaffected).
 
 | Integration | Keys | Tested with |
 | --- | --- | --- |

@@ -268,7 +268,11 @@ bash ui/omarchy-plugin/tests/run-client-lifecycle.sh      # needs qs
   toggles, terminal exclusion, `style forget` confirmation), per-app language
   overrides (European choices, disabled-language warnings, terminal Persian
   preservation and reset), poll survival (`KeyModel.sameRows` and cursor
-  tracking) and revision-conflict refusal and recovery. Controller tests cover same-size
+  tracking) and revision-conflict refusal and recovery. When the Omarchy shell
+  components are present, it also mounts the real `SettingsView.qml` inside
+  `PanelKeyCatcher` offscreen to verify `siteField` focus, popout reopen
+  without Escape, `showAll` collapse (`Component.onDestruction`) and the
+  stale-delegate guard. Controller tests cover same-size
   corruption, concurrent private staging, symlink refusal, failed repairs,
   SIGTERM cleanup and metadata-only polling.
 - **`tests/check-host.sh`** is CI's strict lane. It runs against an exact
@@ -282,6 +286,7 @@ scaling or multi-monitor behavior, which need a real Omarchy session.
 
 | Omarchy | Quickshell, Qt declarative | Lane | Result |
 | --- | --- | --- | --- |
+| 4.5.0-3 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | live installed panel and controller, `aad8a21`, 2026-11-15 | Completed first-run language and places questions (`places_chosen`), walked compact `Languages` chips (`Italiano` spelling-only dictionary warning, `Português` writing-only), expanded `All settings` (97 rows) with `https://example.test` in `site_add` (row 91) surviving both the 3.0 s automatic poll and explicit `badi-writing refresh` before saving via compare-and-swap, verified `/App languages` (`Omawrite` `de` and disabled-language `pt` warning) and `/Style learning` (`Omawrite` on/off, terminals and shells omitted); closing the popout while `siteField` held focus exposed `siteInputFocused` staying true on reopen, fixed in `SettingsView.qml` and covered in `run-client-lifecycle.sh` |
 | 4.5.0-3 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | installed panel and controller, `bab1b04` dirty, 2026-11-12 | `wtype` search found Revisions, Enter verified the existing pinned model, and the full success footer was inspected at 2× scale. Installed doctor passed. Missing/corrupt/download-failure cases remain fixture evidence. Receipts and captures: `output/revision-setup/installed/` |
 | 4.5.0-3 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | isolated controller/lifecycle and offscreen `SettingsView.qml`, 2026-11-12 | Revisions missing, present, damaged and failed-repair states are legible; install/retry, no-fit denial and held-action cleanup pass with synthetic files and commands. No model downloaded or installed desktop changed. Renders, commands and hashes: `output/revision-setup/` |
 | 4.5.0-3 | 0.3.2.r7.g2b4501a-1, 6.12.0-2 | installed source at `bab1b04` plus uncommitted changes, 2026-11-12 | authorised desktop/Neovim/panel installation and `badi doctor` passed; the live popout's keyboard search shows the current/recommended model, wrapped memory-fit reason and real seven-day usage. No model or policy changed. Cropped capture, source hashes, healthy doctor report and rollback paths: `output/native-trials/2026-11-12-cotypist-install/` |
@@ -294,8 +299,4 @@ scaling or multi-monitor behavior, which need a real Omarchy session.
 | 4.0.5-1 | 0.3.2.r7.g2b4501a-1, 6.12.0-1 | live, Tokyo Night | accent mark, `badi settings`, j/k and arrows one row each, `/ghost` search, Escape twice |
 | not recorded | not recorded | live, Tokyo Night | `l`/`h` on On battery wrote `battery_mode`, a restart showed `◌ LOADING` with `Loading the model… 3s` |
 
-Not yet live: the unknown-settings message, the language chip that changes
-only its own language, rows that survive a poll with the cursor on its
-row, and the places question's Done against a broker that knows
-`places_chosen` (the lifecycle lane checks its document, and a real-broker
-test keeps it across a restart).
+Not yet live: the unknown-settings message (covered in `run-client-lifecycle.sh`).

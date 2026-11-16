@@ -143,9 +143,40 @@ bool BadiAddon::safeToObserve(const Binding &binding) const {
 std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding) const {
     auto context = rawContext(binding, binding.observation.focus);
     if (context && binding.observation.zenCommit.active()) {
-        (void)binding.observation.zenCommit.applyToCorroborated(
-            binding.state.appId(), *context, binding.observation.focus);
+        if (!binding.observation.zenCommit.applyToCorroborated(
+                binding.state.appId(), *context, binding.observation.focus)) {
+            return std::nullopt;
+        }
     }
+    return context;
+}
+
+std::optional<ContextWindow> BadiAddon::zenSurroundingWindow(const Binding &binding) const {
+    if (!binding.inputContext) return std::nullopt;
+    auto &input = *binding.inputContext;
+    if (!input.hasFocus() || !binding.state.focused() ||
+        !zenPostCommitApp(binding.state.appId()) ||
+        !binding.surrounding.freshness.fresh() ||
+        !allowsNativeContext(observedFieldCapabilities(input.capabilityFlags(), binding.surrounding.echo)) ||
+        instance_->isComposing(&input) || hasForeignImeUi(observePanel(binding))) {
+        return std::nullopt;
+    }
+    const auto &surrounding = input.surroundingText();
+    const auto *inputMethod = instance_->inputMethodEntry(&input);
+    if (!surrounding.isValid() || !inputMethod || !validLanguageTag(inputMethod->languageCode())) {
+        return std::nullopt;
+    }
+    const std::string language = !binding.broker.languageOverride.empty()
+        ? binding.broker.languageOverride
+        : (binding.broker.policyAllowed ? inputMethod->languageCode()
+                                        : binding.observation.zenCommit.language());
+    auto context = captureContextWindow(
+        surrounding.text(), surrounding.cursor(), surrounding.anchor(),
+        !!(input.capabilityFlags() & ::fcitx::CapabilityFlag::Multiline),
+        language);
+    if (!context) return std::nullopt;
+    context->identityKnown = true;
+    normalizeObservedParagraphEnd(*context);
     return context;
 }
 

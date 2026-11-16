@@ -11,6 +11,10 @@ schema="$artifact_dir/../../broker/schemas/badi.settings.v2.schema.json"
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/badi-client-lifecycle.XXXXXX")
 harness_dir="$test_root/harness"
 panel_dir="$test_root/panel"
+view_dir="$test_root/view"
+view_imports="$test_root/view-imports"
+omarchy_root=${BADI_OMARCHY_ROOT:-/usr/share/omarchy}
+require_host_checks=${BADI_OMARCHY_REQUIRE_HOST_CHECKS:-0}
 settings_extra="$test_root/settings-extra.json"
 overview_extra="$test_root/overview-extra.json"
 state_file="$test_root/state.json"
@@ -63,9 +67,12 @@ cp -- "$artifact_dir/BadiClient.qml" "$artifact_dir/DesktopPanel.qml" \
 
 runtime_env=(
   env
-  # A desktop GTK theme plugin may require a live display even with offscreen Qt.
+  # A desktop GTK theme plugin or live Hyprland socket must not leak into offscreen Qt.
   -u QT_QPA_PLATFORMTHEME
   -u QT_STYLE_OVERRIDE
+  -u HYPRLAND_INSTANCE_SIGNATURE
+  -u WAYLAND_DISPLAY
+  "QML2_IMPORT_PATH=$view_imports"
   "HOME=$test_root"
   "XDG_CONFIG_HOME=$test_root/config"
   "XDG_DATA_HOME=$test_root/data"
@@ -979,4 +986,92 @@ badi_stop_private_process_group "$shell_pid" "$test_root"
 shell_pid=""
 wait_for_pid_exit "$held_revision_pid"
 [[ $(jq -r '.desktop.revision.file_state' "$overview_extra") == missing ]] || fail "closed setup reported installed"
+rm -f -- "$test_root/hold-action" "$overview_extra"
+
+if [[ -d $omarchy_root/shell ]]; then
+  mkdir -p "$view_dir" "$view_imports"
+  ln -s -- "$omarchy_root/shell" "$view_imports/qs"
+  ln -s -- "$omarchy_root/shell/Commons" "$view_dir/Commons"
+  ln -s -- "$omarchy_root/shell/Ui" "$view_dir/Ui"
+  cp -- "$tests_dir/view-harness/shell.qml" "$view_dir/shell.qml"
+  cp -- "$artifact_dir/BadiClient.qml" "$artifact_dir/BadiMark.qml" "$artifact_dir/DesktopPanel.qml" \
+    "$artifact_dir/SettingsView.qml" "$artifact_dir/KeyModel.js" "$artifact_dir/SettingsModel.js" \
+    "$artifact_dir/StatsModel.js" "$view_dir/"
+  printf '%s\n' '{"languages_chosen": true, "places_chosen": true}' >"$settings_extra"
+  : >"$call_log"
+  ipc_dir=$view_dir
+  ipc_target=badi-view-lifecycle
+  start_shell
+  wait_for_call_count 1
+  wait_until_idle
+  ipc openPopout >/dev/null
+  wait_for_call_count 2
+  wait_until_idle
+
+  # Focusing siteField blocks PanelKeyCatcher; closing and reopening without
+  # pressing Escape first must clear siteInputFocused and restore panel keys.
+  focused=$(ipc focusSiteField "https://example.test")
+  jq -e '
+    .showAll and .cursorKey == "site_add" and .siteDraft == "https://example.test"
+    and .siteInputPresent and .siteInputActiveFocus and .siteInputFocused
+    and .editing and .keyCatcherBlocked
+  ' <<<"$focused" >/dev/null || fail "siteField focus did not arm key-catcher block: $focused"
+
+  reopened=$(ipc reopenWithoutEscape)
+  wait_for_call_count 3
+  wait_until_idle
+  reopened=$(ipc state)
+  jq -e '
+    (.showAll | not) and .siteDraft == ""
+    and (.siteInputPresent | not) and (.siteInputFocused | not)
+    and (.editing | not) and (.keyCatcherBlocked | not) and .keyCatcherActiveFocus
+  ' <<<"$reopened" >/dev/null || fail "popout reopen after focused siteField left keys blocked: $reopened"
+  stepped=$(ipc stepDown)
+  jq -e '.cursor == 0 and .cursorKey == "languages" and (.keyCatcherBlocked | not)' <<<"$stepped" >/dev/null ||
+    fail "keyboard navigation did not recover on reopen: $stepped"
+
+  # Collapsing All settings directly without reset() destroys siteField and must
+  # clear siteInputFocused via Component.onDestruction.
+  focused=$(ipc focusSiteField "https://second.example")
+  jq -e '.siteInputFocused and .keyCatcherBlocked' <<<"$focused" >/dev/null ||
+    fail "second siteField focus did not arm key-catcher block: $focused"
+  ipc collapseWithoutReset >/dev/null
+  collapsed=""
+  for _ in $(seq 1 40); do
+    collapsed=$(ipc state)
+    jq -e '(.siteInputPresent | not) and (.siteInputFocused | not) and (.keyCatcherBlocked | not)' \
+      <<<"$collapsed" >/dev/null && break
+    sleep 0.05
+  done
+  jq -e '
+    (.showAll | not) and (.siteInputPresent | not) and (.siteInputFocused | not)
+    and (.editing | not) and (.keyCatcherBlocked | not)
+  ' <<<"$collapsed" >/dev/null || fail "siteField destruction without reset left keys blocked: $collapsed"
+
+  # An older destroyed siteField must not clobber a newer siteInput reference.
+  focused=$(ipc focusSiteField "")
+  jq -e '.siteInputPresent and .siteInputFocused' <<<"$focused" >/dev/null ||
+    fail "third siteField focus failed: $focused"
+  ipc supersedeAndCollapse >/dev/null
+  sleep 0.1
+  superseded=$(ipc state)
+  jq -e '.siteInputIsReplacement and .siteInputFocused and .keyCatcherBlocked' <<<"$superseded" >/dev/null ||
+    fail "old destroyed siteField clobbered replacement siteInput: $superseded"
+  reopened=$(ipc reopenWithoutEscape)
+  wait_for_call_count 4
+  wait_until_idle
+  jq -e '(.siteInputPresent | not) and (.siteInputFocused | not) and (.keyCatcherBlocked | not)' \
+    <<<"$(ipc state)" >/dev/null || fail "reset did not clear replacement siteInput"
+
+  if grep -En 'TypeError|ReferenceError|Cannot assign|failed to load' "$shell_log"; then
+    cat "$shell_log" >&2
+    echo "client lifecycle check: QML runtime error in SettingsView" >&2
+    exit 1
+  fi
+  badi_stop_private_process_group "$shell_pid" "$test_root"
+  shell_pid=""
+elif ((require_host_checks)); then
+  fail "pinned Omarchy shell is required for SettingsView lifecycle check"
+fi
+
 echo "Badi Omarchy client mutation lifecycle check passed"

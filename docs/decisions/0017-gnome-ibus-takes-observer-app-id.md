@@ -85,7 +85,7 @@ explicit user decision ([future plans](../../future%20plans.md)).
   Omawrite can bind and suggest in Fcitx's panel on GNOME once the user enables
   `badi-focus@ahuray.github.io` and allows the site or app; a live GNOME 48 VM
   session trial remains tracked in [future plans](../../future%20plans.md)
-  (step 6).
+  (step 5).
 - Manual-only GTK/Qt apps launched over Wayland `text-input-v3` on GNOME still
   hand Fcitx an empty `ibus` program name and have no observer rule, so they
   fail closed rather than opening an unidentified manual contract; apps using

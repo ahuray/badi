@@ -96,6 +96,8 @@ grep -F 'parsed.schema !== "badi.overview.v2"' "$artifact_dir/BadiClient.qml" >/
 grep -F 'SettingsModel.isSettingsDocument(' "$artifact_dir/BadiClient.qml" >/dev/null
 grep -F 'SettingsModel.status(' "$artifact_dir/DesktopPanel.qml" >/dev/null
 grep -F 'readonly property var mode: controller.mode' "$artifact_dir/SettingsView.qml" >/dev/null
+grep -F 'siteInputFocused = false' "$artifact_dir/SettingsView.qml" >/dev/null
+grep -F 'Component.onDestruction: if (view.siteInput === siteField)' "$artifact_dir/SettingsView.qml" >/dev/null
 grep -F 'value.kind === "linux_app"' "$artifact_dir/SettingsModel.js" >/dev/null
 grep -F 'value.adapter === "fcitx"' "$artifact_dir/SettingsModel.js" >/dev/null
 # A neovim rule must not make the panel reject the whole settings document.

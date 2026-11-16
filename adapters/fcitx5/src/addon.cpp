@@ -189,24 +189,30 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     readBackRevision(*binding);
     const auto digest = surroundingDigest(inputContext.surroundingText());
     const bool digestChanged = digest != binding->surrounding.digest;
+    bool zenRebased = false;
+    if (binding->observation.zenCommit.active()) {
+        const auto raw = zenSurroundingWindow(*binding);
+        zenRebased = raw &&
+            binding->observation.zenCommit.updateFcitx(binding->state.appId(), *raw) == ZenFcitxUpdate::Rebased;
+        if (!raw) binding->observation.zenCommit.clear();
+    }
     if (digestChanged) {
         binding->surrounding.digest = digest;
-        binding->observation.zenCommit.clear();
-        // The observer may skip an intermediate edit during a fast
-        // delete/retype. This ends only the local until-edit decline;
-        // the broker still enforces timed quiet and fresh edit authority.
-        binding->suggestion.dismissedContext.reset();
-        const auto now = monotonicUs();
-        binding->observation.schedule.input(now);
-        if (now != 0) {
-            const auto pause = binding->typeThrough.active ? InspectionSchedule::kTypeThroughPauseUs
-                                                           : InspectionSchedule::kTypingPauseUs;
-            binding->suggestion.showAfterUs = now + pause;
+        if (!zenRebased) {
+            binding->observation.zenCommit.clear();
+            // The observer may skip an intermediate edit during a fast
+            // delete/retype. This ends only the local until-edit decline;
+            // the broker still enforces timed quiet and fresh edit authority.
+            binding->suggestion.dismissedContext.reset();
+            const auto now = monotonicUs();
+            binding->observation.schedule.input(now);
+            if (now != 0) {
+                const auto pause = binding->typeThrough.active ? InspectionSchedule::kTypeThroughPauseUs
+                                                               : InspectionSchedule::kTypingPauseUs;
+                binding->suggestion.showAfterUs = now + pause;
+            }
+            binding->suggestion.clearHeld();
         }
-        binding->suggestion.clearHeld();
-    } else if (binding->observation.zenCommit.active()) {
-        const auto raw = rawContext(*binding, binding->observation.focus);
-        if (!raw || !binding->observation.zenCommit.matchesFcitx(*raw)) binding->observation.zenCommit.clear();
     }
     // Unavailable apps never hold editing context. Toolkit publication must
     // not erase their explicit, timed unavailable notice. Classify the app
@@ -218,7 +224,7 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     if (revisionSurvives(*binding)) return;
     const bool unchangedObserved = binding->observed() &&
         matchesCapturedContext(binding->state.lastContext(), currentContext(*binding));
-    if (digestChanged) clearNotice(*binding);
+    if (digestChanged && !zenRebased) clearNotice(*binding);
     invalidateChangedContext(*binding);
     // A field we already corroborate can start the model on this key.
     // Re-read that field directly; a second inspection would only repeat
@@ -228,10 +234,12 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     // ends its observation anyway; the typing pause is the fallback. A
     // suggestion still waits out the typing pause.
     if (!unchangedObserved) {
+        if (zenRebased && !binding->observed()) return;
         const bool awaitReport = binding->observed() && binding->observation.schedule.fieldReportsEdits();
         // Foreign preedit must go through inspection, which yields and
         // resumes when the composition clears. A direct read would skip that.
-        if (binding->observed() && binding->broker.opened && binding->broker.policyAllowed &&
+        if (binding->observed() && !binding->observation.zenCommit.active() &&
+            binding->broker.opened && binding->broker.policyAllowed &&
             safeToObserve(*binding) && !awaitReport) {
             debug_.record("observer", binding->state.appId(), "same_field_snapshot");
             requestObservedContext(*binding, true);

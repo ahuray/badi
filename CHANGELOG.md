@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Cleared `siteInputFocused` and `siteInput` in `SettingsView.qml` on popout `reset()` and `siteField` destruction so closing the Omarchy panel while "Add a site" holds focus no longer leaves `PanelKeyCatcher` blocked on reopen, and rebased `ZenPendingCommit` across intermediate back-to-back `SurroundingText` step updates in `zen` and `zen-twilight` while still clearing immediately on complete catch-up or any discrepancy.
+
 - Split the Fcitx addon's per-input-context `Binding` into resettable parts with owner-scoped panel state and separate notice, suggestion and revision timers, and unified authority-change, policy-denial, invalidation and broker-disconnect teardown into one `retire` path that also clears pending type-through carry and stale revision state.
 
 - Extracted a shared stdio and idle-exit module (`adapters/shared/bridge-stdio.mjs`) for the Bash and Neovim bridges, unifying bounded NDJSON stdin reading, line/JSON stdout framing, clean EOF teardown and ten-minute idle exit held while commands run or Neovim holds terminal focus.
