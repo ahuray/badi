@@ -91,8 +91,9 @@ links to it. A tested app version is not a claim about Linux in general.
   words learned in that app ([ADR 0010](docs/decisions/0010-context-finishes-words.md));
   prompt-text window context stays Lab-only. Style learning stores sealed
   samples behind `badi style on`, and no prompt reads them yet.
-- **Distribution:** an Arch package candidate (step 4) and a
-  [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
+- **Distribution:** an Arch package candidate (lifecycle verified on a fresh
+  Omarchy 4.5 graphical VM, 2026-11-17; [tested with](packaging/aur/README.md#tested-with))
+  and a [Debian 13 and Ubuntu 24.04 package](packaging/debian/README.md), which CI
   builds, lints and installs in containers (2026-10-23); neither is
   published, and live Debian 13.7 graphical VM trials (2026-11-16) have now
   passed in both KDE Plasma 6.3.6 and GNOME 48.7 Wayland sessions (observed
@@ -429,17 +430,6 @@ publish need the user's go-ahead first; the rest can start at once.
    *Done when* the physical multi-monitor rows show zero wrong-field or stale
    edits and the [session helper](adapters/session/README.md) runbook records
    them.
-4. **Verify the [AUR candidate](packaging/aur/README.md) on a fresh Omarchy.**
-   CI builds and namcap-checks the package on every change, and the licence
-   review is done: [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) ships
-   with it and every model download shows its terms first. In a fresh Arch
-   container (2026-11-03), install, upgrade from an earlier build and removal
-   left the filesystem identical
-   ([tested with](packaging/aur/README.md#tested-with)); that is container
-   evidence, not a fresh Omarchy. *Done when*
-   install, update and removal on a fresh Omarchy leave nothing behind, the
-   panel's model-terms row has been tried live, and publication then waits
-   only for the naming review.
 
 ## Later, by area
 

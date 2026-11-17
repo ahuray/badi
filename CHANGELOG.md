@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Verified the `badi-git` AUR package candidate lifecycle on a fresh Omarchy 4.5.0 graphical session (sequential `makepkg` builds with all offline tests passing and zero `namcap` errors, `pacman -Qkk` integrity, root `badi doctor` bytecode-clean, live Quickshell panel `model-terms` row activation and Gemma receipt recording, live Omawrite inline grey preview and Tab commit, and complete `pacman -R` removal leaving zero filesystem leftovers under `/etc`, `/usr` and `/opt`).
+
 - Fixed `scripts/install-desktop.py` failing on fresh or post-purge boots when `systemctl --user reset-failed` encounters an unloaded unit (ignoring non-failed units via `ActiveState != failed`), and fixed `badi doctor`'s `gnome_extension_state()` missing GDBus's `"Object does not exist at path"` error string on GNOME 48 so `gnome_extension_inactive` is reported when `badi-focus@ahuray.github.io` is disabled.
 
 - Cleared `siteInputFocused` and `siteInput` in `SettingsView.qml` on popout `reset()` and `siteField` destruction so closing the Omarchy panel while "Add a site" holds focus no longer leaves `PanelKeyCatcher` blocked on reopen, and rebased `ZenPendingCommit` across intermediate back-to-back `SurroundingText` step updates in `zen` and `zen-twilight` while still clearing immediately on complete catch-up or any discrepancy.
