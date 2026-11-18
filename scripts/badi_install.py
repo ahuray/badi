@@ -407,6 +407,55 @@ def write_receipt(home, installer, source, files, now=None):
     return path
 
 
+def _refreshed_partial_components(receipt, files, restored_set, complete):
+    lib_items = {
+        key: item for key, item in files.items()
+        if isinstance(key, str) and key.startswith(".local/lib/") and isinstance(item, dict)
+    }
+    if not lib_items:
+        return []
+    lib_commits = {item.get("commit") for item in lib_items.values()}
+    sole_lib_commit = next(iter(lib_commits)) if len(lib_commits) == 1 else None
+    libs_aligned = (
+        isinstance(sole_lib_commit, str)
+        and bool(re.fullmatch(r"[0-9a-f]{40}", sole_lib_commit))
+        and not any(bool(item.get("dirty")) for item in lib_items.values())
+    )
+    if complete and libs_aligned:
+        return []
+    source = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
+    source_commit = source.get("commit")
+    source_clean = (
+        isinstance(source_commit, str)
+        and bool(re.fullmatch(r"[0-9a-f]{40}", source_commit))
+        and not bool(source.get("dirty"))
+    )
+
+    def matches_source(key):
+        item = lib_items.get(key)
+        return (
+            source_clean
+            and isinstance(item, dict)
+            and item.get("commit") == source_commit
+            and not bool(item.get("dirty"))
+        )
+
+    partial = {
+        key for key in receipt.get("partial_components", ())
+        if isinstance(key, str) and key in lib_items and not (key in restored_set and matches_source(key))
+    }
+    restored_libs = {key for key in restored_set if key in lib_items}
+    if restored_libs and not libs_aligned and (
+        not complete
+        or (
+            len({(item.get("commit"), bool(item.get("dirty"))) for item in lib_items.values()}) > 1
+            and any(item.get("commit") == source_commit for item in lib_items.values())
+        )
+    ):
+        partial.update(key for key in restored_libs if not matches_source(key))
+    return sorted(partial)
+
+
 def refresh_restored_receipts(home, keys, previous_receipts=None, *, complete=False):
     """Point receipt entries at bytes a restore just put back.
 
@@ -453,30 +502,18 @@ def refresh_restored_receipts(home, keys, previous_receipts=None, *, complete=Fa
             changed = True
         if changed:
             commits = {item.get("commit") for item in files.values() if isinstance(item, dict)}
-            single_clean_commit = False
             if len(commits) == 1:
                 sole = next(iter(commits))
                 if sole == "unknown":
                     receipt["source"] = dict(UNKNOWN)
                 elif isinstance(sole, str) and re.fullmatch(r"[0-9a-f]{40}", sole):
-                    dirty = any(bool(item.get("dirty")) for item in files.values() if isinstance(item, dict))
-                    receipt["source"] = {"commit": sole, "dirty": dirty}
-                    single_clean_commit = (
-                        bool(files)
-                        and all(isinstance(item, dict) and item.get("dirty") is False for item in files.values())
-                    )
-            aligned_rollback = (
-                complete
-                and single_clean_commit
-                and any(key.startswith(".local/lib/") for key in restored_set)
+                    receipt["source"] = {"commit": sole,
+                                         "dirty": any(bool(item.get("dirty")) for item in files.values()
+                                                      if isinstance(item, dict))}
+            remaining_partial = (
+                _refreshed_partial_components(receipt, files, restored_set, complete)
+                if installer == "desktop" else []
             )
-            if installer == "desktop" and not aligned_rollback:
-                remaining_partial = sorted(
-                    key for key in receipt.get("partial_components", ())
-                    if isinstance(key, str) and key in files and key.startswith(".local/lib/") and key not in restored_set
-                )
-            else:
-                remaining_partial = []
             if remaining_partial:
                 receipt["partial_components"] = remaining_partial
             else:
