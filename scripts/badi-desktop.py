@@ -2434,6 +2434,97 @@ def rules_command(kind, arguments):
         raise unknown_command()
 
 
+# How long `badi service start|restart` waits for the broker to answer. A
+# normal start binds the socket within seconds, but the broker first waits
+# for free memory with no upper bound (2, 4, 8, 16, then every 30 s), so a
+# start still loading or waiting at this deadline is reported as starting,
+# not as failed.
+SERVICE_READY_SECONDS = 60
+
+
+def waiting_for_memory():
+    """Whether this service invocation is still waiting for free memory, from
+    its fixed startup lines; no other journal text is read or returned."""
+    try:
+        identifier = badi_install.unit_value(SERVICE, "InvocationID")
+        if not re.fullmatch(r"[a-f0-9]{32}", identifier):
+            return False
+        journal = subprocess.run([
+            "journalctl", "--user", f"_SYSTEMD_INVOCATION_ID={identifier}",
+            "--no-pager", "--output=cat", "--lines=40",
+        ], capture_output=True, text=True, timeout=3)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return False
+    waiting = False
+    for line in journal.stdout.splitlines():
+        if line.startswith("badi-broker: waiting for available memory"):
+            waiting = True
+        elif line.startswith(("badi-broker: memory available after waiting", "error_code=")):
+            waiting = False
+    return waiting
+
+
+def start_failure(state):
+    """The reason a start can never become ready, or None while it may: a
+    unit systemd skipped, or one stopped for good (failed, or a
+    configuration exit 78 that left the service-failed marker)."""
+    if state.get("condition_unmet"):
+        return ("Badi's service did not start: systemd skipped it because the user manager has no "
+                "WAYLAND_DISPLAY. Start it from the Wayland session, or run badi doctor.")
+    if state.get("stopped"):
+        return "Badi was stopped (badi service stop) before the model answered. Run: badi service start"
+    # Type=simple has settled once systemctl start returns, and an
+    # auto-restart gap stays `activating`, so `inactive` means it exited.
+    if state.get("active") == "inactive":
+        return failure_reason("The model service stopped while it started.")
+    if state.get("active") == "failed" or private_marker(SERVICE_FAILED):
+        return failure_reason("The model service failed to start.")
+    return None
+
+
+def failure_reason(fallback):
+    problem = startup_problem()
+    if problem:
+        return f"{problem['message']} {problem['action']}"
+    return f"{fallback} Run: badi logs, then badi doctor."
+
+
+def service_restarts():
+    """systemd's restart counter for the broker, or None when unreadable."""
+    try:
+        return int(badi_install.unit_value(SERVICE, "NRestarts"))
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def wait_for_start(wait):
+    """Wait until the broker answers. Returns (True, None) when it does,
+    (False, None) when it is still loading or waiting for memory at the
+    deadline, and (False, reason) when it cannot start.
+
+    Restart=on-failure keeps a crashing broker `activating` or `running`, never
+    `failed`, so a crash loop shows only in systemd's restart counter: one
+    restart during the wait is a recoverable gap, a second is a loop."""
+    first = service_restarts()
+    deadline = time.monotonic() + wait
+    with passive_control():
+        while True:
+            try:
+                control(["status"])
+                return True, None
+            except (RuntimeError, OSError, subprocess.SubprocessError):
+                pass
+            failure = start_failure(service_state())
+            if failure:
+                return False, failure
+            restarts = service_restarts()
+            if first is not None and restarts is not None and restarts - first >= 2:
+                return False, failure_reason("The model service keeps exiting while it starts.")
+            if time.monotonic() >= deadline:
+                return False, None
+            time.sleep(0.5)
+
+
 def service_command(arguments):
     if arguments == ["status"]:
         state = service_state()
@@ -2449,10 +2540,20 @@ def service_command(arguments):
             if service_state()["active"] == "failed":
                 subprocess.run(["systemctl", "--user", "reset-failed", SERVICE], check=True, timeout=4)
         subprocess.run(["systemctl", "--user", arguments[0], SERVICE], check=True, timeout=15)
+        ready = None
         if arguments[0] in ("start", "restart") and live_session_runtime():
-            wait_for_broker()
+            ready, failure = wait_for_start(SERVICE_READY_SECONDS)
+            if failure:
+                refresh_bar()
+                raise RuntimeError(failure)
         refresh_bar()
-        print(json.dumps(service_state()))
+        state = service_state()
+        if ready is not None:
+            state["ready"] = ready
+            if not ready:
+                # Still loading or waiting for memory: it answers on its own.
+                state["waiting_for_memory"] = waiting_for_memory()
+        print(json.dumps(state))
     else:
         raise unknown_command()
 

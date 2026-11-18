@@ -201,7 +201,7 @@ Item {
     if (client.brokerReachable || controlsBusy || typeof serviceState.active !== "string") return
     if (serviceState.active === "inactive" && serviceState.stopped !== true && serviceState.condition_unmet !== true) {
       startWhenOpened = false
-      runAction(["service", "start"], "Starting the model", "")
+      runAction(["service", "start"], "Starting the model", "", serviceActionTimeout)
     }
   }
 
@@ -549,6 +549,21 @@ Item {
     var pending = confirmation
     confirmation = null
     if (accepted && pending) pending.then()
+  }
+
+  // `badi service start|restart` waits up to SERVICE_READY_SECONDS (60 s)
+  // for the broker, after systemctl's own stop and start, then reports a
+  // start that is still loading as `ready: false` instead of failing.
+  readonly property int serviceActionTimeout: 90000
+
+  // The success message for an action, or what a still-starting service says.
+  function actionResult(text) {
+    try {
+      var state = JSON.parse(text)
+      if (state && state.ready === false)
+        return state.waiting_for_memory === true ? "Starting · waiting for free memory" : "Still starting · it answers soon"
+    } catch (error) {}
+    return actionSuccess
   }
 
   function runAction(arguments, verb, success, timeout) {
@@ -943,11 +958,12 @@ Item {
     var running = serviceState.active === "active"
     list.push({key: "restart", section: "System", kind: "action", label: "Restart the model",
       detail: "Reloads the local model; settings stay", enabled: !controlsBusy,
-      activate: function() { root.runAction(["service", "restart"], "Restarting the model", "Model restarted") }})
+      activate: function() { root.runAction(["service", "restart"], "Restarting the model", "Model restarted",
+        root.serviceActionTimeout) }})
     list.push({key: "service", section: "System", kind: "action", label: running ? "Stop the model" : "Start the model",
       detail: running ? "Frees its memory until you start it" : "Loads the local model now", enabled: !controlsBusy,
       activate: function() { root.runAction(["service", running ? "stop" : "start"], running ? "Stopping the model" : "Starting the model",
-        running ? "Model stopped" : "Model started") }})
+        running ? "Model stopped" : "Model started", running ? 20000 : root.serviceActionTimeout) }})
 
     return list
   }
@@ -961,14 +977,14 @@ Item {
   Timer { id: actionKill; interval: 1000; onTriggered: if (action.running) action.signal(9) }
   Process {
     id: action
-    stdout: StdioCollector {}
+    stdout: StdioCollector { id: actionOutput }
     stderr: StdioCollector { id: actionError }
     onStarted: { root.actionTimedOut = false; actionTimeout.restart() }
     onExited: (exitCode) => {
       actionTimeout.stop(); actionKill.stop()
       root.actionFailed = exitCode !== 0 || root.actionTimedOut
       root.actionMessage = root.actionTimedOut ? "Timed out · run badi doctor"
-        : exitCode === 0 ? root.actionSuccess : actionError.text.trim() || "Could not complete the action"
+        : exitCode === 0 ? root.actionResult(actionOutput.text) : actionError.text.trim() || "Could not complete the action"
       client.refresh(true); root.probeService()
     }
   }

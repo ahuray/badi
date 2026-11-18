@@ -1295,6 +1295,92 @@ class DesktopTests(unittest.TestCase):
             ['systemctl', '--user', 'start', desktop.SERVICE],
         ])
 
+    def test_service_start_reports_ready_still_starting_and_failed_starts(self):
+        for name, outcome, error, expected in (
+                ('ready', (True, None), None, {'ready': True}),
+                ('still starting', (False, None), None, {'ready': False, 'waiting_for_memory': True}),
+                ('cannot start', (False, 'systemd skipped it'), 'systemd skipped it', None)):
+            with self.subTest(name), \
+                 patch.object(desktop, 'service_state', return_value={'active': 'activating'}), \
+                 patch.object(desktop, 'live_session_runtime', return_value=True), \
+                 patch.object(desktop, 'wait_for_start', return_value=outcome) as wait, \
+                 patch.object(desktop, 'waiting_for_memory', return_value=True), \
+                 patch.object(desktop.subprocess, 'run'), \
+                 contextlib.redirect_stdout(io.StringIO()) as out:
+                self.bar.reset_mock()
+                if error:
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        desktop.main(['service', 'restart'])
+                    self.assertEqual(out.getvalue(), '')
+                else:
+                    desktop.main(['service', 'start'])
+                    state = json.loads(out.getvalue())
+                    self.assertEqual({key: state[key] for key in expected}, expected)
+                wait.assert_called_once_with(desktop.SERVICE_READY_SECONDS)
+                self.bar.assert_called_once_with()
+
+    def test_waiting_for_a_start_tells_a_gap_from_a_crash_loop(self):
+        problem = {'message': 'The local inference process stopped unexpectedly.', 'action': 'Run badi logs.'}
+
+        def run(state, restarts, answers_at=None, polls=8):
+            clock = iter(range(10_000))
+            calls = {'n': 0}
+
+            def control(_arguments):
+                calls['n'] += 1
+                if answers_at is not None and calls['n'] >= answers_at:
+                    return '{}'
+                raise RuntimeError('offline')
+            counts = iter(restarts)
+            with patch.object(desktop, 'control', side_effect=control), \
+                 patch.object(desktop, 'service_state', side_effect=lambda: state), \
+                 patch.object(desktop, 'service_restarts', side_effect=lambda: next(counts)), \
+                 patch.object(desktop, 'private_marker', return_value=False), \
+                 patch.object(desktop, 'startup_problem', return_value=problem), \
+                 patch.object(desktop.time, 'monotonic', side_effect=lambda: next(clock) * 10), \
+                 patch.object(desktop.time, 'sleep'):
+                return desktop.wait_for_start(polls * 10)
+
+        running = {'active': 'active', 'state': 'running'}
+        # One restart gap, then the broker answers: ready.
+        self.assertEqual(run(running, [0, 0, 1, 1, 1], answers_at=4), (True, None))
+        # A second restart during the same wait: a crash loop, with the reason.
+        ready, reason = run(running, [0, 0, 1, 2])
+        self.assertFalse(ready)
+        self.assertIn('stopped unexpectedly', reason)
+        # Still loading at the deadline, with no restart: starting, not failed.
+        self.assertEqual(run(running, [0] * 50, polls=3), (False, None))
+        # An unreadable counter never invents a loop.
+        self.assertEqual(run(running, [None] * 50, polls=3), (False, None))
+        # A unit stopped for good, or skipped, fails at once.
+        self.assertIn('stopped unexpectedly', run({'active': 'failed'}, [0, 0])[1])
+        self.assertIn('WAYLAND_DISPLAY', run({'active': 'inactive', 'condition_unmet': True}, [0, 0])[1])
+        # Stopped during the wait, or exited without a restart: not starting.
+        self.assertIn('badi service stop', run({'active': 'inactive', 'stopped': True}, [0, 0])[1])
+        self.assertIn('stopped unexpectedly', run({'active': 'inactive'}, [0, 0])[1])
+
+    def test_a_failure_without_a_known_error_names_the_next_step(self):
+        with patch.object(desktop, 'startup_problem', return_value=None), \
+             patch.object(desktop, 'private_marker', return_value=False):
+            self.assertIn('Run: badi logs', desktop.start_failure({'active': 'failed'}))
+            self.assertIsNone(desktop.start_failure({'active': 'activating', 'state': 'auto-restart'}),
+                              'one restart gap is not terminal')
+
+    def test_waiting_for_memory_reads_only_this_invocations_startup_lines(self):
+        journal = SimpleNamespace(returncode=0, stdout=(
+            "badi-broker: waiting for available memory before starting the writing model available_mib=900\n"))
+        with patch.object(desktop.badi_install, 'unit_value', return_value='a' * 32), \
+             patch.object(desktop.subprocess, 'run', return_value=journal) as command:
+            self.assertTrue(desktop.waiting_for_memory())
+            self.assertIn('_SYSTEMD_INVOCATION_ID=' + 'a' * 32, command.call_args.args[0])
+            journal.stdout += "badi-broker: memory available after waiting elapsed_s=40\n"
+            self.assertFalse(desktop.waiting_for_memory())
+            journal.stdout = ("badi-broker: waiting for available memory available_mib=900\n"
+                              "error_code=local_model:runtime_process_exited\n")
+            self.assertFalse(desktop.waiting_for_memory(), "an exit ends the wait")
+        with patch.object(desktop.badi_install, 'unit_value', return_value=''):
+            self.assertFalse(desktop.waiting_for_memory())
+
     def test_debug_watch_is_readable_without_typed_prose(self):
         line = desktop.debug_line({'enabled': True, 'native': {'reason': 'context_received',
             'counts': {'input': 8}}, 'editors': {'obsidian': {'reason': 'suggestion',

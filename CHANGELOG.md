@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Made `badi service start|restart` wait up to 60 s for the broker, fail at once with the reason when systemd skipped the unit (no `WAYLAND_DISPLAY`), the start failed, the service was stopped or exited, or the broker keeps exiting and restarting, and report a start still loading or waiting for memory as `"ready": false` (the panel says "Starting · waiting for free memory") instead of a timeout, gave the Omarchy panel's Start and Restart actions a 90 s budget instead of killing them at 20 s, and kept `badictl` from reporting a reset or broken pipe after a request was written as `error_code=io` (a connection lost during the hello handshake still is, since no command was sent), so `badi` no longer replays a command (such as a compare-and-swap settings write) that may already have committed.
+
 - Scoped install-receipt `partial_components` to desktop installs and `--only` library rollbacks whose `.local/lib/` entries diverge from the receipt source, keeping existing markers across unrelated or mismatched restores until every library shares one commit on a complete rollback or matches `source` (including dirty snapshots) and omitting them on full rollbacks with byte-identical libraries and subset `install-editors.py` runs.
 
 - Mapped absent/refused `badictl` socket opens to `error_code=io` (keeping `unsafe_socket` fail-closed), waited for broker socket readiness in `badi service start|restart`, and scoped desktop component-skew checks to unverified partial installs (`--broker-only` / `--only` restores) and versioned binaries so unchanged static files on a full install do not report false skew.

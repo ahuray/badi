@@ -823,6 +823,28 @@ fn probe_response_requires_a_consistent_result() {
     }
 }
 
+#[test]
+fn only_an_absent_or_refused_socket_is_reported_as_io() {
+    use std::io::{Error, ErrorKind};
+    for (kind, code) in [
+        (ErrorKind::NotFound, "io"),
+        (ErrorKind::ConnectionRefused, "io"),
+        (ErrorKind::ConnectionReset, "frame"),
+        (ErrorKind::BrokenPipe, "frame"),
+        (ErrorKind::UnexpectedEof, "frame"),
+    ] {
+        let error = CliError::from(badi_broker::ipc::FrameError::Io(Error::from(kind)));
+        assert_eq!(error.to_string(), code, "{kind:?}");
+        // Before the command is written, any lost connection may be retried.
+        let handshake = super::handshake_error(badi_broker::ipc::FrameError::Io(Error::from(kind)));
+        assert_eq!(handshake.to_string(), "io", "{kind:?}");
+    }
+    assert_eq!(
+        super::handshake_error(badi_broker::ipc::FrameError::Oversized(9)).to_string(),
+        "frame"
+    );
+}
+
 #[tokio::test]
 async fn connect_distinguishes_absent_socket_io_from_unsafe_socket() {
     let dir = tempfile::tempdir().expect("tempdir");
