@@ -1,9 +1,10 @@
 # Badi
 
 **Local, private next-word suggestions for Linux.** While you type in an app you
-allow, a small model on your own machine suggests the next few words in grey,
-finishes half-typed words and fixes typos. Nothing changes until you press
-`Tab`.
+allow, a small model on your own machine suggests the next few words, finishes
+half-typed words and fixes typos. On Hyprland the suggestion shows as grey text
+at the caret; on KDE Plasma and GNOME it shows as an Fcitx candidate. Nothing
+changes until you press `Tab`.
 
 [![CI](https://github.com/ahuray/badi/actions/workflows/ci.yml/badge.svg)](https://github.com/ahuray/badi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -18,8 +19,9 @@ finishes half-typed words and fixes typos. Nothing changes until you press
 - **Next words as you type:** up to four words of grey text (`badi length short`
   for one or two), in English and German by default, and French, Spanish and
   Portuguese when you turn them on.
-- **Typo fixes:** `teh → the` in English, and in German, French, Spanish,
-  Italian, Dutch and Polish with their Hunspell dictionaries.
+- **Typo fixes:** `teh → the` in English out of the box; German, French, Spanish,
+  Italian, Dutch and Polish after `badi spelling LANG on` and that language's
+  Hunspell package (`badi spelling` names it).
 - **Revise a selection:** select one line and press `Ctrl+Shift+Space` for a
   grammar fix, a refined wording or a synonym.
 - **Private by design:** the model runs on your CPU in a service with no
@@ -56,19 +58,20 @@ on GNOME and KDE Plasma). On Omarchy or Arch Linux:
    ```sh
    python3 scripts/install-desktop.py      # services, Fcitx addon and the `badi` command
    python3 scripts/install-omarchy-ui.py   # Omarchy only: bar mark and settings panel
-   badi doctor                             # check the setup
    ```
 
-4. Allow an app and start typing:
+   On Omarchy, Badi is ready at once. On plain Arch, log out and back in so
+   Fcitx loads the addon; on GNOME, then run `gnome-extensions enable
+   badi-focus@ahuray.github.io`.
+4. Check the setup with `badi doctor`, then allow an app and start typing:
 
    ```sh
    badi app omawrite on                    # or: badi site https://example.com on
    ```
 
 On Omarchy, click the **b** in the bar instead: it walks you through languages,
-apps and websites. On plain Arch, log out and back in once so Fcitx loads the
-addon. The Arch and Debian packages start paused with nothing allowed, so run
-`badi resume` after allowing an app.
+apps and websites. The Arch and Debian packages start paused with nothing
+allowed, so run `badi resume` after allowing an app.
 
 **Other systems and options:**
 - [Debian 13 and Ubuntu 24.04](packaging/debian/README.md): a `.deb` package and
@@ -77,10 +80,10 @@ addon. The Arch and Debian packages start paused with nothing allowed, so run
   yet.
 - Editor integrations: `npm ci`, then `python3 scripts/install-editors.py --vault
   /path/to/vault --bash --neovim --libreoffice`.
-- Chromium-based apps (Chromium, Brave, VS Code, Cursor, Codex, Claude, Discord,
-  Grok Bot) need [renderer accessibility](adapters/accessibility/README.md#installation-and-the-renderer-flag):
-  run `python3 scripts/install-desktop.py --observed-app APP` on Omarchy, then
-  relaunch the app.
+- Chromium-based apps need [renderer accessibility](adapters/accessibility/README.md#installation-and-the-renderer-flag).
+  On Omarchy run `python3 scripts/install-desktop.py --observed-app APP` with
+  `chromium`, `brave-origin`, `code` (VS Code), `cursor`, `chatgpt` (Codex),
+  `com.anthropic.claude`, `discord` or `grok-bot`, then relaunch the app.
 - Every installer backs up what it replaces and can
   [roll back](adapters/fcitx5/README.md#install-and-roll-back).
 
@@ -88,7 +91,7 @@ addon. The Arch and Debian packages start paused with nothing allowed, so run
 
 | Key | What it does |
 | --- | --- |
-| `Tab` | Accept the next word, drawn a little brighter (a typo fix or revision applies whole) |
+| `Tab` | Accept the next word, drawn a little brighter on Hyprland (a typo fix or revision applies whole) |
 | `Ctrl+→` | Accept the whole suggestion |
 | Keep typing | Typing the suggested letters keeps the rest, with no new model call |
 | `Escape` | Dismiss |
@@ -190,15 +193,16 @@ and no-suggestion reason.
 
 ```mermaid
 flowchart LR
-    A["Your app or editor"] -->|"text near the caret"| F["Fcitx addon or editor plugin"]
+    A["Your app"] <-->|"keys, suggestion, accepted text"| F["Fcitx addon"]
+    O["Accessibility observer"] -->|"field text, caret and identity"| F
+    E["Obsidian, Neovim and Bash plugins"] <-->|"local socket"| B
     F <-->|"local socket"| B["badi-broker (Rust)"]
     B <--> M["llama.cpp + local model"]
-    O["Accessibility observer"] -->|"field identity"| F
-    F -->|"grey text, then your Tab"| A
 ```
 
-The broker owns the policy and the editing authority, and every suggestion is
-bound to the exact field, text and caret it was made for. See
+The editor plugins read their own text; the observer serves only the Fcitx
+addon. The broker owns the policy and the editing authority, and every
+suggestion is bound to the exact field, text and caret it was made for. See
 [AGENTS.md](AGENTS.md#architecture) for the components and
 [docs/decisions](docs/decisions/) for the design decisions.
 
