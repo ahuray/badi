@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Scoped install-receipt `partial_components` to desktop installs and `--only` library rollbacks whose `.local/lib/` entries diverge from the receipt source, keeping existing markers across unrelated or mismatched restores until every library shares one commit on a complete rollback or matches `source` (including dirty snapshots) and omitting them on full rollbacks with byte-identical libraries and subset `install-editors.py` runs.
+
 - Mapped absent/refused `badictl` socket opens to `error_code=io` (keeping `unsafe_socket` fail-closed), waited for broker socket readiness in `badi service start|restart`, and scoped desktop component-skew checks to unverified partial installs (`--broker-only` / `--only` restores) and versioned binaries so unchanged static files on a full install do not report false skew.
 
 - Restored `PanelKeyCatcher` focus in the Omarchy panel when `siteField` is rebuilt, destroyed, submitted, or superseded by `ConfirmDialog`, canonicalized bracketed IPv6 origins and preserved existing style-learning grants across `SettingsModel.js`, `DesktopPanel.qml` and `badi-desktop.py`, recovered prior file commits on `badi_install.py restore` and reported mixed component commits in `badi doctor`, and included `.js` panel modules in the `verify-badi` feature-map check.

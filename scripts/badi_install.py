@@ -396,7 +396,9 @@ def write_receipt(home, installer, source, files, now=None):
             entry["version"] = binary_version(target)
             entry.update(version_identity(entry["version"]))
         entries[key] = entry
-    unverified_libs = sorted(key for key in entries if key not in verified_keys and key.startswith(".local/lib/"))
+    unverified_libs = (sorted(key for key in entries
+                              if isinstance(key, str) and key not in verified_keys and key.startswith(".local/lib/"))
+                       if installer == "desktop" else [])
     receipt = {"schema": SCHEMA, "installer": installer, "installed_at": installed_at,
                "source": {"commit": source["commit"], "dirty": source["dirty"]},
                **({"partial_components": unverified_libs} if unverified_libs else {}),
@@ -405,7 +407,45 @@ def write_receipt(home, installer, source, files, now=None):
     return path
 
 
-def refresh_restored_receipts(home, keys, previous_receipts=None):
+def _refreshed_partial_components(receipt, files, restored_set, complete):
+    lib_items = {
+        key: item for key, item in files.items()
+        if isinstance(key, str) and key.startswith(".local/lib/") and isinstance(item, dict)
+    }
+    if not lib_items:
+        return []
+    lib_commits = {item.get("commit") for item in lib_items.values()}
+    sole_lib_commit = next(iter(lib_commits)) if len(lib_commits) == 1 else None
+    if complete and isinstance(sole_lib_commit, str) and re.fullmatch(r"[0-9a-f]{40}", sole_lib_commit):
+        return []
+    source = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
+    source_commit = source.get("commit")
+    source_known = isinstance(source_commit, str) and bool(re.fullmatch(r"[0-9a-f]{40}", source_commit))
+    source_dirty = bool(source.get("dirty"))
+
+    def matches_source(key):
+        item = lib_items.get(key)
+        return (
+            source_known
+            and isinstance(item, dict)
+            and item.get("commit") == source_commit
+            and bool(item.get("dirty")) == source_dirty
+        )
+
+    partial = {
+        key for key in receipt.get("partial_components", ())
+        if isinstance(key, str) and key in lib_items and not (key in restored_set and matches_source(key))
+    }
+    restored_libs = {key for key in restored_set if key in lib_items}
+    if restored_libs and (
+        not complete
+        or (source_known and any(item.get("commit") == source_commit for item in lib_items.values()))
+    ):
+        partial.update(key for key in restored_libs if not matches_source(key))
+    return sorted(partial)
+
+
+def refresh_restored_receipts(home, keys, previous_receipts=None, *, complete=False):
     """Point receipt entries at bytes a restore just put back.
 
     A rolled-back broker whose receipt still names the newer build makes
@@ -417,6 +457,7 @@ def refresh_restored_receipts(home, keys, previous_receipts=None):
     previous_receipts = previous_receipts or {}
     if not keys:
         return
+    restored_set = set(keys)
     for installer in BACKUP_DIRECTORIES:
         path = receipt_path(home, installer)
         try:
@@ -458,10 +499,12 @@ def refresh_restored_receipts(home, keys, previous_receipts=None):
                     receipt["source"] = {"commit": sole,
                                          "dirty": any(bool(item.get("dirty")) for item in files.values()
                                                       if isinstance(item, dict))}
-            restored_set = set(keys)
-            untouched_libs = sorted(key for key in files if key.startswith(".local/lib/") and key not in restored_set)
-            if untouched_libs and any(key.startswith(".local/lib/") for key in restored_set):
-                receipt["partial_components"] = untouched_libs
+            remaining_partial = (
+                _refreshed_partial_components(receipt, files, restored_set, complete)
+                if installer == "desktop" else []
+            )
+            if remaining_partial:
+                receipt["partial_components"] = remaining_partial
             else:
                 receipt.pop("partial_components", None)
             store(path, receipt)
@@ -490,9 +533,17 @@ def forget(home, installer, files):
     if not isinstance(receipt, dict) or receipt.get("schema") != SCHEMA or not isinstance(receipt.get("files"), dict):
         return
     removed = {home_relative(home, item) for item in files}
-    if removed.isdisjoint(receipt["files"]):
+    partial = receipt.get("partial_components") if isinstance(receipt.get("partial_components"), list) else []
+    if removed.isdisjoint(receipt["files"]) and removed.isdisjoint(partial):
         return
     receipt["files"] = {key: entry for key, entry in receipt["files"].items() if key not in removed}
+    if "partial_components" in receipt:
+        remaining = ([key for key in partial if isinstance(key, str) and key in receipt["files"]]
+                     if installer == "desktop" else [])
+        if remaining:
+            receipt["partial_components"] = remaining
+        else:
+            receipt.pop("partial_components", None)
     store(path, receipt)
 
 
@@ -767,18 +818,25 @@ def restore(backup, only=()):
     prefixes = [item.rstrip("/") for item in only]
     changed = []
     restored = []
+    unrestored = False
     previous_receipts = {}
     reload_units = False
     for entry in reversed(document["changes"]):
         path = entry["path"]
+        saved = backup / entry["saved"] if entry.get("saved") else None
         if prefixes and not any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes):
+            if not unrestored:
+                try:
+                    unrestored = not _holds_original(home / path, saved)
+                except OSError:
+                    unrestored = True
             continue
         target = home / path
-        saved = backup / entry["saved"] if entry.get("saved") else None
         if _holds_original(target, saved):
             continue
         if not _left_by_installation(target, entry):
             changed.append(path)
+            unrestored = True
             print(f"Changed since that installation, left as it is: {target}", flush=True)
             continue
         if saved is None:
@@ -806,7 +864,12 @@ def restore(backup, only=()):
             if isinstance(entry.get("previous_receipt"), dict):
                 previous_receipts[path] = entry["previous_receipt"]
             reload_units = reload_units or path.startswith(".config/systemd/user/")
-    refresh_restored_receipts(home, restored, previous_receipts)
+    refresh_restored_receipts(
+        home,
+        restored,
+        previous_receipts,
+        complete=document.get("installer") == "desktop" and not unrestored,
+    )
     if reload_units:
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, timeout=15)
         print("Reloaded user units so restored service files are what systemd reads.", flush=True)

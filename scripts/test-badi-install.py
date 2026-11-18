@@ -436,6 +436,284 @@ class ReceiptTests(unittest.TestCase):
             aligned = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
             self.assertNotIn('partial_components', aligned)
 
+    def test_full_rollback_with_unchanged_libraries_is_not_marked_partial(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            first_commit, second_commit = 'a' * 40, 'b' * 40
+
+            def binary_script(name, commit):
+                return f'#!/bin/sh\necho "{name} 0.2.0 commit={commit} dirty=false"\n'.encode()
+
+            broker = home / '.local/lib/badi/badi-broker'
+            ctl = home / '.local/lib/badi/badictl'
+            observer = home / '.local/lib/badi/accessibility/daemon.py'
+            session = home / '.local/lib/badi/session/daemon.py'
+            addon = home / '.local/lib/fcitx5/libbadi-fcitx5.so'
+            unit = home / '.config/systemd/user/badi-broker.service'
+
+            initial = badi_install.Installation(home, 'desktop')
+            initial.write(broker, binary_script('badi-broker', first_commit), 0o755)
+            initial.write(ctl, binary_script('badictl', first_commit), 0o755)
+            initial.write(observer, b'observer v1\n', 0o644)
+            initial.write(session, b'session v1\n', 0o644)
+            initial.write(addon, b'addon v1', 0o755)
+            initial.write(unit, b'[Unit]\nDescription=Badi\n', 0o644)
+            badi_install.write_receipt(home, 'desktop', {'commit': first_commit, 'dirty': False}, initial.current)
+
+            # Full upgrade where only badi-broker and badictl changed bytes; the
+            # observer, session helper, addon and unit already match and are not backed up.
+            upgrade = badi_install.Installation(home, 'desktop')
+            self.assertTrue(upgrade.write(broker, binary_script('badi-broker', second_commit), 0o755))
+            self.assertTrue(upgrade.write(ctl, binary_script('badictl', second_commit), 0o755))
+            self.assertFalse(upgrade.write(observer, b'observer v1\n', 0o644))
+            self.assertFalse(upgrade.write(session, b'session v1\n', 0o644))
+            self.assertFalse(upgrade.write(addon, b'addon v1', 0o755))
+            self.assertFalse(upgrade.write(unit, b'[Unit]\nDescription=Badi\n', 0o644))
+            badi_install.write_receipt(home, 'desktop', {'commit': second_commit, 'dirty': False}, upgrade.current)
+            upgraded = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertNotIn('partial_components', upgraded)
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(badi_install.restore(upgrade.directory), [])
+            restored = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(restored['source'], {'commit': first_commit, 'dirty': False})
+            self.assertNotIn('partial_components', restored)
+            self.assertEqual(restored['files']['.local/lib/badi/badi-broker']['commit'], first_commit)
+            self.assertEqual(restored['files']['.local/lib/badi/badictl']['commit'], first_commit)
+
+    def test_partial_components_survives_unrelated_or_mismatched_restore_until_aligned(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('desktop_cli', Path(__file__).with_name('badi-desktop.py'))
+        desktop_cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(desktop_cli)
+
+        def doctor_for(home, broker_version, broker_sha):
+            service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+            with patch.object(desktop_cli.Path, 'home', return_value=home), \
+                 patch.object(desktop_cli, 'running_broker_identity',
+                              return_value={'version': broker_version, 'sha256': broker_sha}), \
+                 patch.object(desktop_cli, 'service_state', return_value=service), \
+                 patch.object(desktop_cli, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+                 patch.object(desktop_cli, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+                 patch.object(desktop_cli, 'control', return_value='{"metrics": {"provider_calls": 1}}'):
+                report = desktop_cli.health_report()
+                return report, desktop_cli.doctor_text(report)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            first_commit, second_commit = 'a' * 40, 'b' * 40
+            broker = home / '.local/lib/badi/badi-broker'
+            observer = home / '.local/lib/badi/accessibility/daemon.py'
+            addon = home / '.local/lib/fcitx5/libbadi-fcitx5.so'
+            unit = home / '.config/systemd/user/badi-broker.service'
+
+            # Seed pre-existing libraries so `full` backs up both library paths as v0 (commit=unknown).
+            observer.parent.mkdir(parents=True)
+            observer.write_bytes(b'observer v0\n')
+            addon.parent.mkdir(parents=True)
+            addon.write_bytes(b'addon v0')
+
+            v1_line = f'badi-broker 0.2.0 commit={first_commit} dirty=false'
+            v2_line = f'badi-broker 0.2.0 commit={second_commit} dirty=false'
+            full = badi_install.Installation(home, 'desktop')
+            full.write(broker, f'#!/bin/sh\necho "{v1_line}"\n'.encode(), 0o755)
+            full.write(observer, b'observer v1\n', 0o644)
+            full.write(addon, b'addon v1', 0o755)
+            full.write(unit, b'unit v1\n', 0o644)
+            badi_install.write_receipt(home, 'desktop', {'commit': first_commit, 'dirty': False}, full.current)
+
+            # A --only library rollback from a full install creates partial_components for the older library.
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    badi_install.restore(full.directory, ['.local/lib/fcitx5/libbadi-fcitx5.so']),
+                    [],
+                )
+            self.assertEqual(addon.read_bytes(), b'addon v0')
+            after_partial_only = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(after_partial_only['partial_components'], ['.local/lib/fcitx5/libbadi-fcitx5.so'])
+            report, text = doctor_for(home, v1_line, badi_install.file_sha256(broker))
+            self.assertTrue(any('Only part of the desktop install was updated' in note for note in report['notes']))
+            self.assertIn('(partial)', text)
+
+            # Re-align at first_commit, then run a --broker-only update at second_commit.
+            addon.write_bytes(b'addon v1')
+            badi_install.write_receipt(home, 'desktop', {'commit': first_commit, 'dirty': False},
+                                       [broker, observer, addon, unit])
+            broker_only = badi_install.Installation(home, 'desktop')
+            broker_only.write(broker, f'#!/bin/sh\necho "{v2_line}"\n'.encode(), 0o755)
+            broker_only.write(unit, b'unit v2\n', 0o644)
+            badi_install.write_receipt(home, 'desktop', {'commit': second_commit, 'dirty': False}, broker_only.current)
+            expected_partial = ['.local/lib/badi/accessibility/daemon.py', '.local/lib/fcitx5/libbadi-fcitx5.so']
+            receipt = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(receipt['partial_components'], expected_partial)
+
+            real_run = subprocess.run
+
+            def stub_daemon_reload(command, **kwargs):
+                if command[:3] == ['systemctl', '--user', 'daemon-reload']:
+                    return subprocess.CompletedProcess(command, 0, '', '')
+                return real_run(command, **kwargs)
+
+            # Restoring only the systemd unit file must NOT drop partial_components.
+            with patch.object(badi_install.subprocess, 'run', side_effect=stub_daemon_reload), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    badi_install.restore(broker_only.directory, ['.config/systemd/user/badi-broker.service']),
+                    [],
+                )
+            after_unit_restore = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(after_unit_restore['partial_components'], expected_partial)
+
+            # Restoring observer/addon from an older backup puts back v0 bytes (commit=unknown != second_commit),
+            # so both paths must stay in partial_components and doctor must still warn.
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    badi_install.restore(full.directory, ['.local/lib/badi/accessibility/daemon.py']),
+                    [],
+                )
+                self.assertEqual(
+                    badi_install.restore(full.directory, ['.local/lib/fcitx5/libbadi-fcitx5.so']),
+                    [],
+                )
+            self.assertEqual(observer.read_bytes(), b'observer v0\n')
+            self.assertEqual(addon.read_bytes(), b'addon v0')
+            after_older_lib_restore = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(after_older_lib_restore['partial_components'], expected_partial)
+            report, text = doctor_for(home, v2_line, badi_install.file_sha256(broker))
+            self.assertTrue(any('Only part of the desktop install was updated' in note for note in report['notes']))
+            self.assertIn('(partial)', text)
+
+            # Restoring a partial library back to bytes whose previous_receipt matches source clears that path.
+            observer.write_bytes(b'observer v2\n')
+            addon.write_bytes(b'addon v2')
+            badi_install.write_receipt(home, 'desktop', {'commit': second_commit, 'dirty': False},
+                                       [broker, observer, addon, unit])
+            drift = badi_install.Installation(home, 'desktop')
+            drift.write(observer, b'observer experimental\n', 0o644)
+            drift.write(addon, b'addon experimental', 0o755)
+            # Mark both partial via a broker-only receipt write at second_commit, then restore them to second_commit.
+            badi_install.write_receipt(home, 'desktop', {'commit': second_commit, 'dirty': False}, [broker, unit])
+            self.assertEqual(
+                json.loads(badi_install.receipt_path(home, 'desktop').read_text())['partial_components'],
+                expected_partial,
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    badi_install.restore(drift.directory, ['.local/lib/badi/accessibility/daemon.py']),
+                    [],
+                )
+            self.assertEqual(observer.read_bytes(), b'observer v2\n')
+            self.assertEqual(
+                json.loads(badi_install.receipt_path(home, 'desktop').read_text())['partial_components'],
+                ['.local/lib/fcitx5/libbadi-fcitx5.so'],
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    badi_install.restore(drift.directory, ['.local/lib/fcitx5/libbadi-fcitx5.so']),
+                    [],
+                )
+            self.assertEqual(addon.read_bytes(), b'addon v2')
+            self.assertNotIn('partial_components', json.loads(badi_install.receipt_path(home, 'desktop').read_text()))
+
+            # A unit-only --broker-only backup at the same clean commit clears partial_components on full undo,
+            # and a restored binary with dirty=unknown also clears partial_components on a clean rollback.
+            unknown_dirty_v1 = f'badi-broker 0.2.0 commit={first_commit} dirty=unknown'
+            broker.write_bytes(f'#!/bin/sh\necho "{unknown_dirty_v1}"\n'.encode())
+            observer.write_bytes(b'observer aligned\n')
+            addon.write_bytes(b'addon aligned')
+            addon.chmod(0o755)
+            unit.write_bytes(b'unit aligned\n')
+            badi_install.write_receipt(home, 'desktop', {'commit': first_commit, 'dirty': False},
+                                       [broker, observer, addon, unit])
+
+            unit_only = badi_install.Installation(home, 'desktop')
+            self.assertFalse(unit_only.write(broker, f'#!/bin/sh\necho "{unknown_dirty_v1}"\n'.encode(), 0o755))
+            self.assertTrue(unit_only.write(unit, b'unit changed\n', 0o644))
+            badi_install.write_receipt(home, 'desktop', {'commit': first_commit, 'dirty': False}, unit_only.current)
+            self.assertEqual(
+                json.loads(badi_install.receipt_path(home, 'desktop').read_text())['partial_components'],
+                expected_partial,
+            )
+            with patch.object(badi_install.subprocess, 'run', side_effect=stub_daemon_reload), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(badi_install.restore(unit_only.directory), [])
+            self.assertNotIn('partial_components', json.loads(badi_install.receipt_path(home, 'desktop').read_text()))
+
+            second_partial = badi_install.Installation(home, 'desktop')
+            second_partial.write(broker, f'#!/bin/sh\necho "{v2_line}"\n'.encode(), 0o755)
+            badi_install.write_receipt(home, 'desktop', {'commit': second_commit, 'dirty': False},
+                                       second_partial.current)
+            self.assertEqual(
+                json.loads(badi_install.receipt_path(home, 'desktop').read_text())['partial_components'],
+                expected_partial,
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(badi_install.restore(second_partial.directory), [])
+            rolled_back = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(rolled_back['source'], {'commit': first_commit, 'dirty': False})
+            self.assertNotIn('partial_components', rolled_back)
+
+            # A dirty full install at first_commit (rebuilt broker dirty=true, byte-identical helpers dirty=false),
+            # followed by a clean --broker-only update at second_commit and a full restore, clears partial_components.
+            dirty_v1_line = f'badi-broker 0.2.0 commit={first_commit} dirty=true'
+            dirty_full = badi_install.Installation(home, 'desktop')
+            self.assertTrue(dirty_full.write(broker, f'#!/bin/sh\necho "{dirty_v1_line}"\n'.encode(), 0o755))
+            self.assertFalse(dirty_full.write(observer, b'observer aligned\n', 0o644))
+            self.assertFalse(dirty_full.write(addon, b'addon aligned', 0o755))
+            self.assertFalse(dirty_full.write(unit, b'unit aligned\n', 0o644))
+            badi_install.write_receipt(home, 'desktop', {'commit': first_commit, 'dirty': True}, dirty_full.current)
+            self.assertNotIn('partial_components', json.loads(badi_install.receipt_path(home, 'desktop').read_text()))
+
+            clean_partial = badi_install.Installation(home, 'desktop')
+            clean_partial.write(broker, f'#!/bin/sh\necho "{v2_line}"\n'.encode(), 0o755)
+            badi_install.write_receipt(home, 'desktop', {'commit': second_commit, 'dirty': False}, clean_partial.current)
+            self.assertEqual(
+                json.loads(badi_install.receipt_path(home, 'desktop').read_text())['partial_components'],
+                expected_partial,
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(badi_install.restore(clean_partial.directory), [])
+            dirty_rolled_back = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(dirty_rolled_back['source'], {'commit': first_commit, 'dirty': True})
+            self.assertNotIn('partial_components', dirty_rolled_back)
+            report, text = doctor_for(home, dirty_v1_line, badi_install.file_sha256(broker))
+            self.assertFalse(any('Only part of the desktop install was updated' in note for note in report['notes']))
+            self.assertNotIn('(partial)', text)
+
+    def test_editor_subset_installs_and_restores_never_set_partial_components(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            first_commit, second_commit = 'a' * 40, 'b' * 40
+            bash_preview = home / '.local/lib/badi/editors/shell/badi-preview.so'
+            bash_bridge = home / '.local/lib/badi/editors/shell/bridge.mjs'
+            shared = home / '.local/lib/badi/editors/shared/bridge-stdio.mjs'
+            bashrc = home / '.bashrc'
+            nvim_bridge = home / '.local/lib/badi/editors/neovim/bridge.mjs'
+            nvim_init = home / '.local/share/nvim/site/pack/badi/start/badi/lua/badi/init.lua'
+
+            bash_install = badi_install.Installation(home, 'editors')
+            bash_install.write(bash_preview, b'preview v1', 0o755)
+            bash_install.write(bash_bridge, b'bash bridge v1\n', 0o644)
+            bash_install.write(shared, b'shared v1\n', 0o644)
+            bash_install.write(bashrc, b'source badi.bash\n', 0o644)
+            badi_install.write_receipt(home, 'editors', {'commit': first_commit, 'dirty': False}, bash_install.current)
+
+            nvim_install = badi_install.Installation(home, 'editors')
+            nvim_install.write(shared, b'shared v2\n', 0o644)
+            nvim_install.write(nvim_bridge, b'nvim bridge v2\n', 0o644)
+            nvim_install.write(nvim_init, b'return {}\n', 0o644)
+            badi_install.write_receipt(home, 'editors', {'commit': second_commit, 'dirty': False}, nvim_install.current)
+
+            receipt = json.loads(badi_install.receipt_path(home, 'editors').read_text())
+            self.assertNotIn('partial_components', receipt)
+            self.assertEqual(receipt['files']['.local/lib/badi/editors/shell/badi-preview.so']['commit'], first_commit)
+            self.assertEqual(receipt['files']['.local/lib/badi/editors/neovim/bridge.mjs']['commit'], second_commit)
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(badi_install.restore(nvim_install.directory), [])
+            restored = json.loads(badi_install.receipt_path(home, 'editors').read_text())
+            self.assertNotIn('partial_components', restored)
+
 
 class RepairTests(unittest.TestCase):
     """Omarchy's refresh commands replace hyprland.lua and the browser flag files."""
