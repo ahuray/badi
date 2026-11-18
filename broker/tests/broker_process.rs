@@ -31,7 +31,7 @@ fn broker_exec_helper_runs_before_tokio_and_refuses_a_foreign_parent() -> Result
         .output()?;
     assert!(masked.status.success(), "masked helper failed: {masked:?}");
     assert_eq!(masked.stdout, b"--cpu-mask 0xfff\n");
-    assert!(masked.stderr.is_empty());
+    assert_eq!(masked.stderr, [] as [u8; 0]);
 
     for invalid_extra in [
         vec!["--cpu-mask", "0x0"],
