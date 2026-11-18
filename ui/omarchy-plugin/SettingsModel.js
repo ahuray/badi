@@ -120,6 +120,7 @@ function isTerminalIdentity(value) {
     && (value.adapter === "shell"
       || (value.adapter === "fcitx"
         && (value.app_id === "com.mitchellh.ghostty"
+          || value.app_id === "ghostty"
           || value.app_id === "foot"
           || value.app_id === "org.codeberg.dnkl.foot")))
 }
@@ -345,11 +346,13 @@ function appRule(document, appId) {
 
 // Effective app permission: an exact rule, else the app list mode (never for manual apps).
 function appEnabled(document, supportedApps, appId) {
-  var rule = appRule(document, appId)
+  var identity = appIdentity(appId)
+  var rule = subjectRule(document, identity)
   if (rule) return allows(rule.permissions)
   var apps = Array.isArray(supportedApps) ? supportedApps : []
   var app = apps.find(function(item) { return item.appId === appId })
-  return isObject(document) && document.all_linux_apps === true && !(app && app.manual)
+  var manualTerminal = identity.adapter === "fcitx" && isTerminalIdentity(identity)
+  return isObject(document) && document.all_linux_apps === true && !manualTerminal && !(app && app.manual)
 }
 
 function siteRules(document) {

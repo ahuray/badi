@@ -52,7 +52,19 @@ local state = {
   -- read for a request it does not allow.
   policy = nil,
   status = 'idle',
+  targets = {},
+  target_seq = 0,
 }
+
+local function target_id(buf)
+  local id = state.targets[buf]
+  if not id then
+    state.target_seq = state.target_seq + 1
+    id = string.format('nvim:%d:%d', buf, state.target_seq)
+    state.targets[buf] = id
+  end
+  return id
+end
 
 local function set_status(reason)
   if type(reason) == 'string' and reason:match('^[a-z_]+$') then state.status = reason end
@@ -500,7 +512,7 @@ function M.revise(mode)
   state.pending = { generation = generation, snapshot = s }
   set_status('revising')
   state.bridge:request({ op = 'revise', mode = mode, before = s.before, selected = s.selected, after = s.after,
-    selection = s.selection, language = state.config.language }, function(reply)
+    selection = s.selection, language = state.config.language, target_id = target_id(s.buf) }, function(reply)
     if state.generation ~= generation then return end
     state.pending = nil
     local current = matches(s)
@@ -588,6 +600,7 @@ function M.request(explicit)
   set_status('thinking')
   state.bridge:request({
     op = 'suggest', before = before, after = after, explicit = explicit, language = state.config.language,
+    target_id = target_id(s.buf),
   }, function(reply)
     if state.generation ~= generation then return end
     state.pending = nil
@@ -728,6 +741,8 @@ end
 
 function M.setup(options)
   state.config = vim.tbl_deep_extend('force', vim.deepcopy(defaults), options or {})
+  state.targets = {}
+  state.target_seq = 0
   if state.bridge then
     invalidate('cancel')
     state.bridge:stop()
@@ -762,6 +777,7 @@ function M.setup(options)
     if visible and visible.preview_win and not api.nvim_win_is_valid(visible.preview_win) then invalidate('cancel') end
   end)
   autocmd('InsertLeave', dismiss)
+  autocmd({ 'BufWipeout', 'BufUnload' }, function(ev) state.targets[ev.buf] = nil end)
   autocmd({ 'TextChangedP', 'CompleteChanged', 'BufLeave', 'WinLeave' }, function() invalidate('cancel') end)
   autocmd('FocusLost', function()
     state.focused = false

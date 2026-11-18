@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Isolated Fcitx5 type-through carry, held Tab, unnamed-IBus Zen rebase and selection-revision state across field/window/sensitive boundaries, cleared open `AlternativeList` popups on `suggestion.clear` and broker `error` refusals, classified unlisted terminal emulators as `Unavailable`, self-healed pre-terminal-exclusion `learned-words.json`, `style.json` and `personalization.json` records on startup, purged `learned-words.json` on explicit subject blocks, bound editor sessions to per-note/per-buffer `target_id`s and connection `AdapterKind`, and aligned Rust settings deserialization and degraded-mode authority checks with the v2 schema.
+
 - Fixed on-demand broker startup, `badi service stop` runtime marker handling (`service-stopped` and `service-failed` in `$XDG_RUNTIME_DIR/badi/`), idle `badi doctor` and explicit CLI/panel wakeups, `badi-session` bar refreshes on broker connect/disconnect, stale `0600` `broker.sock` (`ECONNREFUSED`) recovery, Fcitx5 manual-app and pass-through key startup gating, editor cold-start generation/snapshot binding, and `bridge-stdio` concurrent EOF teardown and line buffering.
 
 - Fixed adapter `policy.status` validation rejecting `learning_allowed: true` across Fcitx5, Obsidian, Neovim and LibreOffice Writer and rejecting `fr`, `es` and `pt` `language_override` tags in Fcitx5 and `protocol/v2/schema.json`, and fixed the Bash preview builtin spinning in Bash 5.3's unpatched `rl_gather_tyi()` while a preview is shown on Ubuntu 26.04.

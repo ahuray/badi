@@ -665,6 +665,7 @@ impl MessageHandler<'_> {
         let coordinates = envelope.coordinates()?;
         let payload: SessionOpenPayload = envelope.decode_payload()?;
         payload.target.validate_wire()?;
+        require_adapter_target(self.authority.adapter_kind, payload.target.kind, false)?;
         self.broker
             .open_session(
                 coordinates,
@@ -955,6 +956,7 @@ impl MessageHandler<'_> {
         require_capability(self.authority, Capability::Policy)?;
         let payload: PolicyQueryPayload = envelope.decode_payload()?;
         payload.validate()?;
+        require_adapter_target(self.authority.adapter_kind, payload.target.kind, true)?;
         let status = self.broker.resolve_policy(&payload.target).await;
         self.reply(MessageType::PolicyStatus, envelope.id, &status)
     }
@@ -1024,6 +1026,32 @@ impl MessageHandler<'_> {
 fn require_settings_authority(authority: &SessionAuthority) -> Result<(), ServerError> {
     require_capability(authority, Capability::Settings)?;
     if authority.adapter_kind == AdapterKind::Cli {
+        Ok(())
+    } else {
+        Err(ServerError::InvalidCapability)
+    }
+}
+
+fn require_adapter_target(
+    adapter: AdapterKind,
+    target: crate::protocol::TargetKind,
+    allow_cli: bool,
+) -> Result<(), ServerError> {
+    use crate::protocol::TargetKind;
+
+    let allowed = match adapter {
+        AdapterKind::Fcitx => {
+            matches!(target, TargetKind::DesktopApplication | TargetKind::Browser)
+        }
+        AdapterKind::Obsidian => target == TargetKind::Obsidian,
+        AdapterKind::Terminal => target == TargetKind::Terminal,
+        AdapterKind::Neovim => target == TargetKind::Neovim,
+        AdapterKind::Libreoffice => target == TargetKind::Libreoffice,
+        AdapterKind::Test => true,
+        AdapterKind::Cli => allow_cli,
+        AdapterKind::Session => false,
+    };
+    if allowed {
         Ok(())
     } else {
         Err(ServerError::InvalidCapability)

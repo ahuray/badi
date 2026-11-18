@@ -620,3 +620,33 @@ fn ephemeral_capacity_cannot_evict_durable_records() {
     assert!(mutation.signal_dropped);
     assert_eq!(fs::read(&path).expect("unchanged durable bytes"), before);
 }
+
+#[test]
+fn legacy_terminal_records_self_heal_on_open() {
+    let temporary = tempdir().expect("temporary directory");
+    let directory = temporary.path().join("badi");
+    fs::create_dir(&directory).expect("private directory");
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+        .expect("private directory permissions");
+    let legacy = serde_json::json!({
+        "schema": PERSONALIZATION_SCHEMA,
+        "revision": 3,
+        "records": [{
+            "identity": { "kind": "linux_app", "adapter": "fcitx", "app_id": "com.mitchellh.ghostty" },
+            "provider": "local_model",
+            "day": 90,
+            "shown": 2,
+            "dismissed": 0,
+            "accepted_word": 1,
+            "accepted_all": 0
+        }]
+    });
+    let legacy_path = directory.join("legacy-personalization.json");
+    fs::write(&legacy_path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    fs::set_permissions(&legacy_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let granted = settings(RetentionPermission::Bounded { days: 30 });
+    let healed = PersonalizationStore::open(&legacy_path, &granted, 90)
+        .expect("legacy terminal aggregate heals on open");
+    assert_eq!(healed.snapshot().unwrap().records, Vec::new());
+    assert!(!legacy_path.exists(), "scrubbed empty store removed");
+}

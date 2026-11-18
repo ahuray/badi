@@ -63,6 +63,7 @@ class WritingView {
   revisionCycle = null;
   revisionReason = null;
   changingRevision = false;
+  viewTargetId = null;
   observeEscape = event => {
     this.dismiss(event);
     if ((this.snapshot?.kind === 'revision' || this.revisionCycle) && event.isTrusted && !event.isComposing &&
@@ -75,6 +76,7 @@ class WritingView {
   constructor(view, owner) {
     this.view = view;
     this.owner = owner;
+    this.viewTargetId = owner.allocateTarget();
     owner.views.set(view, this);
     // Obsidian prevents Escape before its bundled CodeMirror dispatches even
     // event observers. Observe this editor's DOM without consuming the event.
@@ -87,6 +89,11 @@ class WritingView {
 
   // Every editor shares the plugin's one broker connection.
   get client() { return this.owner.client; }
+
+  targetId() {
+    const path = this.owner.app?.workspace?.getActiveFile?.()?.path;
+    return typeof path === 'string' && path.length > 0 ? this.owner.targetForNote(path) : this.viewTargetId;
+  }
 
   clientState(state) {
     if (this.owner.session === this && this.pending && this.snapshot?.kind === 'revision') this.revisionReason = state;
@@ -202,7 +209,7 @@ class WritingView {
       if (!before.trim()) return;
       const language = writingLanguage(before, this.owner.language === 'auto' ? navigator.language : this.owner.language);
       if (!language) throw new Error('Writing language unavailable');
-      const text = await this.client.suggest(before, { explicit, language, after });
+      const text = await this.client.suggest(before, { explicit, language, after, targetId: this.targetId() });
       if (generation !== this.generation || !this.matches(snapshot) || !text) return;
       const replaceBefore = this.client.replacementBefore;
       if (replaceBefore !== undefined && !validCorrection(before, replaceBefore, text)) {
@@ -252,7 +259,7 @@ class WritingView {
       // the exact session for synonyms. Other clears still revoke this view.
       this.changingRevision = true;
       const promise = this.client.revise({ before: snapshot.before, selected: snapshot.selected, after: snapshot.after,
-        selection: snapshot.range, mode,
+        selection: snapshot.range, mode, targetId: this.targetId(),
         language: this.owner.language === 'auto' ? navigator.language : this.owner.language });
       this.changingRevision = false;
       const result = await promise;
@@ -480,8 +487,28 @@ export default class BadiPlugin extends Plugin {
   views = new Map();
   language = 'auto';
   client = null;
+  noteTargets = new Map();
+  nextTarget = 0;
   // The editor whose request opened the client's current session.
   session = null;
+
+  allocateTarget() {
+    this.nextTarget += 1;
+    return `obs:${this.nextTarget}`;
+  }
+
+  targetForNote(path) {
+    let target = this.noteTargets.get(path);
+    if (!target) {
+      if (this.noteTargets.size >= 64) {
+        const oldest = this.noteTargets.keys().next().value;
+        this.noteTargets.delete(oldest);
+      }
+      target = this.allocateTarget();
+      this.noteTargets.set(path, target);
+    }
+    return target;
+  }
 
   createClient() {
     const client = new RecoveringBrokerClient('obsidian', { textReplacement: true, selectionRevision: true });

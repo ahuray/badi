@@ -122,6 +122,7 @@ public:
                 const ContextWindow &rawFcitx, std::string_view committed);
     void clear();
     [[nodiscard]] bool active() const { return active_; }
+    [[nodiscard]] const std::string &appId() const { return appId_; }
     [[nodiscard]] const std::string &language() const { return preCommit_.language; }
     [[nodiscard]] bool sameField(const nlohmann::json &focus) const;
     [[nodiscard]] bool matchesFcitx(const ContextWindow &rawFcitx) const;

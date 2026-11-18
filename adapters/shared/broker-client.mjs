@@ -72,6 +72,7 @@ export class BrokerClient extends EventEmitter {
   #selectionRevision;
   #revision = null;
   #revisionContext = null;
+  #targetId = randomUUID();
 
   constructor(profile, { textReplacement = false, selectionRevision = false } = {}) {
     super();
@@ -150,6 +151,14 @@ export class BrokerClient extends EventEmitter {
 
   #target(id) { return { ...this.#profile, target_id: id }; }
 
+  #resolveTargetId(targetId) {
+    if (targetId === undefined) return this.#targetId;
+    if (typeof targetId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(targetId)) {
+      throw new Error('Invalid target identifier');
+    }
+    return targetId;
+  }
+
   // Content-free: whether this editor holds its terminal's focus. Resolves
   // to whether the broker now withholds the input method's native path.
   async reportFocus(focused) {
@@ -181,7 +190,7 @@ export class BrokerClient extends EventEmitter {
     this.emit('state', this.allowed ? 'ready' : policy.paused ? 'paused' : 'app_disabled');
   }
 
-  async suggest(before, { language = 'en', explicit = true, after = '' } = {}) {
+  async suggest(before, { language = 'en', explicit = true, after = '', targetId } = {}) {
     if (!this.allowed) throw new Error('App disabled or model paused');
     if (typeof explicit !== 'boolean' || (!explicit && !this.automaticAllowed)) throw new Error('Manual invocation required');
     if (typeof language !== 'string' || language.length < 2 || language.length > 35 ||
@@ -193,13 +202,14 @@ export class BrokerClient extends EventEmitter {
         hasUnsafeText(after, true)) {
       throw new Error('Invalid writing context');
     }
+    const resolvedTarget = this.#resolveTargetId(targetId);
     this.cancel();
     const generation = this.#generation;
     const id = randomUUID();
     const session = { session_id: id, focus_epoch: 1, revision: 1,
       fingerprint: createHash('sha256').update(randomUUID()).update(before).digest('hex') };
     this.#session = session;
-    this.#send('session.open', { target: this.#target(id), activation: 'always' }, randomUUID(), { ...session, revision: 0 });
+    this.#send('session.open', { target: this.#target(resolvedTarget), activation: 'always' }, randomUUID(), { ...session, revision: 0 });
     this.#send('context.changed', { fingerprint: session.fingerprint, before, after, language,
       selection: { anchor: [...before].length, head: [...before].length, unit: 'unicode_scalar_values' },
       field: { purpose: this.#profile.kind === 'terminal' ? 'terminal' : 'normal', editable: true,
@@ -225,7 +235,7 @@ export class BrokerClient extends EventEmitter {
   // Each request is its own exact snapshot. An unchanged selection reuses
   // its session with newer coordinates, so the broker can avoid synonyms
   // already shown. Any editor cancellation ends that history and authority.
-  async revise({ before, selected, after = '', selection, mode = 'grammar', language } = {}) {
+  async revise({ before, selected, after = '', selection, mode = 'grammar', language, targetId } = {}) {
     if (!this.#selectionRevision || !this.allowed) throw new Error('Selection revision unavailable');
     if (!revisionModes.has(mode) || !validRevisionText(selected, 600) || !selected.trim() ||
         !validSelection(selection, selected) || typeof before !== 'string' || [...before].length > BEFORE_SCALARS ||
@@ -234,7 +244,8 @@ export class BrokerClient extends EventEmitter {
           (typeof language !== 'string' || !/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/.test(language)))) {
       throw new Error('Invalid revision request');
     }
-    const key = JSON.stringify([before, selected, after, selection.anchor, selection.head, language]);
+    const resolvedTarget = this.#resolveTargetId(targetId);
+    const key = JSON.stringify([resolvedTarget, before, selected, after, selection.anchor, selection.head, language]);
     const previous = this.#revisionContext === key ? this.#session : null;
     this.cancel(!previous);
     const generation = this.#generation;
@@ -243,7 +254,7 @@ export class BrokerClient extends EventEmitter {
       fingerprint: createHash('sha256').update(randomUUID()).update(key).digest('hex') };
     this.#session = session;
     this.#revisionContext = key;
-    if (!previous) this.#send('session.open', { target: this.#target(id), activation: 'always' }, randomUUID(),
+    if (!previous) this.#send('session.open', { target: this.#target(resolvedTarget), activation: 'always' }, randomUUID(),
       { ...session, revision: 0 });
     this.emit('state', 'revising');
     try {

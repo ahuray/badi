@@ -1165,9 +1165,10 @@ impl BrokerState {
         context: &ContextChangedPayload,
     ) -> Vec<String> {
         if context.field.purpose != FieldPurpose::Normal
+            || !context.field.identity_known
             || context.field.sensitive
             || context.field.lock_screen
-            || target.kind == TargetKind::Terminal
+            || matches!(target.kind, TargetKind::Terminal | TargetKind::Libreoffice)
             || !StableIdentity::from_target(target).is_ok_and(|identity| !identity.is_terminal())
         {
             return Vec::new();

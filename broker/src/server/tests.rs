@@ -1405,3 +1405,61 @@ fn only_neovim_may_negotiate_editor_focus() {
         assert!(hello(kind).validate().is_err());
     }
 }
+
+#[tokio::test]
+async fn adapter_connections_cannot_query_or_open_other_adapters_targets() {
+    let (mut obsidian, connection) = connect_test_client(
+        AdapterKind::Obsidian,
+        vec![
+            Capability::Context,
+            Capability::Suggestion,
+            Capability::CommitApplied,
+            Capability::Control,
+            Capability::Policy,
+        ],
+    )
+    .await;
+    let initial = read_envelope(&mut obsidian)
+        .await
+        .expect("authority frame")
+        .expect("authority");
+    let epoch = initial
+        .decode_payload::<AuthorityChangedPayload>()
+        .expect("authority payload")
+        .authority_epoch;
+    write_envelope(
+        &mut obsidian,
+        &WireEnvelope::global(
+            MessageType::AuthorityAck,
+            1,
+            &AuthorityAckPayload {
+                authority_epoch: epoch,
+            },
+        )
+        .expect("ack"),
+    )
+    .await
+    .expect("write ack");
+
+    let forged_query = super::PolicyQueryPayload {
+        target: TargetDescriptor {
+            kind: TargetKind::DesktopApplication,
+            app_id: "omawrite".to_owned(),
+            target_id: "doc-1".to_owned(),
+            origin: None,
+        },
+    };
+    let rejected = exchange(&mut obsidian, MessageType::PolicyQuery, &forged_query).await;
+    assert_eq!(rejected.message_type, MessageType::Error);
+    assert_eq!(
+        rejected
+            .decode_payload::<ErrorPayload>()
+            .expect("error")
+            .code,
+        ReasonCode::InvalidCapability
+    );
+    connection
+        .await
+        .expect("connection task")
+        .expect("forged target closes connection");
+}

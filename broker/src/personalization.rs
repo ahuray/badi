@@ -81,10 +81,14 @@ impl DailyAggregate {
     }
 
     fn validate(&self) -> Result<(), PersonalizationValidationError> {
-        self.identity.validate()?;
         if self.identity.is_terminal() {
             return Err(PersonalizationValidationError::UnsupportedIdentity);
         }
+        self.validate_stored()
+    }
+
+    fn validate_stored(&self) -> Result<(), PersonalizationValidationError> {
+        self.identity.validate()?;
         if self.day > MAX_SAFE_COUNTER {
             return Err(PersonalizationValidationError::DayOutOfRange);
         }
@@ -144,6 +148,17 @@ impl PersonalizationV1 {
     }
 
     pub fn validate(&self) -> Result<(), PersonalizationValidationError> {
+        self.validate_records(DailyAggregate::validate)
+    }
+
+    fn validate_stored(&self) -> Result<(), PersonalizationValidationError> {
+        self.validate_records(DailyAggregate::validate_stored)
+    }
+
+    fn validate_records(
+        &self,
+        check: impl Fn(&DailyAggregate) -> Result<(), PersonalizationValidationError>,
+    ) -> Result<(), PersonalizationValidationError> {
         if self.schema != PERSONALIZATION_SCHEMA {
             return Err(PersonalizationValidationError::UnsupportedSchema);
         }
@@ -155,7 +170,7 @@ impl PersonalizationV1 {
         }
         let mut previous: Option<&DailyAggregate> = None;
         for record in &self.records {
-            record.validate()?;
+            check(record)?;
             if previous.is_some_and(|candidate| {
                 candidate.key_cmp(&record.identity, record.provider, record.day) != Ordering::Less
             }) {
@@ -296,7 +311,7 @@ impl PersonalizationStore {
         }
         ensure_private_directory(path.parent().ok_or(PrivateStorageError::PathNotAbsolute)?)?;
         let mut document = match read_private_limited(&path, MAX_PERSONALIZATION_BYTES)? {
-            Some(bytes) => decode_personalization(&bytes)?,
+            Some(bytes) => decode_personalization_for_open(&bytes)?,
             None => PersonalizationV1::empty(),
         };
         let persisted_records = document.records.clone();
@@ -520,9 +535,18 @@ fn next_revision(current: u64) -> Result<u64, PersonalizationValidationError> {
         .ok_or(PersonalizationValidationError::RevisionOutOfRange)
 }
 
+#[cfg(test)]
 fn decode_personalization(bytes: &[u8]) -> Result<PersonalizationV1, PersonalizationStoreError> {
     let state: PersonalizationV1 = serde_json::from_slice(bytes)?;
     state.validate()?;
+    Ok(state)
+}
+
+fn decode_personalization_for_open(
+    bytes: &[u8],
+) -> Result<PersonalizationV1, PersonalizationStoreError> {
+    let state: PersonalizationV1 = serde_json::from_slice(bytes)?;
+    state.validate_stored()?;
     Ok(state)
 }
 

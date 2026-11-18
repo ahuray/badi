@@ -258,7 +258,7 @@ test('Obsidian selection changes, focus loss, revocation and wrong grants cannot
 test('Obsidian automatically requests, accepts one word or all, and isolates each undo transaction', async context => {
   const { controller, view, client, tick } = await harness(context);
   await tick(250);
-  assert.deepEqual(client.requests, [{ before: 'thank you', language: 'en', explicit: false, after: '' }]);
+  assert.deepEqual(client.requests, [{ before: 'thank you', language: 'en', explicit: false, after: '', targetId: 'obs:1' }]);
   assert.equal(controller.text, ' for your time');
   assert.equal(controller.decorations[0].widget.word, ' for', 'The preview brightens what Tab takes');
   assert.equal(controller.key({ isTrusted: true, key: 'Tab' }), true);
@@ -443,7 +443,7 @@ test('Obsidian suggests mid-note with the text after the caret and inserts there
   view.state = state('thank you. See you soon', 9);
   assert.equal(controller.blockedReason(), null);
   await controller.request(false);
-  assert.deepEqual(client.requests, [{ before: 'thank you', language: 'en', explicit: false, after: '. See you soon' }]);
+  assert.deepEqual(client.requests, [{ before: 'thank you', language: 'en', explicit: false, after: '. See you soon', targetId: 'obs:1' }]);
   await controller.accept('all');
   assert.equal(view.state.doc.toString(), 'thank you for your time. See you soon');
   assert.equal(view.state.selection.main.head, 23);
@@ -526,4 +526,7 @@ test('Obsidian editors share one broker client and only the requesting editor ca
   plugin.commands.find(command => command.id === 'retry-connection').callback();
   assert.equal(clients.length, 2, 'Reconnecting replaces the one shared client');
   assert.equal(second.controller.client, clients[1]);
+  second.view.hasFocus = true;
+  await second.controller.request();
+  assert.equal(clients[1].requests.at(-1).targetId, 'obs:2', 'Each editor view gets its own stable targetId');
 });

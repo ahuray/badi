@@ -1075,3 +1075,32 @@ fn learned_words_are_read_while_a_write_holds_the_state_lock() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn degraded_authority_order_covers_screen_share_and_context_words() {
+    use crate::settings::ScreenShareMode;
+
+    let mut base = granted_settings(1);
+    base.screen_share = ScreenShareMode::Suggest;
+    base.context_words = Some(true);
+    base.context_words_off = vec![identity()];
+
+    let mut hold_share = base.clone();
+    hold_share.revision = 2;
+    hold_share.screen_share = ScreenShareMode::Hold;
+    assert!(strictly_reduces_authority(&base, &hold_share));
+    assert!(!strictly_reduces_authority(&hold_share, &base));
+
+    let mut disable_context = base.clone();
+    disable_context.revision = 2;
+    disable_context.context_words = Some(false);
+    assert!(strictly_reduces_authority(&base, &disable_context));
+    assert!(!strictly_reduces_authority(&disable_context, &base));
+
+    let mut add_off = base.clone();
+    add_off.revision = 2;
+    add_off.context_words_off.push(other_identity());
+    add_off.context_words_off.sort();
+    assert!(strictly_reduces_authority(&base, &add_off));
+    assert!(!strictly_reduces_authority(&add_off, &base));
+}

@@ -2617,8 +2617,54 @@ void unnamedIbusAdoptsOnlyObservedAppsAndNeverOpensManual() {
 
 } // namespace
 
+void alternativeListClearsAndRefusesCleanly() {
+    auto state = focusedState();
+    const auto update = explicitContext(state);
+    const auto coords = update.coordinates;
+    check(state.showSuggestion(
+              Suggestion{coords, suggestRequestId(coords), "sug-1", " for your time", 1000, " for"},
+              100),
+          "initial suggestion shown");
+    const auto altReq = state.requestAlternative(100, kOwnedPanel);
+    check(altReq.has_value(), "alternative request");
+    check(state.showAlternativeList(
+              AlternativeList{coords, altReq->controlId, "sug-1", {"much", "kindly"}, 1000},
+              101),
+          "alternative list shown");
+    check(state.alternativeList().has_value() && !state.suggestionVisible(),
+          "list replaces visible suggestion");
+    check(!state.clearSuggestionIf(coords, std::string("other-id")) && state.alternativeList().has_value(),
+          "mismatched suggestion id keeps list");
+    check(state.clearSuggestionIf(coords, std::nullopt) && !state.alternativeList().has_value(),
+          "unqualified suggestion.clear dismisses open alternative list");
+
+    check(state.showSuggestion(
+              Suggestion{coords, suggestRequestId(coords), "sug-2", " for your time", 1000, " for"},
+              102),
+          "second suggestion shown");
+    const auto altReq2 = state.requestAlternative(102, kOwnedPanel);
+    check(altReq2.has_value(), "second alternative request");
+    check(state.refuseRequest(altReq2->controlId) == RefusedRequest::Suggestion &&
+              !state.suggestionVisible(),
+          "refusing an alternative request clears the visible suggestion");
+}
+
+void unlistedTerminalsFailClosedWhileFootAndGhosttyUseTypedLine() {
+    for (const auto id : {"com.mitchellh.ghostty", "ghostty", "foot", "org.codeberg.dnkl.foot"}) {
+        check(classifyNativeApp(id) == NativeAppClass::Terminal, id);
+    }
+    for (const auto id : {"kitty", "alacritty", "org.alacritty.alacritty", "konsole",
+                          "org.kde.konsole", "wezterm", "org.wezfurlong.wezterm", "ptyxis",
+                          "org.gnome.ptyxis", "gnome-terminal-server", "org.gnome.terminal",
+                          "kgx", "org.gnome.console", "xfce4-terminal", "tilix", "rio", "contour"}) {
+        check(classifyNativeApp(id) == NativeAppClass::Unavailable, id);
+    }
+}
+
 int main(int argc, char **argv) {
     const std::vector<std::pair<const char *, void (*)()>> tests{
+        {"alternative list clears and refuses cleanly", alternativeListClearsAndRefusesCleanly},
+        {"unlisted terminals fail closed", unlistedTerminalsFailClosedWhileFootAndGhosttyUseTypedLine},
         {"native app classes", nativeAppClassesAreExplicit},
         {"Chrome and Brave aliases without an observer rule",
          chromeAndBraveAliasesWithoutObserverRuleAreUnavailable},

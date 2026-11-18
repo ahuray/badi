@@ -615,6 +615,7 @@ void BadiAddon::onRefusal(const RequestRefusal &refusal) {
         case RefusedRequest::Suggestion:
             debug_.record("request_blocked", binding.state.appId(), "broker_refused");
             binding.observation.zenCommit.clear();
+            clearSuggestionUi(binding);
             // The user asked and nothing will answer: say so instead of
             // leaving "thinking" up.
             if (binding.suggestion.requestExplicit)

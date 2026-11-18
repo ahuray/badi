@@ -41,7 +41,19 @@ constexpr std::array<std::string_view, 1> kImeParityNativeApps{"libreoffice"};
 // non-observed-only rules there (ADR 0017).
 constexpr std::array<std::string_view, 2> kObservedNativeApps{"omawrite", "telegram"};
 // Terminals whose typed line and commitString were tried live.
-constexpr std::array<std::string_view, 2> kTerminalApps{"com.mitchellh.ghostty", "foot"};
+constexpr std::array<std::string_view, 4> kTerminalApps{
+    "com.mitchellh.ghostty", "ghostty", "foot", "org.codeberg.dnkl.foot"};
+
+// Other terminal emulators must fail closed instead of falling back to the
+// unknown-identity manual contract (ADR 0009).
+bool unlistedTerminalEmulator(std::string_view appId) {
+    constexpr std::array<std::string_view, 18> exact{
+        "kitty", "alacritty", "org.alacritty.alacritty", "konsole", "org.kde.konsole",
+        "wezterm", "org.wezfurlong.wezterm", "ptyxis", "org.gnome.ptyxis",
+        "gnome-terminal", "gnome-terminal-server", "org.gnome.terminal",
+        "kgx", "org.gnome.console", "xfce4-terminal", "tilix", "rio", "contour"};
+    return std::find(exact.begin(), exact.end(), appId) != exact.end();
+}
 
 // Chromium-family identities without an observer rule: other Chromium
 // browsers, channels and Flatpak ids, installed web-app windows (Wayland
@@ -158,6 +170,7 @@ NativeAppClass classifyNativeApp(std::string_view appId) {
     };
     if (!validLinuxAppId(appId) || listed(unavailable)) return NativeAppClass::Unavailable;
     if (listed(kTerminalApps)) return NativeAppClass::Terminal;
+    if (unlistedTerminalEmulator(appId)) return NativeAppClass::Unavailable;
     if (listed(kImeParityBrowsers)) return NativeAppClass::ImeParityBrowser;
     if (unobservedGeckoFamily(appId)) return NativeAppClass::Unavailable;
     if (listed(kImeParityDesktopApps) || listed(kImeParityNativeApps)) return NativeAppClass::ImeParityDesktop;
@@ -712,7 +725,14 @@ RefusedRequest SessionState::refuseRequest(std::string_view requestId) {
         return RefusedRequest::Revision;
     }
     // The context stays: only a new edit or an explicit request asks again.
-    if (lastContext_ && requestId == suggestRequestId(lastContext_->coordinates)) return RefusedRequest::Suggestion;
+    if (lastContext_) {
+        if (requestId == suggestRequestId(lastContext_->coordinates)) return RefusedRequest::Suggestion;
+        const auto altPrefix = sessionRequestId("alternative", lastContext_->coordinates) + ".";
+        if (requestId.starts_with(altPrefix) && requestId.size() > altPrefix.size()) {
+            clearSuggestion();
+            return RefusedRequest::Suggestion;
+        }
+    }
     return RefusedRequest::None;
 }
 
@@ -938,12 +958,17 @@ SessionState::authorizeCommit(const CommitPrepare &prepare,
 bool SessionState::clearSuggestionIf(
     const Coordinates &coordinates,
     const std::optional<std::string> &suggestionId) {
-    if (!visible_ || coordinates != visible_->coordinates ||
-        (suggestionId && *suggestionId != visible_->suggestionId)) {
-        return false;
+    if (visible_ && coordinates == visible_->coordinates &&
+        (!suggestionId || *suggestionId == visible_->suggestionId)) {
+        clearSuggestion();
+        return true;
     }
-    clearSuggestion();
-    return true;
+    if (alternativeList_ && coordinates == alternativeList_->coordinates &&
+        (!suggestionId || *suggestionId == alternativeList_->suggestionId)) {
+        clearSuggestion();
+        return true;
+    }
+    return false;
 }
 
 void SessionState::clearSuggestion() {

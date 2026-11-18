@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, chmod, rm, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, chmod, rm, lstat } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { once } from 'node:events';
@@ -220,6 +220,42 @@ test('editor identities, native reading lease, revocation and one-shot commits a
       '--json', JSON.stringify(englishLearningSettings));
     await until(() => recovering.connected && recovering.allowed);
     assert.equal(await recovering.suggest('thank you', { explicit: false }), ' for your time');
+    // ADR 0010: repeated edits in one note share one target_id and count as one
+    // field visit; only writing the word in a second note target promotes it.
+    await new Promise((resolveKey, rejectKey) => {
+      const proc = execFile(join(ROOT, 'target/debug/badictl'), ['style', 'key', '-'], { env: environment }, err =>
+        err ? rejectKey(err) : resolveKey());
+      proc.stdin.end(`${'ab'.repeat(16)} ${'cd'.repeat(32)}\n`);
+    });
+    const contextOnSettings = {
+      ...englishLearningSettings,
+      revision: englishLearningSettings.revision + 1,
+      context_words: true,
+    };
+    await control('settings', 'replace', '--if-revision', String(englishLearningSettings.revision),
+      '--json', JSON.stringify(contextOnSettings));
+    await until(() => recovering.connected && recovering.allowed);
+    const learnedPath = join(environment.XDG_DATA_HOME, 'badi/learned-words.json');
+    const flushOutcomes = async () => {
+      await control('pause', 'on');
+      await control('pause', 'off');
+      await until(() => recovering.connected && recovering.allowed);
+    };
+    await recovering.suggest('We met Okonkwo ', { explicit: false, targetId: 'note-1' });
+    await flushOutcomes();
+    const firstLearned = JSON.parse(await readFile(learnedPath, 'utf8'));
+    assert.equal(firstLearned.subjects.length, 1);
+    const firstNonce = firstLearned.subjects[0].nonce;
+    await recovering.suggest('Then Okonkwo ', { explicit: false, targetId: 'note-1' });
+    await flushOutcomes();
+    const sameNoteLearned = JSON.parse(await readFile(learnedPath, 'utf8'));
+    assert.equal(sameNoteLearned.subjects[0].nonce, firstNonce,
+      'Typing a name twice in the same note target must not re-count it as a second field');
+    await recovering.suggest('Then Okonkwo ', { explicit: false, targetId: 'note-2' });
+    await flushOutcomes();
+    const secondNoteLearned = JSON.parse(await readFile(learnedPath, 'utf8'));
+    assert.notEqual(secondNoteLearned.subjects[0].nonce, firstNonce,
+      'Writing the name in a second note target counts its second field visit');
     recovering.close();
     assert.equal(await exchange({ operation: 'status' }), 'READY 2');
     assert.match(await exchange({ operation: 'accept' }), /^ERROR /, 'The old preview cannot acquire a new grant');

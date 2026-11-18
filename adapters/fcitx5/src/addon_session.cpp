@@ -154,8 +154,10 @@ std::optional<ContextWindow> BadiAddon::currentContext(const Binding &binding) c
 std::optional<ContextWindow> BadiAddon::zenSurroundingWindow(const Binding &binding) const {
     if (!binding.inputContext) return std::nullopt;
     auto &input = *binding.inputContext;
+    const auto &zenApp = !binding.state.appId().empty() ? binding.state.appId()
+        : (binding.observation.unnamedIbus ? binding.observation.zenCommit.appId() : binding.state.appId());
     if (!input.hasFocus() || !binding.state.focused() ||
-        !zenPostCommitApp(binding.state.appId()) ||
+        !zenPostCommitApp(zenApp) ||
         !binding.surrounding.freshness.fresh() ||
         !allowsNativeContext(observedFieldCapabilities(input.capabilityFlags(), binding.surrounding.echo)) ||
         instance_->isComposing(&input) || hasForeignImeUi(observePanel(binding))) {
