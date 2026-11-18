@@ -4,7 +4,8 @@
 allow, a small model on your own machine suggests the next few words, finishes
 half-typed words and fixes typos. On Hyprland the suggestion shows as grey text
 at the caret; on KDE Plasma and GNOME it shows as an Fcitx candidate. Nothing
-changes until you press `Tab`.
+changes until you accept it: `Tab` takes the next word, and `Ctrl+→` (or
+clicking the Fcitx candidate) takes it all.
 
 [![CI](https://github.com/ahuray/badi/actions/workflows/ci.yml/badge.svg)](https://github.com/ahuray/badi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -16,14 +17,16 @@ changes until you press `Tab`.
 
 ## Features
 
-- **Next words as you type:** up to four words of grey text (`badi length short`
-  for one or two), in English and German by default, and French, Spanish and
+- **Next words as you type:** up to four words (`badi length short` for one or
+  two), in English and German by default, and French, Spanish and
   Portuguese when you turn them on.
 - **Typo fixes:** `teh → the` in English out of the box; German, French, Spanish,
   Italian, Dutch and Polish after `badi spelling LANG on` and that language's
   Hunspell package (`badi spelling` names it).
 - **Revise a selection:** select one line and press `Ctrl+Shift+Space` for a
-  grammar fix, a refined wording or a synonym.
+  grammar fix; press again for a refined wording, and again for a synonym of a
+  short phrase. This uses a second model, Qwen3 1.7B, that `badi revise install`
+  downloads and that starts on the first request.
 - **Private by design:** the model runs on your CPU in a service with no
   network access, and it only reads fields you allowed. See [Privacy](#privacy).
 - **Your keyboard stays yours:** Badi runs beside your Fcitx 5 input method,
@@ -63,7 +66,8 @@ on GNOME and KDE Plasma). On Omarchy or Arch Linux:
    On Omarchy, Badi is ready at once. On plain Arch, log out and back in so
    Fcitx loads the addon; on GNOME, then run `gnome-extensions enable
    badi-focus@ahuray.github.io`.
-4. Check the setup with `badi doctor`, then allow an app and start typing:
+4. Check the setup with `badi doctor`, then allow an app and start typing
+   (`badi revise install` adds the model for revising a selection):
 
    ```sh
    badi app omawrite on                    # or: badi site https://example.com on
@@ -92,10 +96,10 @@ allowed, so run `badi resume` after allowing an app.
 | Key | What it does |
 | --- | --- |
 | `Tab` | Accept the next word, drawn a little brighter on Hyprland (a typo fix or revision applies whole) |
-| `Ctrl+→` | Accept the whole suggestion |
+| `Ctrl+→` | Accept the whole suggestion (also `Ctrl+Shift+Y`, or a click on the Fcitx candidate) |
 | Keep typing | Typing the suggested letters keeps the rest, with no new model call |
 | `Escape` | Dismiss |
-| `Ctrl+Shift+Space` | Ask for a suggestion. On a suggestion, list other first words to pick with `1`–`4`. On selected text, check grammar, then refine; a word or a phrase of up to three words then gets synonyms |
+| `Ctrl+Shift+Space` | Ask for a suggestion. On a suggestion, list other first words to pick with `1`–`4`. On selected text, show a grammar fix; each further press while it shows moves to a refined wording, then, for a phrase of up to three words, a synonym. `Tab` applies the one on screen |
 | `Ctrl+Shift+Tab` | In Fcitx apps, send the app a real `Tab` while Badi would take it; elsewhere it stays the app's key |
 
 Bash uses `Ctrl-X Tab` to request and accept. LibreOffice Writer uses `Alt+F7`
@@ -138,7 +142,7 @@ badi site https://example.com on    # allow a website
 badi apps blocklist                 # or: every observed app except blocked ones
                                     # (manual apps, Ghostty and foot still need badi app)
 badi languages en de fr             # the languages you write in
-badi pause                          # badi resume; badi snooze for 10 minutes in this app
+badi pause                          # badi resume; badi snooze quiets the focused app or site for 10 minutes
 badi model                          # your model, the recommendation and the choices
 badi model use gemma-3-1b           # download (pinned, hash-checked) and switch
 badi length short                   # one or two words; badi length normal for up to four
