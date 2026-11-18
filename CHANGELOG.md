@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Fixed on-demand broker startup, `badi service stop` runtime marker handling (`service-stopped` and `service-failed` in `$XDG_RUNTIME_DIR/badi/`), idle `badi doctor` and explicit CLI/panel wakeups, `badi-session` bar refreshes on broker connect/disconnect, stale `0600` `broker.sock` (`ECONNREFUSED`) recovery, Fcitx5 manual-app and pass-through key startup gating, editor cold-start generation/snapshot binding, and `bridge-stdio` concurrent EOF teardown and line buffering.
+
 - Fixed adapter `policy.status` validation rejecting `learning_allowed: true` across Fcitx5, Obsidian, Neovim and LibreOffice Writer and rejecting `fr`, `es` and `pt` `language_override` tags in Fcitx5 and `protocol/v2/schema.json`, and fixed the Bash preview builtin spinning in Bash 5.3's unpatched `rl_gather_tyi()` while a preview is shown on Ubuntu 26.04.
 
 - Verified the `badi-git` AUR package candidate lifecycle on a fresh Omarchy 4.5.0 graphical session (sequential `makepkg` builds with all offline tests passing and zero `namcap` errors, `pacman -Qkk` integrity, root `badi doctor` bytecode-clean, live Quickshell panel `model-terms` row activation and Gemma receipt recording, live Omawrite inline grey preview and Tab commit, and complete `pacman -R` removal leaving zero filesystem leftovers under `/etc`, `/usr` and `/opt`).

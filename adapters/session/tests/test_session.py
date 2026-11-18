@@ -355,6 +355,22 @@ class StyleKeyTests(unittest.TestCase):
         run_pending()
         self.assertEqual(fake.keys, [])
 
+    def test_bar_refresh_runs_on_broker_connect_and_acknowledged_disconnect_only(self):
+        refreshes = []
+        fake = FakeLink(failures=1)
+        self.addCleanup(fake.release)
+        reporter = daemon.Reporter(fake, None, backoff=(1,), refresh=lambda: refreshes.append("refresh"))
+        self.addCleanup(reporter.close)
+        self.assertFalse(reporter.publish())
+        self.assertEqual(refreshes, [], "failed idle reconnects do not refresh the bar")
+        self.assertTrue(reporter.publish())
+        self.assertEqual(refreshes, ["refresh"])
+        reporter.sleeping = True
+        self.assertTrue(reporter.publish())
+        self.assertEqual(refreshes, ["refresh"], "same-connection reports do not re-trigger connect refresh")
+        reporter._lost("broker_disconnected")
+        self.assertEqual(refreshes, ["refresh", "refresh"])
+
     def test_stored_values_are_exact_hex_pairs(self):
         try:
             import style_key

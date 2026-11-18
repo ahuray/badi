@@ -37,9 +37,14 @@ Panel {
   }
 
   onOpenedChanged: {
-    if (!opened) return
+    if (!opened) {
+      badi.startWhenOpened = false
+      return
+    }
+    badi.startWhenOpened = true
     view.reset()
     badi.refresh()
+    badi.startIfIdle()
   }
 
   Timer {

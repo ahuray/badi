@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use badi_broker::engine::{Broker, BrokerConfig};
-use badi_broker::ipc::default_socket_path;
+use badi_broker::ipc::{default_socket_path, record_service_failure};
 use badi_broker::provider::{CompletionProvider, DeterministicPhraseProvider};
 use badi_broker::{ControlPlane, server};
 
@@ -64,6 +64,22 @@ async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
             return Ok(());
         }
     };
+    let default_socket = default_socket_path().ok().as_ref() == Some(&socket_path);
+    if default_socket {
+        record_service_failure(&socket_path, false);
+    }
+    let result = run_broker(&socket_path, provider, model_directory).await;
+    if default_socket && result.as_ref().is_err_and(ExitError::is_configuration) {
+        record_service_failure(&socket_path, true);
+    }
+    result
+}
+
+async fn run_broker(
+    socket_path: &std::path::Path,
+    provider: ProviderSelection,
+    model_directory: Option<PathBuf>,
+) -> Result<(), ExitError> {
     let control_plane = Arc::new(ControlPlane::open_from_environment().map_err(|error| {
         ExitError::ControlPlane {
             name: error.startup_name(),
@@ -98,7 +114,7 @@ async fn run(arguments: Vec<OsString>) -> Result<(), ExitError> {
     if let Some(reviser) = reviser {
         broker.install_reviser(reviser);
     }
-    server::run(&socket_path, broker)
+    server::run(socket_path, broker)
         .await
         .map_err(|error| match error {
             server::ServerError::ProviderExited => ExitError::Model {
@@ -279,17 +295,24 @@ enum ExitError {
 }
 
 impl ExitError {
-    fn exit_code(&self) -> ExitCode {
-        match self {
+    fn is_configuration(&self) -> bool {
+        matches!(
+            self,
             Self::Model {
                 configuration: true,
                 ..
-            }
-            | Self::ControlPlane {
+            } | Self::ControlPlane {
                 configuration: true,
                 ..
-            } => ExitCode::from(EXIT_CONFIGURATION),
-            _ => ExitCode::FAILURE,
+            }
+        )
+    }
+
+    fn exit_code(&self) -> ExitCode {
+        if self.is_configuration() {
+            ExitCode::from(EXIT_CONFIGURATION)
+        } else {
+            ExitCode::FAILURE
         }
     }
 }

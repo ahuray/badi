@@ -169,12 +169,12 @@ test('EOF teardown, pre-closed input, idempotent close and broken output pipes s
     const done = stdio.serve({
       async onCommand(command) {
         await delay(15);
+        assert.equal(closedCount, 0, 'onClose waits until concurrent in-flight commands settle');
         stdio.writeJson({ id: command.id, ok: true });
       },
     });
     input.end('{"id":7}\n');
     await done;
-    await delay(25);
     stdio.close();
     assert.equal(closedCount, 1);
     assert.equal(chunks.join(''), '{"id":7,"ok":true}\n');

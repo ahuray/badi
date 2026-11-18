@@ -62,6 +62,10 @@ class DesktopTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name) / 'badi'
         self.directory.mkdir(mode=0o700)
+        runtime_env = patch.dict(os.environ, {'XDG_RUNTIME_DIR': self.temporary.name,
+                                              'XDG_CONFIG_HOME': str(Path(self.temporary.name) / 'config')})
+        runtime_env.start()
+        self.addCleanup(runtime_env.stop)
         # Doctor tests must not depend on this machine's installed receipts or service.
         installed = patch.object(desktop, 'install_state', return_value={
             'desktop': {'installed_at': '2026-09-26T12:00:00Z', 'commit': 'unknown', 'dirty': None, 'broker_version': None},
@@ -1839,6 +1843,88 @@ sys.exit(1)
         self.assertIsNone(identity['version'])
         with patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '0\n', '')):
             self.assertIsNone(desktop.running_broker_identity())
+
+    def test_service_stop_records_private_marker_and_start_or_restart_clears_it(self):
+        marker = self.directory / desktop.SERVICE_STOPPED
+        failed = self.directory / desktop.SERVICE_FAILED
+        failed.write_bytes(b'1\n')
+        failed.chmod(0o600)
+        with patch.object(desktop, 'service_state', return_value={'loaded': True, 'active': 'inactive', 'state': 'dead', 'autostart': False}), \
+             patch.object(desktop.subprocess, 'run') as command, \
+             contextlib.redirect_stdout(io.StringIO()):
+            desktop.main(['service', 'stop'])
+        self.assertTrue(desktop.service_stopped())
+        self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
+        self.bar.assert_called_once_with()
+        self.bar.reset_mock()
+        with patch.object(desktop, 'service_state', return_value={'loaded': True, 'active': 'active', 'state': 'running', 'autostart': False}), \
+             patch.object(desktop.subprocess, 'run') as command, \
+             contextlib.redirect_stdout(io.StringIO()):
+            desktop.main(['service', 'start'])
+        self.assertFalse(marker.exists())
+        self.assertFalse(failed.exists())
+        self.bar.assert_called_once_with()
+
+    def test_doctor_is_green_when_idle_and_omits_broker_unreachable_when_failed(self):
+        for stopped, label, note in ((False, 'idle (on demand)', 'starts on demand'),
+                                     (True, 'stopped', 'stopped with badi service stop')):
+            service = {'loaded': True, 'active': 'inactive', 'state': 'dead', 'autostart': False,
+                       **({'stopped': True} if stopped else {})}
+            with self.subTest(stopped=stopped), \
+                 patch.object(desktop, 'service_state', return_value=service), \
+                 patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+                 patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+                 patch.object(desktop, 'control', side_effect=RuntimeError('offline')):
+                report = desktop.health_report()
+            self.assertEqual(report['problems'], [])
+            self.assertTrue(any(note in line for line in report['notes']), report['notes'])
+            self.assertIn(f'Model: {label}', desktop.doctor_text(report))
+
+        # Corrupt offline settings are caught even while the service is idle.
+        bad_dir = Path(os.environ['XDG_CONFIG_HOME']) / 'badi'
+        bad_dir.mkdir(parents=True, mode=0o700)
+        bad_file = bad_dir / 'settings.json'
+        bad_file.write_text('{not json')
+        bad_file.chmod(0o600)
+        idle_service = {'loaded': True, 'active': 'inactive', 'state': 'dead', 'autostart': False}
+        with patch.object(desktop, 'service_state', return_value=idle_service), \
+             patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+             patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+             patch.object(desktop, 'control', side_effect=RuntimeError('offline')):
+            report = desktop.health_report()
+        self.assertEqual([p['code'] for p in report['problems']], ['settings_json'])
+
+        # Failed service reports startup_problem + service_failed without broker_unreachable.
+        failed_service = {'loaded': True, 'active': 'failed', 'state': 'failed', 'autostart': False}
+        with patch.object(desktop, 'service_state', return_value=failed_service), \
+             patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+             patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+             patch.object(desktop, 'startup_problem', return_value=None), \
+             patch.object(desktop, 'control', side_effect=RuntimeError('offline')):
+            codes = [p['code'] for p in desktop.health_report()['problems']]
+        self.assertEqual(codes, ['service_failed'])
+
+    def test_explicit_cli_starts_idle_broker_unless_stopped(self):
+        calls = []
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            if argv[0] == 'systemctl':
+                return subprocess.CompletedProcess(argv, 0, '', '')
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(argv, 1, '', 'error_code=io')
+            return subprocess.CompletedProcess(argv, 0, '{"paused":false}', '')
+        with patch.object(desktop, 'live_session_runtime', return_value=True), \
+             patch.object(desktop, 'service_state', return_value={'active': 'inactive', 'autostart': False}), \
+             patch.object(desktop.subprocess, 'run', side_effect=fake_run):
+            self.assertEqual(desktop.control(['status']), '{"paused":false}')
+        self.assertIn(['systemctl', '--user', 'start', desktop.SERVICE], calls)
+
+        (self.directory / desktop.SERVICE_STOPPED).write_bytes(b'1\n')
+        (self.directory / desktop.SERVICE_STOPPED).chmod(0o600)
+        with patch.object(desktop, 'live_session_runtime', return_value=True), \
+             patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, '', 'error_code=io')):
+            with self.assertRaisesRegex(RuntimeError, 'Badi is stopped'):
+                desktop.control(['status'])
 
 
 if __name__ == '__main__':

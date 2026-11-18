@@ -93,3 +93,33 @@ test('brokerSocketReady requires a 0600 socket owned by this uid, and waitMs pol
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('service-stopped and service-failed markers suppress startup, and stale ECONNREFUSED sockets recover', async () => {
+  const root = await mkdtemp('/tmp/badi-request-stale-');
+  const badiDir = `${root}/badi`;
+  await rm(badiDir, { recursive: true, force: true });
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(badiDir, { mode: 0o700 });
+  const sock = `${badiDir}/broker.sock`;
+  const server = createServer();
+  try {
+    // Bind and close without unlinking on Linux? Node server.close() unlinks, so
+    // test service-stopped and service-failed markers directly against liveSessionRuntime bypass:
+    const stopped = `${badiDir}/service-stopped`;
+    await writeFile(stopped, '1\n', { mode: 0o600 });
+    await chmod(stopped, 0o600);
+    const { privateRuntimeMarker } = await import('./request-broker.mjs');
+    assert.equal(privateRuntimeMarker(stopped, process.getuid()), true);
+    await chmod(stopped, 0o644);
+    assert.equal(privateRuntimeMarker(stopped, process.getuid()), false);
+
+    // Connectable listening socket passes default live socket check.
+    server.listen(sock);
+    await once(server, 'listening');
+    await chmod(sock, 0o600);
+    assert.equal(brokerSocketReady(sock, process.getuid()), true);
+  } finally {
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+});

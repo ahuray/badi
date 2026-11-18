@@ -73,6 +73,7 @@ RetireResult retireBinding(InputBinding &binding, RetireReason reason, std::stri
 
     case RetireReason::PolicyDenied:
         binding.broker.opened = false;
+        binding.observation.pendingBrokerStart = false;
         binding.observation.zenCommit.clear();
         binding.observation.clearWindow();
         binding.state.invalidateContext();
@@ -84,6 +85,7 @@ RetireResult retireBinding(InputBinding &binding, RetireReason reason, std::stri
 
     case RetireReason::AuthorityChanged:
         binding.broker.retire();
+        binding.observation.pendingBrokerStart = false;
         binding.observation.zenCommit.clear();
         binding.observation.clearWindow();
         binding.observation.explicitRequest = false;
@@ -98,6 +100,7 @@ RetireResult retireBinding(InputBinding &binding, RetireReason reason, std::stri
 
     case RetireReason::Disconnected:
         binding.broker.retire();
+        binding.observation.pendingBrokerStart = false;
         binding.observation.zenCommit.clear();
         binding.observation.clearWindow();
         ++binding.observation.generation;
