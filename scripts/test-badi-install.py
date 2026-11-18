@@ -424,6 +424,17 @@ class ReceiptTests(unittest.TestCase):
             self.assertEqual(receipt['files']['.local/lib/badi/accessibility/daemon.py']['commit'], 'a' * 40)
             self.assertFalse(receipt['files']['.local/lib/badi/accessibility/daemon.py']['dirty'])
             self.assertEqual(receipt['source'], first)
+            self.assertNotIn('partial_components', receipt)
+
+            # A partial (--broker-only) update records partial_components, and a full update clears it.
+            broker = home / '.local/lib/badi/badi-broker'
+            broker.write_bytes(b'broker v2')
+            badi_install.write_receipt(home, 'desktop', {'commit': 'b' * 40, 'dirty': False}, [broker])
+            partial = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(partial['partial_components'], ['.local/lib/badi/accessibility/daemon.py'])
+            badi_install.write_receipt(home, 'desktop', {'commit': 'b' * 40, 'dirty': False}, [broker, observer])
+            aligned = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertNotIn('partial_components', aligned)
 
 
 class RepairTests(unittest.TestCase):
