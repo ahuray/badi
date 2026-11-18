@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { mkdtemp, writeFile, readFile, readdir, stat, rm, mkdir, symlink, copyFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,6 +11,25 @@ import { createLabServer } from './server.mjs';
 import { readModelArtifact } from './model-artifact.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
+
+let cachedRuntimeBinary = null;
+async function writeIdleRuntime(destination) {
+  if (!cachedRuntimeBinary) {
+    const buildDir = await mkdtemp(join(tmpdir(), 'badi-idle-runtime-'));
+    try {
+      const built = join(buildDir, 'idle-runtime');
+      execFileSync(process.env.CC || 'cc', ['-O2', '-x', 'c', '-', '-o', built], {
+        input: '#include <unistd.h>\nint main(void) { for (;;) pause(); }\n',
+      });
+      cachedRuntimeBinary = await readFile(built);
+    } finally {
+      await rm(buildDir, { recursive: true, force: true });
+    }
+  }
+  await writeFile(destination, cachedRuntimeBinary, { mode: 0o700 });
+  await chmod(destination, 0o700);
+  return hash(cachedRuntimeBinary);
+}
 const input = { schema: 'badi.prediction-suite.v1', name: 'CLI fixture', cases: [{ id: 'append-case', language: 'en',
   prefix: 'PRIVATE_PREFIX docum', context: 'PRIVATE_CONTEXT', style: 'PRIVATE_STYLE', expected: ['ent'] }] };
 const config = { id: 'context', mode: 'context', budget_ms: 550, max_tokens: 8, cache_prompt: true, temperature: 0, seed: 42 };
@@ -409,8 +429,7 @@ createInterface({input:process.stdin}).on('line',line=>{const request=JSON.parse
 test('observed worker forwards only the descriptor flag and reaps a verified nested runtime on model mismatch', async t => {
   const f = await fixture(t); const artifact = await artifactFixture(f.directory);
   const runtimePath = join(f.directory, 'llama-server');
-  await copyFile('/usr/bin/sleep', runtimePath); await chmod(runtimePath, 0o700);
-  const digest = hash(await readFile(runtimePath));
+  const digest = await writeIdleRuntime(runtimePath);
   for (const mode of ['default', 'matched', 'mismatch']) {
     const worker = new ObservedWorker({ artifact: mode === 'default' ? null : artifact, executable: process.execPath,
       args: ['--input-type=module', '-e', artifactWorkerFixture, runtimePath, digest, mode], startupMs: 2000 });

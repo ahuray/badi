@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Fixed adapter `policy.status` validation rejecting `learning_allowed: true` across Fcitx5, Obsidian, Neovim and LibreOffice Writer and rejecting `fr`, `es` and `pt` `language_override` tags in Fcitx5 and `protocol/v2/schema.json`, and fixed the Bash preview builtin spinning in Bash 5.3's unpatched `rl_gather_tyi()` while a preview is shown on Ubuntu 26.04.
+
 - Verified the `badi-git` AUR package candidate lifecycle on a fresh Omarchy 4.5.0 graphical session (sequential `makepkg` builds with all offline tests passing and zero `namcap` errors, `pacman -Qkk` integrity, root `badi doctor` bytecode-clean, live Quickshell panel `model-terms` row activation and Gemma receipt recording, live Omawrite inline grey preview and Tab commit, and complete `pacman -R` removal leaving zero filesystem leftovers under `/etc`, `/usr` and `/opt`).
 
 - Fixed `scripts/install-desktop.py` failing on fresh or post-purge boots when `systemctl --user reset-failed` encounters an unloaded unit (ignoring non-failed units via `ActiveState != failed`), and fixed `badi doctor`'s `gnome_extension_state()` missing GDBus's `"Object does not exist at path"` error string on GNOME 48 so `gnome_extension_inactive` is reported when `badi-focus@ahuray.github.io` is disabled.

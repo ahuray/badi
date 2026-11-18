@@ -63,9 +63,12 @@ Suggestion suggestionFor(const ContextUpdate &update, std::uint64_t expiresAt = 
 
 void stateTransitionsAndIdentity() {
     check(supportedWritingLanguage("en-US") && supportedWritingLanguage("de-DE") &&
-          supportedWritingLanguage("fa"), "tested writing language tags must reach manual invocation");
-    check(!supportedWritingLanguage("end") && !supportedWritingLanguage("fr") &&
-          !supportedWritingLanguage("de_"), "unknown language tags must not be treated as supported");
+          supportedWritingLanguage("fa") && supportedWritingLanguage("fr") &&
+          supportedWritingLanguage("es-ES") && supportedWritingLanguage("pt-BR"),
+          "tested writing language tags must reach manual invocation");
+    check(!supportedWritingLanguage("end") && !supportedWritingLanguage("it") &&
+          !supportedWritingLanguage("nl") && !supportedWritingLanguage("pl") &&
+          !supportedWritingLanguage("de_"), "unknown or spelling-only language tags must not be treated as supported");
     check(validLinuxAppId("omawrite"), "Omawrite must be supported");
     check(validLinuxAppId("com.github.xournalpp.xournalpp"),
           "canonical Xournal++ id must be supported");
@@ -973,10 +976,12 @@ void literalTabIsARealTabWhereBadiWouldTakeTab() {
               !manualTabRequests(NativeEditPath::Observed, true, true, eligible) &&
               !manualTabRequests(NativeEditPath::TypedLine, true, true, eligible),
           "no edit path, an observed field or a typed line never requests on Tab");
+    check(manualTabRequests(manual, true, true, captureContextWindow("merci beaucoup", 14, 14, false, "fr")),
+          "European writing languages reach manual Tab invocation");
     check(!manualTabRequests(manual, true, true, std::nullopt) &&
               !manualTabRequests(manual, true, true, captureContextWindow("thank you", 5, 5, false, "en")) &&
               !manualTabRequests(manual, true, true, captureContextWindow("   ", 3, 3, false, "en")) &&
-              !manualTabRequests(manual, true, true, captureContextWindow("thank you", 9, 9, false, "fr")),
+              !manualTabRequests(manual, true, true, captureContextWindow("thank you", 9, 9, false, "it")),
           "an unreadable, mid-text, blank or unsupported-language context keeps the chord the app's");
 
     const auto sent = [](const char *name) { return ::fcitx::Key(name); };
@@ -1163,10 +1168,11 @@ void tabReasonNamesTheFirstBlocker() {
               "field_denied" &&
               reason([](RequestFacts &facts) { facts.fresh = false; }, std::nullopt) == "no_fresh_context",
           "policy, foreign IME, field purpose and freshness are named in that order");
-    check(tabDecisionReason(eligible, std::nullopt) == "context_unavailable" &&
+    check(tabDecisionReason(eligible, captureContextWindow("merci", 5, 5, true, "fr")) == "eligible" &&
+              tabDecisionReason(eligible, std::nullopt) == "context_unavailable" &&
               tabDecisionReason(eligible, captureContextWindow("thank you all", 9, 9, true, "en")) ==
                   "caret_not_at_end" &&
-              tabDecisionReason(eligible, captureContextWindow("thank you", 9, 9, true, "fr")) ==
+              tabDecisionReason(eligible, captureContextWindow("thank you", 9, 9, true, "it")) ==
                   "language_unsupported" &&
               tabDecisionReason(eligible, captureContextWindow(" \n", 2, 2, true, "en")) == "empty_context",
           "the context names why Tab does not request");
@@ -1290,14 +1296,18 @@ void nativePolicyMustBeCoherent() {
             {"activation", "always"}, {"context_allowed", true}, {"display_allowed", true},
             {"suggestions_allowed", true}, {"learning_allowed", false}, {"reason", "matched_rule"}}}};
     check(strictPolicyStatus(allowed.dump()), "a coherent app grant must pass");
-    for (const auto &language : {"en", "de", "fa", "fr", "de-DE"}) {
+    for (const auto &language : {"en", "de", "fa", "fr", "es", "pt", "it", "de-DE"}) {
         auto preference = allowed;
         preference["payload"]["language_override"] = language;
         const auto tag = std::string_view(language);
-        check(strictPolicyStatus(preference.dump()) == (tag == "en" || tag == "de" || tag == "fa"),
-              "policy overrides use only canonical promoted language tags");
+        check(strictPolicyStatus(preference.dump()) ==
+                  (tag == "en" || tag == "de" || tag == "fa" || tag == "fr" || tag == "es" || tag == "pt"),
+              "policy overrides accept all six writing languages and reject spelling-only or regional tags");
     }
-    for (const auto key : {"context_allowed", "display_allowed", "paused", "learning_allowed"}) {
+    auto learning = allowed;
+    learning["payload"]["learning_allowed"] = true;
+    check(strictPolicyStatus(learning.dump()), "an allowed subject with style learning on must pass");
+    for (const auto key : {"context_allowed", "display_allowed", "paused"}) {
         auto invalid = allowed;
         invalid["payload"][key] = !invalid["payload"][key].get<bool>();
         check(!strictPolicyStatus(invalid.dump()), "contradictory native permission must fail");
@@ -1313,6 +1323,12 @@ void nativePolicyMustBeCoherent() {
     for (const auto key : {"context_allowed", "display_allowed", "suggestions_allowed"})
         denied["payload"][key] = false;
     check(strictPolicyStatus(denied.dump()), "a coherent denial is a valid response");
+    auto deniedLearning = denied;
+    deniedLearning["payload"]["learning_allowed"] = true;
+    check(!strictPolicyStatus(deniedLearning.dump()), "learning_allowed without suggestions_allowed must fail");
+    auto deniedLanguage = denied;
+    deniedLanguage["payload"]["language_override"] = "fr";
+    check(!strictPolicyStatus(deniedLanguage.dump()), "language_override without suggestions_allowed must fail");
     auto snoozed = denied;
     snoozed["payload"]["reason"] = "snoozed";
     check(strictPolicyStatus(snoozed.dump()), "a snooze is a known denial");

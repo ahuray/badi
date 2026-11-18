@@ -425,7 +425,9 @@ bool tabEligibleContext(const std::optional<ContextWindow> &context) {
 
 bool supportedWritingLanguage(std::string_view language) {
     const auto primary = language.substr(0, language.find('-'));
-    return validLanguageTag(language) && (primary == "en" || primary == "de" || primary == "fa");
+    return validLanguageTag(language) &&
+           (primary == "en" || primary == "de" || primary == "fa" ||
+            primary == "fr" || primary == "es" || primary == "pt");
 }
 
 std::optional<ContextWindow> captureContextWindow(std::string_view text,

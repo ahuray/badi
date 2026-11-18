@@ -1,15 +1,36 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 import { LabWorker, parseProcessStat, processIdentity } from './worker.mjs';
 import { ObservedWorker } from './run.mjs';
-import { copyFile, mkdtemp, chmod, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, chmod, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Each worker owns a real detached runtime process. A disposable copy of the
-// system sleep executable keeps fixtures small while exercising the production
-// PID, parent, process-group, executable-path and executable-digest checks.
+let cachedRuntimeBinary = null;
+async function writeIdleRuntime(destination) {
+  if (!cachedRuntimeBinary) {
+    const buildDir = await mkdtemp(join(tmpdir(), 'badi-idle-runtime-'));
+    try {
+      const built = join(buildDir, 'idle-runtime');
+      execFileSync(process.env.CC || 'cc', ['-O2', '-x', 'c', '-', '-o', built], {
+        input: '#include <unistd.h>\nint main(void) { for (;;) pause(); }\n',
+      });
+      cachedRuntimeBinary = await readFile(built);
+    } finally {
+      await rm(buildDir, { recursive: true, force: true });
+    }
+  }
+  await writeFile(destination, cachedRuntimeBinary, { mode: 0o700 });
+  await chmod(destination, 0o700);
+  return createHash('sha256').update(cachedRuntimeBinary).digest('hex');
+}
+
+// Each worker owns a real detached runtime process. A tiny standalone pause()
+// executable keeps fixtures small while exercising the production PID, parent,
+// process-group, executable-path and executable-digest checks without depending
+// on multicall /usr/bin/sleep argv[0] or /proc/self/exe dispatch.
 const fixture = `
 import { createInterface } from 'node:readline';
 import { spawn } from 'node:child_process';
@@ -85,9 +106,7 @@ async function makeWorker(t, mode = 'normal', options = {}) {
   const { workerClass = LabWorker, ...workerOptions } = options;
   const directory = await mkdtemp(join(tmpdir(), 'badi-lab-worker-'));
   const runtimePath = join(directory, 'llama-server');
-  await copyFile('/usr/bin/sleep', runtimePath);
-  await chmod(runtimePath, 0o700);
-  const runtimeDigest = createHash('sha256').update(await readFile(runtimePath)).digest('hex');
+  const runtimeDigest = await writeIdleRuntime(runtimePath);
   const worker = new workerClass({ executable: process.execPath,
     args: ['--input-type=module', '-e', fixture, mode, runtimePath, runtimeDigest], startupMs: 1000, ...workerOptions });
   worker.fixtureRuntimePidPath = runtimePath + '.pid';
@@ -350,8 +369,7 @@ test('the revision worker takes no launch option and bounds a request by the tim
   const directory = await mkdtemp(join(tmpdir(), 'badi-lab-revision-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const runtimePath = join(directory, 'llama-server');
-  await copyFile('/usr/bin/sleep', runtimePath); await chmod(runtimePath, 0o700);
-  const digest = createHash('sha256').update(await readFile(runtimePath)).digest('hex');
+  const digest = await writeIdleRuntime(runtimePath);
   // The broker fixes the revision launch: batch 64 and copied weights, which
   // the default prediction expectations (16, mapped) would refuse.
   const script = join(directory, 'revision-worker.mjs');

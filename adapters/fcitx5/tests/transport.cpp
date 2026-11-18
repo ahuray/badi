@@ -239,7 +239,7 @@ private:
 
     static Json capabilities() {
         return Json::array({"context", "suggestion", "commit.dispatched_unverified", "text_replacement", "control",
-                            "policy", "long_reading_window", "selection_revision"});
+                            "policy", "long_reading_window", "selection_revision", "alternative_list"});
     }
 
     Runtime runtime_;

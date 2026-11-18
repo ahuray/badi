@@ -786,6 +786,7 @@ impl PolicyStatusPayload {
                     || self.activation != Activation::Never)
             || !self.context_allowed && self.activation == Activation::Always
             || self.context_words && !self.suggestions_allowed
+            || self.language_override.is_some() && !self.suggestions_allowed
         {
             Err(ProtocolError::InvalidPayload)
         } else {

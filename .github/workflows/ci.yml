@@ -80,7 +80,7 @@ env:
 jobs:
   rust:
     name: Rust 1.99
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out source
@@ -115,7 +115,7 @@ jobs:
 
   rust-msrv:
     name: Rust MSRV 1.85
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out source
@@ -130,7 +130,7 @@ jobs:
 
   omarchy-plugin:
     name: Omarchy plugin / pinned Arch host
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
       image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
@@ -165,7 +165,7 @@ jobs:
 
   aur-package:
     name: AUR package / pinned Arch
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     container:
       image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
@@ -214,7 +214,7 @@ jobs:
 
   debian-package:
     name: Package / ${{ matrix.name }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -256,7 +256,7 @@ jobs:
   # builds and tests it against the current snapshot.
   fcitx5:
     name: Fcitx5 addon / pinned Arch
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
       image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
@@ -300,7 +300,7 @@ jobs:
 
   neovim:
     name: Neovim plugin / pinned Arch
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     container:
       image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
@@ -329,7 +329,7 @@ jobs:
 
   libreoffice:
     name: LibreOffice extension / pinned Arch
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     container:
       image: archlinux:base-20260830.0.582275@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a
@@ -359,7 +359,7 @@ jobs:
 
   checks:
     name: Repository checks / Node 24
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       # Full history: the agent-rules gate inspects every commit's diff
@@ -393,7 +393,7 @@ jobs:
   # Repository checks, and the Rust job runs the models' broker tests.
   formal:
     name: Formal model / TLC
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out source

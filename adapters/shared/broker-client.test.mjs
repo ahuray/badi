@@ -193,6 +193,33 @@ test('editor identities, native reading lease, revocation and one-shot commits a
     assert.equal(recoveredGrant.text, ' for');
     await assert.rejects(recovering.authorize('all'), /expired/);
     recovering.report(recoveredGrant, 'applied');
+    // Style learning (`learning_allowed: true`) and `language_overrides` (`fr`, `es`, `pt`)
+    // must round-trip cleanly over the real broker wire without disconnecting editors.
+    const currentSettings = await control('settings', 'show', '--json');
+    const learningSettings = {
+      ...currentSettings,
+      revision: currentSettings.revision + 1,
+      style_learning: true,
+      writing_languages: ['en', 'de', 'fr', 'es', 'pt'],
+      language_overrides: { obsidian: 'fr', bash: 'pt' },
+      subjects: currentSettings.subjects.map(subject => subject.identity.app_id === 'obsidian'
+        ? { ...subject, permissions: { ...subject.permissions, learn: 'allow', retention: { mode: 'bounded', days: 30 } } }
+        : subject),
+    };
+    await control('settings', 'replace', '--if-revision', String(currentSettings.revision),
+      '--json', JSON.stringify(learningSettings));
+    await until(() => recovering.connected && recovering.allowed);
+    assert.equal(await recovering.suggest('thank you', { explicit: false }), null,
+      'French language_override reaches the broker without disconnecting the client');
+    const englishLearningSettings = {
+      ...learningSettings,
+      revision: learningSettings.revision + 1,
+      language_overrides: { obsidian: 'en' },
+    };
+    await control('settings', 'replace', '--if-revision', String(learningSettings.revision),
+      '--json', JSON.stringify(englishLearningSettings));
+    await until(() => recovering.connected && recovering.allowed);
+    assert.equal(await recovering.suggest('thank you', { explicit: false }), ' for your time');
     recovering.close();
     assert.equal(await exchange({ operation: 'status' }), 'READY 2');
     assert.match(await exchange({ operation: 'accept' }), /^ERROR /, 'The old preview cannot acquire a new grant');

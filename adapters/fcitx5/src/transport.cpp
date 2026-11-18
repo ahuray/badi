@@ -106,7 +106,12 @@ bool policyStatus(const Json &value, const Json &payload) {
     auto permissions = payload;
     if (permissions.is_object() && permissions.contains("language_override")) {
         const auto &language = permissions["language_override"];
-        if (language != "en" && language != "de" && language != "fa") return false;
+        static constexpr std::array languages{"en", "de", "fa", "fr", "es", "pt"};
+        if (!language.is_string() ||
+            std::find(languages.begin(), languages.end(), language.get<std::string>()) == languages.end() ||
+            payload.value("suggestions_allowed", Json()) != true) {
+            return false;
+        }
         permissions.erase("language_override");
     }
     if (permissions.is_object() && permissions.contains("context_words")) {
@@ -135,13 +140,13 @@ bool policyStatus(const Json &value, const Json &payload) {
         "editor_focused", "snoozed"};
     if (!payload["reason"].is_string() ||
         std::find(reasons.begin(), reasons.end(), payload["reason"].get<std::string>()) == reasons.end()) return false;
-    if (payload["learning_allowed"] == true ||
+    if ((payload["learning_allowed"] == true && payload["suggestions_allowed"] == false) ||
         (payload["suggestions_allowed"] == true &&
          (payload["context_allowed"] == false || payload["display_allowed"] == false)) ||
         (payload["context_allowed"] == false && payload["activation"] == "always")) return false;
     return payload["paused"] == false || (payload["activation"] == "never" &&
         payload["context_allowed"] == false && payload["display_allowed"] == false &&
-        payload["suggestions_allowed"] == false);
+        payload["suggestions_allowed"] == false && payload["learning_allowed"] == false);
 }
 
 bool sessionControlResult(const Json &value, const Json &payload) {
