@@ -1,5 +1,5 @@
 pkgname=badi-git
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='Local writing suggestions for Linux, Omarchy first'
 arch=('x86_64')
