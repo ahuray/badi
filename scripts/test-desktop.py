@@ -1355,6 +1355,9 @@ class DesktopTests(unittest.TestCase):
         # A unit stopped for good, or skipped, fails at once.
         self.assertIn('stopped unexpectedly', run({'active': 'failed'}, [0, 0])[1])
         self.assertIn('WAYLAND_DISPLAY', run({'active': 'inactive', 'condition_unmet': True}, [0, 0])[1])
+        # Stopped during the wait, or exited without a restart: not starting.
+        self.assertIn('badi service stop', run({'active': 'inactive', 'stopped': True}, [0, 0])[1])
+        self.assertIn('stopped unexpectedly', run({'active': 'inactive'}, [0, 0])[1])
 
     def test_a_failure_without_a_known_error_names_the_next_step(self):
         with patch.object(desktop, 'startup_problem', return_value=None), \

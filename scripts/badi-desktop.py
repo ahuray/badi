@@ -2471,6 +2471,12 @@ def start_failure(state):
     if state.get("condition_unmet"):
         return ("Badi's service did not start: systemd skipped it because the user manager has no "
                 "WAYLAND_DISPLAY. Start it from the Wayland session, or run badi doctor.")
+    if state.get("stopped"):
+        return "Badi was stopped (badi service stop) before the model answered. Run: badi service start"
+    # Type=simple has settled once systemctl start returns, and an
+    # auto-restart gap stays `activating`, so `inactive` means it exited.
+    if state.get("active") == "inactive":
+        return failure_reason("The model service stopped while it started.")
     if state.get("active") == "failed" or private_marker(SERVICE_FAILED):
         return failure_reason("The model service failed to start.")
     return None
