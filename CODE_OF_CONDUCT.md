@@ -61,9 +61,12 @@ representative at an online or offline event.
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported privately to the project maintainers through
 [GitHub private reporting](https://github.com/ahuray/badi/security/advisories/new)
-(the same private channel described in
-[SECURITY.md](SECURITY.md#reporting-a-vulnerability)). All complaints will be
-reviewed and investigated promptly and fairly.
+with `[Conduct]` in the title (the same private channel described in
+[SECURITY.md](SECURITY.md#reporting-a-vulnerability)). Conduct reports submitted
+there are kept confidential and closed privately; they are never published as
+advisories, credited publicly, or subject to vulnerability disclosure
+timelines. All complaints will be reviewed and investigated promptly and
+fairly.
 
 All community leaders are obligated to respect the privacy and security of the
 reporter of any incident.

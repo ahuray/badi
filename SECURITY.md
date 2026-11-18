@@ -25,13 +25,17 @@ public issue, discussion or pull request for an unpatched vulnerability.
 
 Include in your report:
 
-- the affected component and commit (`badi doctor` prints the installed commit
-  without exposing typed text),
+- the affected component and commit (`badi doctor` names the installed commit;
+  strip any `Snoozed:` line, private site origins or personal paths),
 - your Linux distribution, Wayland compositor / desktop and target app version
   when relevant,
 - minimal reproduction steps using **disposable text only** (never include real
   prose, credentials or `badi debug on --text` output), and
 - which boundary below was crossed and its impact.
+
+Code of Conduct reports submitted through the same private draft form (with
+`[Conduct]` in the title) are handled confidentially under
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) and are never published as advisories.
 
 ## Response expectations
 
