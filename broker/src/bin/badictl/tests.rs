@@ -822,3 +822,20 @@ fn probe_response_requires_a_consistent_result() {
         ));
     }
 }
+
+#[tokio::test]
+async fn connect_distinguishes_absent_socket_io_from_unsafe_socket() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("absent.sock");
+    let err = super::connect(&missing)
+        .await
+        .expect_err("absent socket fails");
+    assert_eq!(err.to_string(), "io");
+
+    let regular_file = dir.path().join("not-a-socket.sock");
+    std::fs::write(&regular_file, b"plain").expect("write regular file");
+    let unsafe_err = super::connect(&regular_file)
+        .await
+        .expect_err("non-socket fails");
+    assert_eq!(unsafe_err.to_string(), "unsafe_socket");
+}

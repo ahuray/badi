@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Mapped absent/refused `badictl` socket opens to `error_code=io` (keeping `unsafe_socket` fail-closed), waited for broker socket readiness in `badi service start|restart`, and scoped desktop component-skew checks to unverified partial installs (`--broker-only` / `--only` restores) and versioned binaries so unchanged static files on a full install do not report false skew.
+
 - Restored `PanelKeyCatcher` focus in the Omarchy panel when `siteField` is rebuilt, destroyed, submitted, or superseded by `ConfirmDialog`, canonicalized bracketed IPv6 origins and preserved existing style-learning grants across `SettingsModel.js`, `DesktopPanel.qml` and `badi-desktop.py`, recovered prior file commits on `badi_install.py restore` and reported mixed component commits in `badi doctor`, and included `.js` panel modules in the `verify-badi` feature-map check.
 
 - Isolated Fcitx5 type-through carry, held Tab, unnamed-IBus Zen rebase and selection-revision state across field/window/sensitive boundaries, cleared open `AlternativeList` popups on `suggestion.clear` and broker `error` refusals, classified unlisted terminal emulators as `Unavailable`, self-healed pre-terminal-exclusion `learned-words.json`, `style.json` and `personalization.json` records on startup, purged `learned-words.json` on explicit subject blocks, bound editor sessions to per-note/per-buffer `target_id`s and connection `AdapterKind`, and aligned Rust settings deserialization and degraded-mode authority checks with the v2 schema.

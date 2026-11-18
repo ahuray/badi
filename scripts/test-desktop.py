@@ -1952,6 +1952,7 @@ sys.exit(1)
         receipts = home / '.local/state/badi/receipts'
         receipts.mkdir(parents=True)
         version = 'badi-broker 0.1.0 commit=' + 'b' * 40 + ' dirty=false'
+        ctl_version = 'badictl 0.1.0 commit=' + 'a' * 40 + ' dirty=false'
         for name, payload in (
             ('desktop', {
                 'schema': 'badi.install-receipt.v1', 'installer': 'desktop',
@@ -1959,7 +1960,8 @@ sys.exit(1)
                 'source': {'commit': 'b' * 40, 'dirty': False},
                 'files': {
                     desktop.INSTALLED_BROKER: {'sha256': 'f' * 64, 'version': version, 'commit': 'b' * 40, 'dirty': False},
-                    '.local/lib/badi/accessibility/daemon.py': {'sha256': 'e' * 64, 'commit': 'a' * 40, 'dirty': False},
+                    '.local/lib/badi/badictl': {'sha256': 'd' * 64, 'version': ctl_version, 'commit': 'a' * 40, 'dirty': False},
+                    '.local/lib/badi/accessibility/daemon.py': {'sha256': 'e' * 64, 'commit': '1' * 40, 'dirty': False},
                 },
             }),
             ('omarchy-ui', {

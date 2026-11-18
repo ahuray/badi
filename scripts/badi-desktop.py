@@ -320,12 +320,10 @@ def control(arguments, endpoint=None, *, input_text=None):
                             input=input_text, capture_output=True, text=True, timeout=8)
     if result.returncode == 0:
         return result.stdout
-    # Only a connection refusal/absence may cold-start an idle session broker;
-    # broker rejections, conflicts and protocol errors must propagate as-is.
+    # Only a missing/refused socket (`error_code=io`) may cold-start an idle
+    # session broker; unsafe sockets, rejections and protocol errors fail closed.
     stderr = result.stderr.strip()
-    connect_failed = (not stderr
-                      or stderr.startswith(("error_code=io", "error_code=unsafe_socket",
-                                            "error_code=missing_runtime_dir", "error_code=invalid_runtime_dir")))
+    connect_failed = not stderr or stderr.startswith("error_code=io")
     if (connect_failed and default_endpoint and _START_ON_DEMAND
             and live_session_runtime(endpoint.parent)):
         if service_stopped(endpoint.parent):
@@ -688,11 +686,15 @@ def install_state():
             state[name] = document
             continue
         entry_state = {"installed_at": document.get("installed_at"), **document["source"]}
-        commits = sorted({item["commit"] for item in document["files"].values()
-                          if isinstance(item, dict) and isinstance(item.get("commit"), str)
-                          and (item["commit"] == "unknown" or re.fullmatch(r"[0-9a-f]{40}", item["commit"]))})
-        if len(commits) > 1 or (commits and commits != [document["source"].get("commit")]):
-            entry_state["component_commits"] = commits
+        versioned_commits = sorted({item["commit"] for item in document["files"].values()
+                                    if isinstance(item, dict) and "version" in item
+                                    and isinstance(item.get("commit"), str)
+                                    and (item["commit"] == "unknown" or re.fullmatch(r"[0-9a-f]{40}", item["commit"]))})
+        partial = document.get("partial_components")
+        if isinstance(partial, list) and partial:
+            entry_state["partial_components"] = partial
+        if len(versioned_commits) > 1 or (versioned_commits and versioned_commits != [document["source"].get("commit")]):
+            entry_state["component_commits"] = versioned_commits
         if name == "desktop":
             expected = document["files"].get(INSTALLED_BROKER)
             entry_state["broker_version"] = expected.get("version") if isinstance(expected, dict) else None
@@ -931,9 +933,12 @@ def _health_report():
                          "action": "Run badi service restart after an installation; otherwise reinstall with scripts/install-desktop.py."})
     desktop_receipt = install.get("desktop")
     if isinstance(desktop_receipt, dict) and "error" not in desktop_receipt:
-        if desktop_receipt.get("component_commits"):
+        if desktop_receipt.get("partial_components"):
+            report["notes"].append("Only part of the desktop install was updated (such as --broker-only); "
+                                   "run scripts/install-desktop.py to align the native addon and helpers.")
+        elif desktop_receipt.get("component_commits"):
             short = ", ".join(item[:7] if item != "unknown" else item for item in desktop_receipt["component_commits"])
-            report["notes"].append(f"Installed desktop files span multiple source commits ({short}); "
+            report["notes"].append(f"Installed desktop binaries span multiple source commits ({short}); "
                                    "run scripts/install-desktop.py to align every component.")
         desk_commit = desktop_receipt.get("commit")
         if isinstance(desk_commit, str) and re.fullmatch(r"[0-9a-f]{40}", desk_commit):
@@ -1049,7 +1054,9 @@ def doctor_text(report):
     installed = report.get("install", {}).get("desktop") or {}
     if installed.get("commit"):
         suffix = " (modified)" if installed.get("dirty") else ""
-        if installed.get("component_commits"):
+        if installed.get("partial_components"):
+            suffix += " (partial)"
+        elif installed.get("component_commits"):
             short = ", ".join(item[:7] if item != "unknown" else item for item in installed["component_commits"])
             suffix += f" (mixed: {short})"
         lines.append(f"  Installed source: {installed['commit']}{suffix}")
@@ -2442,6 +2449,8 @@ def service_command(arguments):
             if service_state()["active"] == "failed":
                 subprocess.run(["systemctl", "--user", "reset-failed", SERVICE], check=True, timeout=4)
         subprocess.run(["systemctl", "--user", arguments[0], SERVICE], check=True, timeout=15)
+        if arguments[0] in ("start", "restart") and live_session_runtime():
+            wait_for_broker()
         refresh_bar()
         print(json.dumps(service_state()))
     else:

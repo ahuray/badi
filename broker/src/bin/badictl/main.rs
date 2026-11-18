@@ -1154,13 +1154,17 @@ enum CliError {
     #[error("connection_closed")]
     ConnectionClosed,
     #[error("frame")]
-    Frame(#[from] badi_broker::ipc::FrameError),
+    Frame(badi_broker::ipc::FrameError),
     #[error("handshake")]
     Handshake,
+    #[error("invalid_runtime_dir")]
+    InvalidRuntimeDir,
     #[error("io")]
     Io(#[from] std::io::Error),
     #[error("inconsistent_overview")]
     InconsistentOverview,
+    #[error("missing_runtime_dir")]
+    MissingRuntimeDir,
     #[error("no_active_session")]
     NoActiveSession,
     #[error("no_suggestion")]
@@ -1184,6 +1188,20 @@ enum CliError {
     },
     #[error("unexpected_response")]
     UnexpectedResponse,
+    #[error("unsafe_socket")]
+    UnsafeSocket,
+}
+
+impl From<badi_broker::ipc::FrameError> for CliError {
+    fn from(error: badi_broker::ipc::FrameError) -> Self {
+        match error {
+            badi_broker::ipc::FrameError::Io(io_error) => Self::Io(io_error),
+            badi_broker::ipc::FrameError::UnsafeSocket => Self::UnsafeSocket,
+            badi_broker::ipc::FrameError::MissingRuntimeDir => Self::MissingRuntimeDir,
+            badi_broker::ipc::FrameError::InvalidRuntimeDir => Self::InvalidRuntimeDir,
+            other => Self::Frame(other),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -384,8 +384,10 @@ def write_receipt(home, installer, source, files, now=None):
             entries.update(previous["files"])
     except (OSError, ValueError):
         pass
+    verified_keys = set()
     for target in dict.fromkeys(Path(item) for item in files):
         key, digest = home_relative(home, target), file_sha256(target)
+        verified_keys.add(key)
         if isinstance(entries.get(key), dict) and entries[key].get("sha256") == digest:
             continue  # Bytes this run found already installed keep their recorded identity.
         entry = {"sha256": digest, "installed_at": installed_at,
@@ -394,8 +396,10 @@ def write_receipt(home, installer, source, files, now=None):
             entry["version"] = binary_version(target)
             entry.update(version_identity(entry["version"]))
         entries[key] = entry
+    unverified_libs = sorted(key for key in entries if key not in verified_keys and key.startswith(".local/lib/"))
     receipt = {"schema": SCHEMA, "installer": installer, "installed_at": installed_at,
                "source": {"commit": source["commit"], "dirty": source["dirty"]},
+               **({"partial_components": unverified_libs} if unverified_libs else {}),
                "files": dict(sorted(entries.items()))}
     store(path, receipt)
     return path
@@ -454,6 +458,12 @@ def refresh_restored_receipts(home, keys, previous_receipts=None):
                     receipt["source"] = {"commit": sole,
                                          "dirty": any(bool(item.get("dirty")) for item in files.values()
                                                       if isinstance(item, dict))}
+            restored_set = set(keys)
+            untouched_libs = sorted(key for key in files if key.startswith(".local/lib/") and key not in restored_set)
+            if untouched_libs and any(key.startswith(".local/lib/") for key in restored_set):
+                receipt["partial_components"] = untouched_libs
+            else:
+                receipt.pop("partial_components", None)
             store(path, receipt)
 
 
