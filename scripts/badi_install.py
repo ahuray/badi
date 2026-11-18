@@ -401,7 +401,7 @@ def write_receipt(home, installer, source, files, now=None):
     return path
 
 
-def refresh_restored_receipts(home, keys):
+def refresh_restored_receipts(home, keys, previous_receipts=None):
     """Point receipt entries at bytes a restore just put back.
 
     A rolled-back broker whose receipt still names the newer build makes
@@ -410,6 +410,7 @@ def refresh_restored_receipts(home, keys):
     """
     home = Path(home)
     keys = list(dict.fromkeys(keys))
+    previous_receipts = previous_receipts or {}
     if not keys:
         return
     for installer in BACKUP_DIRECTORIES:
@@ -431,11 +432,28 @@ def refresh_restored_receipts(home, keys):
                 del files[key]
             else:
                 entry["sha256"] = file_sha256(target)
-                if target.name in VERSIONED:
+                prior = previous_receipts.get(key)
+                if isinstance(prior, dict) and isinstance(prior.get("commit"), str):
+                    entry.update({field: prior[field] for field in ("commit", "dirty", "installed_at") if field in prior})
+                    if target.name in VERSIONED:
+                        entry["version"] = binary_version(target)
+                        entry.update(version_identity(entry.get("version")))
+                elif target.name in VERSIONED:
                     entry["version"] = binary_version(target)
                     entry.update(version_identity(entry.get("version")))
+                else:
+                    entry.update(UNKNOWN)
             changed = True
         if changed:
+            commits = {item.get("commit") for item in files.values() if isinstance(item, dict)}
+            if len(commits) == 1:
+                sole = next(iter(commits))
+                if sole == "unknown":
+                    receipt["source"] = dict(UNKNOWN)
+                elif isinstance(sole, str) and re.fullmatch(r"[0-9a-f]{40}", sole):
+                    receipt["source"] = {"commit": sole,
+                                         "dirty": any(bool(item.get("dirty")) for item in files.values()
+                                                      if isinstance(item, dict))}
             store(path, receipt)
 
 
@@ -555,6 +573,7 @@ class Installation:
         self._created_at = None
         self._pinned = False
         self._announced = False
+        self._receipt_files = None
 
     def copy(self, source, target, mode=None):
         """Install a file's bytes, with its own permissions unless `mode` is given."""
@@ -632,6 +651,17 @@ class Installation:
             raise RuntimeError(f"Unexpected file ownership/type: {target}")
         return info
 
+    def _prior_receipt_entries(self):
+        if self._receipt_files is None:
+            try:
+                document = json.loads(receipt_path(self.home, self.installer).read_text())
+            except (OSError, ValueError):
+                document = None
+            self._receipt_files = (document["files"] if isinstance(document, dict)
+                                   and document.get("schema") == SCHEMA and isinstance(document.get("files"), dict)
+                                   else {})
+        return self._receipt_files
+
     def _record(self, target, action, info, installed):
         # The original is saved and the map written before the target changes,
         # so recovery stays discoverable even if this or a later step fails.
@@ -643,6 +673,11 @@ class Installation:
             saved.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(target, saved, follow_symlinks=False)
             entry["saved"] = str(saved.relative_to(directory))
+            if stat.S_ISREG(info.st_mode):
+                prior = self._prior_receipt_entries().get(key)
+                if isinstance(prior, dict) and prior.get("sha256") == file_sha256(target):
+                    entry["previous_receipt"] = {field: prior[field]
+                                                 for field in ("commit", "dirty", "installed_at") if field in prior}
         self.changes.append({**entry, **installed})
         self._store_map()
 
@@ -722,6 +757,7 @@ def restore(backup, only=()):
     prefixes = [item.rstrip("/") for item in only]
     changed = []
     restored = []
+    previous_receipts = {}
     reload_units = False
     for entry in reversed(document["changes"]):
         path = entry["path"]
@@ -757,8 +793,10 @@ def restore(backup, only=()):
                 staged.unlink(missing_ok=True)
             print(f"Restored {target}", flush=True)
             restored.append(path)
+            if isinstance(entry.get("previous_receipt"), dict):
+                previous_receipts[path] = entry["previous_receipt"]
             reload_units = reload_units or path.startswith(".config/systemd/user/")
-    refresh_restored_receipts(home, restored)
+    refresh_restored_receipts(home, restored, previous_receipts)
     if reload_units:
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, timeout=15)
         print("Reloaded user units so restored service files are what systemd reads.", flush=True)

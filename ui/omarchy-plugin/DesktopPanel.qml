@@ -364,7 +364,7 @@ Item {
       else if (!info.spelling) notes.push(info.name + ": suggestions only")
       var entry = report[code]
       if (info.spelling && code !== "en" && entry && typeof entry.dictionary !== "string")
-        notes.push("⚠ " + info.name + " needs sudo pacman -S " + (entry.package || "its hunspell dictionary"))
+        notes.push("⚠ " + info.name + " needs " + (entry.install || ("sudo pacman -S " + (entry.package || "its hunspell dictionary"))))
     })
     return codes.length === 0 ? "No language: Badi suggests and corrects nothing"
       : notes.length > 0 ? notes.join(" · ") : "Suggestions and typo fixes in each"
@@ -433,9 +433,9 @@ Item {
     return SettingsModel.siteIdentity(text)
   }
 
-  function setSite(text, decision) {
+  function setSite(target, decision) {
     if (!canChange) return false
-    var identity = siteIdentity(text)
+    var identity = SettingsModel.isBrowserIdentity(target) ? target : siteIdentity(target)
     if (!identity) {
       actionMessage = "Enter an exact site such as https://mail.example.com"
       actionFailed = true
@@ -459,17 +459,29 @@ Item {
   }
 
   function toggleStyleTarget(target) {
+    if (!canChange) return
     var nextDays = target.learning ? null : target.days
-    change(function(document) {
-      SettingsModel.setSubjectLearning(document, target.identity, nextDays, supportedApps)
-    }, nextDays ? target.label + ": style samples kept for " + nextDays + " days"
+    var document = client.cloneSettings()
+    if (!SettingsModel.setSubjectLearning(document, target.identity, nextDays, supportedApps)) {
+      actionMessage = "Could not update style learning for " + target.label
+      actionFailed = true
+      return
+    }
+    actionMessage = ""
+    client.replaceSettings(document, nextDays ? target.label + ": style samples kept for " + nextDays + " days"
       : target.label + ": style learning off · samples deleted")
   }
 
   function setAppLanguage(appId, label, code) {
-    change(function(document) {
-      SettingsModel.setLanguageOverride(document, appId, code)
-    }, code === "auto" ? label + ": language automatic" : label + ": " + languageInfo(code).english)
+    if (!canChange) return
+    var document = client.cloneSettings()
+    if (!SettingsModel.setLanguageOverride(document, appId, code)) {
+      actionMessage = "Could not update language for " + label
+      actionFailed = true
+      return
+    }
+    actionMessage = ""
+    client.replaceSettings(document, code === "auto" ? label + ": language automatic" : label + ": " + languageInfo(code).english)
   }
 
   function appLanguageDetail(override, writing) {
@@ -872,7 +884,7 @@ Item {
       var installed = typeof entry.dictionary === "string"
       list.push({key: "spelling_" + code, section: "Spelling", kind: "toggle", label: languageInfo(code).english,
         detail: code === "en" ? "Built in" : installed ? "Dictionary " + entry.dictionary
-          : "Needs sudo pacman -S " + (entry.package || "its hunspell dictionary"),
+          : "Needs " + (entry.install || ("sudo pacman -S " + (entry.package || "its hunspell dictionary"))),
         warn: on && !installed && code !== "en", checked: on, enabled: canChange,
         activate: function() { root.setSpelling(code, !on) }})
     })
@@ -900,8 +912,8 @@ Item {
       list.push({key: "site_" + rule.origin, section: "Websites", kind: "site", label: rule.origin,
         detail: rule.allowed ? "Allowed · enter blocks · x removes" : "Blocked · enter allows · x removes",
         checked: rule.allowed, enabled: canChange,
-        activate: function() { root.setSite(rule.origin, rule.allowed ? "block" : "allow") },
-        remove: function() { root.setSite(rule.origin, null) }})
+        activate: function() { root.setSite(rule.identity, rule.allowed ? "block" : "allow") },
+        remove: function() { root.setSite(rule.identity, null) }})
     })
     list.push({key: "site_add", section: "Websites", kind: "field", label: "Add a site",
       detail: "Enter allows · Shift+Enter blocks", enabled: canChange})

@@ -583,7 +583,8 @@ resolves, and [`fcitx_event.h`](src/fcitx_event.h) includes the event-source
 header only where it exists. The literal-Tab chord is matched on the key as
 the frontend sent it (Tab or ISO_Left_Tab under exactly Ctrl and Shift),
 because 5.1.7's `Key::normalize()` turns Ctrl+Shift+Tab into Ctrl+Tab. No
-other difference is known; neither older version has run in a live session.
+other difference is known; Fcitx 5.1.12 has run in live Debian 13 Plasma 6 and
+GNOME 48 sessions, while 5.1.7 (Ubuntu 24.04) has run in container checks only.
 
 | Command | Covers |
 | --- | --- |

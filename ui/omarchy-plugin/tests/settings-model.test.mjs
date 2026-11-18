@@ -12,7 +12,7 @@ const SettingsModel = vm.runInNewContext(`${source.replace(/^\.pragma library\n/
   WRITING_ORDER, PANEL_WRITING_ORDER, SPELLING_ORDER, DEFAULT_RETENTION_DAYS, MAX_SUBJECTS, BROWSERS,
   isObject, objectValue, hasBoolean, boolValue, integerValue,
   isIdentity, isTerminalIdentity, compareIdentities, isOptionalSetting, isSettingsDocument,
-  status, appAdapter, appIdentity, siteIdentity, identityLabel,
+  status, appAdapter, appIdentity, originText, siteIdentity, identityLabel,
   allows, learns, learningDays, subjectRule, appRule, appEnabled, siteRules, anySiteEnabled, anyAppEnabled,
   withLanguage, putSpelling, putWriting, putRule,
   setSubjectLearning, styleTargets,
@@ -294,4 +294,42 @@ test('per-app language overrides set European languages, preserve terminal Persi
   assert.equal(SettingsModel.setLanguageOverride(doc, 'telegram', 'auto'), true);
   assert.equal('language_overrides' in doc, false);
   assert.equal(SettingsModel.isSettingsDocument(doc), true);
+});
+
+test('siteIdentity and originText round-trip canonical DNS, IPv4 and bracketed IPv6 origins', () => {
+  const loopback6 = SettingsModel.siteIdentity('http://[0:0:0:0:0:0:0:1]:8080/');
+  assert.deepEqual(plain(loopback6), {
+    kind: 'browser_origin',
+    adapter: 'chromium',
+    scheme: 'http',
+    host: '::1',
+    port: 8080,
+  });
+  assert.equal(SettingsModel.originText(loopback6), 'http://[::1]:8080');
+  assert.deepEqual(plain(SettingsModel.siteIdentity(SettingsModel.originText(loopback6))), plain(loopback6));
+
+  const doc6 = SettingsModel.siteIdentity('https://[2001:0db8:0:0:1:0:0:1]');
+  assert.equal(doc6.host, '2001:db8::1:0:0:1');
+  assert.equal(SettingsModel.originText(doc6), 'https://[2001:db8::1:0:0:1]');
+
+  const mapped = SettingsModel.siteIdentity('http://[::ffff:127.0.0.1]:3000');
+  assert.equal(mapped.host, '::ffff:127.0.0.1');
+  assert.equal(SettingsModel.originText(mapped), 'http://[::ffff:127.0.0.1]:3000');
+
+  const ipv4 = SettingsModel.siteIdentity('http://127.0.0.1:8080');
+  assert.equal(ipv4.host, '127.0.0.1');
+  assert.equal(SettingsModel.originText(ipv4), 'http://127.0.0.1:8080');
+
+  for (const invalid of [
+    'https://::1:8080',
+    'https://[2001:db8:::1]',
+    'https://[2001:db8:1]',
+    'https://..',
+    'https://12345',
+    'https://0x7f000001',
+    'https://-bad.example.com',
+    'https://example.com.',
+  ]) {
+    assert.equal(SettingsModel.siteIdentity(invalid), null, `accepted invalid origin ${invalid}`);
+  }
 });

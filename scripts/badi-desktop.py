@@ -5,6 +5,7 @@ import contextlib
 import datetime
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 import re
@@ -503,7 +504,9 @@ def gnome_extension_state():
         return None
     if result.returncode == 0:
         return "ready" if result.stdout.startswith("ubtussb 1 ") else "other_version"
-    return "absent" if any(phrase in result.stderr for phrase in ("Unknown", "No such", "does not exist")) else None
+    absent_markers = ("Unknown", "No such", "does not exist", "UnknownObject", "UnknownInterface",
+                      "UnknownMethod", "ServiceUnknown", "NameHasNoOwner")
+    return "absent" if any(phrase in result.stderr for phrase in absent_markers) else None
 
 
 def observer_probe(endpoint, expected_pid):
@@ -675,15 +678,25 @@ def running_broker_identity():
 def install_state():
     state = {}
     expected = None
-    for name in ("desktop", "editors"):
+    for name in ("desktop", "editors", "omarchy-ui"):
         document = receipt(name)
-        if document is None or "error" in document:
+        if document is None:
+            if name != "omarchy-ui":
+                state[name] = None
+            continue
+        if "error" in document:
             state[name] = document
             continue
-        state[name] = {"installed_at": document.get("installed_at"), **document["source"]}
+        entry_state = {"installed_at": document.get("installed_at"), **document["source"]}
+        commits = sorted({item["commit"] for item in document["files"].values()
+                          if isinstance(item, dict) and isinstance(item.get("commit"), str)
+                          and (item["commit"] == "unknown" or re.fullmatch(r"[0-9a-f]{40}", item["commit"]))})
+        if len(commits) > 1 or (commits and commits != [document["source"].get("commit")]):
+            entry_state["component_commits"] = commits
         if name == "desktop":
             expected = document["files"].get(INSTALLED_BROKER)
-            state[name]["broker_version"] = expected.get("version") if isinstance(expected, dict) else None
+            entry_state["broker_version"] = expected.get("version") if isinstance(expected, dict) else None
+        state[name] = entry_state
     try:
         running = running_broker_identity()
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -916,6 +929,22 @@ def _health_report():
     elif running.get("sha256_matches_receipt") is False or running.get("version_matches_receipt") is False:
         problems.append({"code": "broker_build_mismatch", "message": "The running broker is not the build recorded by the last desktop installation.",
                          "action": "Run badi service restart after an installation; otherwise reinstall with scripts/install-desktop.py."})
+    desktop_receipt = install.get("desktop")
+    if isinstance(desktop_receipt, dict) and "error" not in desktop_receipt:
+        if desktop_receipt.get("component_commits"):
+            short = ", ".join(item[:7] if item != "unknown" else item for item in desktop_receipt["component_commits"])
+            report["notes"].append(f"Installed desktop files span multiple source commits ({short}); "
+                                   "run scripts/install-desktop.py to align every component.")
+        desk_commit = desktop_receipt.get("commit")
+        if isinstance(desk_commit, str) and re.fullmatch(r"[0-9a-f]{40}", desk_commit):
+            for other, script in (("editors", "scripts/install-editors.py"),
+                                  ("omarchy-ui", "scripts/install-omarchy-ui.py")):
+                other_receipt = install.get(other)
+                other_commit = other_receipt.get("commit") if isinstance(other_receipt, dict) else None
+                if (isinstance(other_commit, str) and re.fullmatch(r"[0-9a-f]{40}", other_commit)
+                        and other_commit != desk_commit):
+                    report["notes"].append(f"Installed {other} files are at {other_commit[:7]} while desktop is at "
+                                           f"{desk_commit[:7]}; run {script} to align them.")
     dropped = install.get("dropped_lines") or []
     if dropped:
         problems.append({"code": "install_lines_dropped",
@@ -1019,7 +1048,11 @@ def doctor_text(report):
                                       False: "not installed"}.get(report.get("session_helper", {}).get("loaded"), "unknown")]
     installed = report.get("install", {}).get("desktop") or {}
     if installed.get("commit"):
-        lines.append(f"  Installed source: {installed['commit']}" + (" (modified)" if installed.get("dirty") else ""))
+        suffix = " (modified)" if installed.get("dirty") else ""
+        if installed.get("component_commits"):
+            short = ", ".join(item[:7] if item != "unknown" else item for item in installed["component_commits"])
+            suffix += f" (mixed: {short})"
+        lines.append(f"  Installed source: {installed['commit']}{suffix}")
     for problem in problems:
         lines.extend(["", f"{problem['code']}: {problem['message']}", f"  Next: {problem['action']}"])
     for note in report["notes"]:
@@ -1285,13 +1318,25 @@ def refresh_bar():
         pass
 
 
+def _grant_preserving_learning(identity, existing, enabled):
+    permissions = badi_install.grant("allow" if enabled else "block")
+    if (enabled and not is_terminal_identity(identity) and isinstance(existing, dict)
+            and isinstance(existing.get("permissions"), dict)
+            and existing["permissions"].get("learn") == "allow"
+            and isinstance(existing["permissions"].get("retention"), dict)
+            and existing["permissions"]["retention"].get("mode") == "bounded"):
+        permissions["learn"] = "allow"
+        permissions["retention"] = dict(existing["permissions"]["retention"])
+    return permissions
+
+
 def set_app(document, app, enabled):
     identity = app_identity(app)
     subject = next((item for item in document["subjects"] if item["identity"] == identity), None)
     if subject is None:
         subject = {"identity": identity}
         document["subjects"].append(subject)
-    subject["permissions"] = badi_install.grant("allow" if enabled else "block")
+    subject["permissions"] = _grant_preserving_learning(identity, subject, enabled)
     document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
 
 
@@ -1798,7 +1843,8 @@ def rule_state(permissions):
 
 def origin_text(identity):
     default = 443 if identity["scheme"] == "https" else 80
-    return f"{identity['scheme']}://{identity['host']}" + ("" if identity["port"] == default else f":{identity['port']}")
+    host = f"[{identity['host']}]" if ":" in identity["host"] else identity["host"]
+    return f"{identity['scheme']}://{host}" + ("" if identity["port"] == default else f":{identity['port']}")
 
 
 def rule_list(document, kind):
@@ -1817,11 +1863,23 @@ def rule_list(document, kind):
 
 def site_identity(value):
     parsed = urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise RuntimeError("Invalid origin port") from error
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
         raise RuntimeError("Use an exact http(s) origin without a path or credentials")
+    if ":" in parsed.hostname:
+        try:
+            address = ipaddress.IPv6Address(parsed.hostname)
+        except ValueError as error:
+            raise RuntimeError("Invalid IPv6 origin host") from error
+        host = f"::ffff:{address.ipv4_mapped}" if address.ipv4_mapped else address.compressed
+    else:
+        host = parsed.hostname.encode("idna").decode("ascii")
     identity = {"kind": "browser_origin", "adapter": "chromium", "scheme": parsed.scheme,
-                "host": parsed.hostname.encode("idna").decode("ascii"),
-                "port": parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)}
+                "host": host,
+                "port": port if port is not None else (443 if parsed.scheme == "https" else 80)}
     if not 1 <= identity["port"] <= 65535:
         raise RuntimeError("Invalid origin port")
     return identity
@@ -1833,7 +1891,7 @@ def set_site(document, value, enabled):
     if subject is None:
         subject = {"identity": identity}
         document["subjects"].append(subject)
-    subject["permissions"] = badi_install.grant("allow" if enabled else "block")
+    subject["permissions"] = _grant_preserving_learning(identity, subject, enabled)
     document["subjects"].sort(key=lambda item: identity_key(item["identity"]))
 
 

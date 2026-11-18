@@ -24,6 +24,7 @@ Item {
   // A text input owns the keyboard; the host's key catcher steps aside.
   readonly property bool editing: search.activeFocus || siteInputFocused
   property bool siteInputFocused: false
+  property bool restoreSiteFocus: false
   property Item siteInput: null
   // What the "Add a site" field holds, kept when its row is rebuilt.
   property string siteDraft: ""
@@ -35,7 +36,19 @@ Item {
   // shows nothing new keeps this list, so no delegate is rebuilt.
   property var rows: []
   readonly property var latestRows: controller.rows()
-  onLatestRowsChanged: if (!KeyModel.sameRows(rows, latestRows)) rows = latestRows
+  onLatestRowsChanged: {
+    if (!KeyModel.sameRows(rows, latestRows)) {
+      var keepSiteFocus = siteInput !== null && siteInput.activeFocus === true
+      restoreSiteFocus = keepSiteFocus
+      rows = latestRows
+      if (restoreSiteFocus) {
+        restoreSiteFocus = false
+        siteInputFocused = false
+        siteInput = null
+        editingFinished()
+      }
+    }
+  }
   Component.onCompleted: rows = latestRows
   readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.45)
@@ -55,6 +68,7 @@ Item {
     search.text = ""
     siteDraft = ""
     if (siteInput) siteInput.text = ""
+    restoreSiteFocus = false
     siteInputFocused = false
     siteInput = null
     flick.contentY = 0
@@ -109,10 +123,12 @@ Item {
   }
   onCursorChanged: rememberCursor()
   onRowsChanged: { cursor = KeyModel.follow(rows, cursorKey, cursor); rememberCursor() }
-  // Expanding or collapsing starts again at the top.
+  // Expanding or collapsing starts again at the top; opening the confirmation
+  // dialog returns keyboard focus from any inline input to the key catcher.
   Connections {
     target: view.controller
     function onShowAllChanged() { view.cursor = -1; view.chip = 0; flick.contentY = 0 }
+    function onConfirmingChanged() { if (view.controller.confirming && view.editing) view.editingFinished() }
   }
 
   // ---- Header: hero, activity, usage, history, search -----------------------
@@ -584,12 +600,17 @@ Item {
                 font.pixelSize: Style.font.bodySmall
                 Component.onCompleted: {
                   text = view.siteDraft
+                  var reclaim = view.restoreSiteFocus
+                  view.restoreSiteFocus = false
                   view.siteInput = siteField
+                  if (reclaim) siteField.forceActiveFocus()
                   view.siteInputFocused = activeFocus
                 }
                 Component.onDestruction: if (view.siteInput === siteField) {
+                  var hadFocus = view.siteInputFocused || siteField.activeFocus
                   view.siteInputFocused = false
                   view.siteInput = null
+                  if (hadFocus && !view.restoreSiteFocus) view.editingFinished()
                 }
                 onTextChanged: view.siteDraft = text
                 onActiveFocusChanged: {
@@ -601,7 +622,10 @@ Item {
                   }
                 }
                 Keys.onReturnPressed: function(event) {
-                  if (controller.setSite(text, (event.modifiers & Qt.ShiftModifier) ? "block" : "allow")) text = ""
+                  if (controller.setSite(text, (event.modifiers & Qt.ShiftModifier) ? "block" : "allow")) {
+                    text = ""
+                    view.editingFinished()
+                  }
                 }
                 Keys.onEscapePressed: { text = ""; view.editingFinished() }
                 Accessible.name: "Website to allow or block"

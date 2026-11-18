@@ -164,87 +164,16 @@ apt package of a missing dictionary.
 
 ## Tested with
 
-Live graphical VM trials in Debian 13.7 (QEMU/KVM `-m 8192 -smp 6`, standard
-VGA, local `gemma-3-1b-pt-q4_k_m.gguf` on pinned `llama-b11840`, disposable text,
-`badi debug on --text`):
+Live Debian 13.7 Wayland VM sessions (local `gemma-3-1b-pt-q4_k_m.gguf` on
+pinned `llama-b11840`, Fcitx 5.1.12, Rust 1.85.1 `.deb`):
 
-- **KDE Plasma 6.3.6 Wayland** (2026-11-16, `8e6dfab` + `install-desktop.py`
-  `reset_failed` fix, `kwin_wayland` 6.3.6, Fcitx 5.1.12 Virtual Keyboard,
-  built `.deb` on Rust `1.85.1` / `libfcitx5core-dev` `5.1.12-2` with 9/9 `ctest`
-  passing, upgraded from `170c91a`):
-  - `WAYLAND_DISPLAY=wayland-0` reached `systemd --user` before
-    `graphical-session.target`; `badi-accessibility.service`,
-    `badi-session.service` and `badi-broker.service` started cleanly and
-    `badi doctor` exited 0 (`Field observer: ready · KWin (KDE Plasma 6)`).
-    (Note: `badi-session`'s portal `BindShortcuts` opens Plasma's
-    `systemsettings kcm_keys` prompt on first registration when shortcuts are
-    unbound.)
-  - **Observed Chromium `156.0.8078.79`** (`--temp-profile --password-store=basic --force-renderer-accessibility=complete`
-    alone — no `--ozone-platform=wayland` or `--enable-wayland-ime` required):
-    served `127.0.0.1` `<textarea>` suggested in Fcitx's panel (`display:
-    "panel"`, `rendered: false`), `Tab` committed `following` with zero
-    wrong-field edits and type-through carried the remainder; `<input
-    type="password">` (`field_denied`) and password-labelled text
-    (`sensitive_field`) sent zero text to the broker.
-  - **Window & lock denials:** focusing `konsole` denied `unsupported_app` /
-    `app_mismatch`; `qdbus6 org.freedesktop.ScreenSaver /ScreenSaver Lock`
-    (`kscreenlocker_greet`, `GetActive == true`) denied `desktop_locked` with
-    zero lock-screen text traced; QMP unlock resumed Chromium suggestions.
-  - **Manual native & editors:** Kate `25.04.3` (both `kate` over `dbus` and
-    `org.kde.kate` over `wayland`) and Mousepad `0.6.3` (`GTK_IM_MODULE=fcitx`)
-    each took manual `Tab` requests and `Tab` accepts cleanly; Neovim `0.10.4`
-    in Konsole (`applied`), LibreOffice Writer `25.2.3.2` UNO `Alt+F7`
-    (`adress ` → `address`, single `Ctrl+Z` restored `adress`), and GTK3
-    Writer (`libreoffice-gtk3`, `SAL_USE_VCLPLUGIN=gtk3`, `GTK_IM_MODULE=`
-    unset) observed-paragraph panel suggestion + `Tab` commit passed. Default
-    `libreoffice-qt6`/`kf6` places the paragraph at AT-SPI DFS node 883 (past
-    the 192-node `tree_limit`), and `im-config`'s `QT_IM_MODULE=fcitx` /
-    `GTK_IM_MODULE=fcitx` sends `soffice.bin` / `soffice` via `dbus` rather
-    than `libreoffice-writer` via Wayland.
-  - **Purge & `environment.d` user-local install:** graphical `apt purge -y
-    badi` + reboot left zero packaged files while preserving `~/.config/badi`
-    and `~/.local/share/badi`; running `scripts/install-desktop.py` (fixed for
-    systemd 257's `Unit ... not loaded` on `reset-failed`) + reboot caused
-    KWin-launched `fcitx5` to map `~/.local/lib/fcitx5/libbadi-fcitx5.so` via
-    `~/.config/environment.d/50-badi-fcitx5.conf`, with `badi doctor` exiting
-    0 after `badi service start`.
-  - Earlier Plasma 6.3.6 run (2026-11-03, `170c91a`) also passed the Bash
-    adapter in Konsole `25.04.2` and Kate's numbered-list digit pick.
-- **GNOME 48.7 Wayland** (2026-11-16, `8e6dfab` + `badi-desktop.py` fix rebuilt
-  into `.deb` `0.2.0+r142-1~debian13`, `gnome-shell` 48.7, `mutter` 48.7,
-  `gdm3` 48.0, `im-config -n fcitx5` 5.1.12 + `gnome-shell-extension-kimpanel`):
-  - `WAYLAND_DISPLAY=wayland-0` was exported before `graphical-session.target`;
-    before enabling `badi-focus@ahuray.github.io`, `badi doctor` exited 1
-    reporting `gnome_extension_inactive`; after `gnome-extensions enable
-    badi-focus@ahuray.github.io` and `kimpanel@kde.org`, `badi doctor` exited
-    0 (`Field observer: ready · GNOME Shell`).
-  - **Live ADR 0017 unnamed `ibus`:** Chromium `156.0.8078.79` (`--temp-profile
-    --password-store=basic --force-renderer-accessibility=complete`, Wayland
-    `text-input-v3` → Mutter IBus relay → `frontend: "ibus"`, `program() == ""`)
-    showed `awaiting_observed_field` → `inspect` (`frontend: "ibus"`)
-    resolving `chromium`, Kimpanel suggestion (`display: "panel"`, `rendered:
-    false`), clean `Tab` word commit + remainder carry, and `<input
-    type="password">` (`field_denied`) / password-labelled text
-    (`sensitive_field`) with zero password text traced.
-  - **No manual fallback:** with `org.gnome.texteditor` explicitly allowed,
-    native Wayland `gnome-text-editor` `48.3` (`GTK_IM_MODULE=` unset, unnamed
-    `ibus`) made zero broker requests (`provider_calls` unchanged) and inserted
-    literal `\t`. Under `GTK_IM_MODULE=fcitx` (`program: gnome-text-editor`),
-    manual `Tab` request and `Tab` accept landed cleanly.
-  - **Window, lock & Writer:** `org.gnome.Terminal` denied `unsupported_app` /
-    `app_mismatch`; `org.gnome.ScreenSaver.Lock` (`GetActive == true`)
-    unexported `badi-focus@ahuray.github.io` and denied `desktop_locked` with
-    zero lock-screen text traced; QMP unlock resumed Chromium suggestions.
-    Writer `25.2.3.2` UNO infobar **Replace** (`<Alt>F7` is bound by GNOME's
-    `begin-move`) + single `Ctrl+Z` undo (`adress ` → `address` → `adress`)
-    and GTK3 Writer (`SAL_USE_VCLPLUGIN=gtk3`, `GTK_IM_MODULE=` unset) unnamed
-    `ibus` observed continuation + `Tab` passed.
-  - **Graphical purge:** `apt purge -y badi` + reboot left zero packaged files
-    (and removed `badi-focus@ahuray.github.io`) while keeping
-    `~/.config/badi` and `~/.local/share/badi`.
+| Session | Verified behavior | Known boundaries |
+| --- | --- | --- |
+| KDE Plasma 6.3.6 (`kwin_wayland` 6.3.6, Fcitx 5.1.12 Virtual Keyboard) | `badi doctor` green (`ready · KWin (KDE Plasma 6)`); observed Chromium 156 panel suggestion, `Tab` commit and password/sensitive denials; `konsole` and `kscreenlocker_greet` lock denials; manual Kate 25.04 (`dbus` and `wayland`) and Mousepad 0.6; Bash in Konsole, Neovim 0.10.4, Writer 25.2 UNO `Alt+F7` + single `Ctrl+Z`, and GTK3 Writer (`SAL_USE_VCLPLUGIN=gtk3`, `GTK_IM_MODULE=` unset) observed paragraphs; `apt purge` + `environment.d` user-local install | `libreoffice-qt6` puts paragraphs past the 192-node `tree_limit`; `im-config`'s `QT_IM_MODULE`/`GTK_IM_MODULE=fcitx` routes `soffice` over `dbus`; portal `BindShortcuts` opens `kcm_keys` on first registration |
+| GNOME 48.7 (`gnome-shell` / `mutter` 48.7, `gdm3` 48.0, `im-config -n fcitx5` + Kimpanel) | `badi doctor` catches disabled `badi-focus@ahuray.github.io` and passes once enabled (`ready · GNOME Shell`); live ADR 0017 unnamed-`ibus` Chromium 156 Kimpanel suggestion, `Tab` commit and password/sensitive denials; unnamed-`ibus` `gnome-text-editor` passes `Tab` through without manual fallback (`GTK_IM_MODULE=fcitx` enables manual `Tab`); `org.gnome.Terminal` and `org.gnome.ScreenSaver` lock denials; Writer 25.2 UNO infobar Replace + `Ctrl+Z` and GTK3 Writer unnamed-`ibus` observed paragraphs; clean `apt purge` | GNOME binds `<Alt>F7` to `begin-move`, so Writer UNO uses the infobar button or a rebound shortcut |
 
-The container checks below use the pinned images that CI uses, on
-2026-10-23, without a graphical session or user service manager.
+The container checks below use the pinned CI images without a graphical session
+or user service manager.
 
 | Check | Debian 13 | Ubuntu 24.04 |
 | --- | --- | --- |
