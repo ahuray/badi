@@ -25,18 +25,25 @@ Accessibility::Accessibility(::fcitx::EventLoop &loop, Reply invalidated)
     : loop_(loop), invalidated_(std::move(invalidated)) {}
 
 Accessibility::~Accessibility() {
-    // The owner is being destroyed: release the connection, and run neither
-    // the invalidation nor a pending reply, which would call back into it.
+    // The owner is being destroyed, possibly while Fcitx's event loop shuts
+    // down and refuses its sources. Run no callback into the owner, release
+    // the sources without letting an exception leave this destructor, and
+    // always close the socket. The live disconnect() keeps its own contract.
     invalidated_ = {};
     reply_ = {};
-    quietly("closing the observer connection", [this] { disconnect(); });
+    quietly("stopping the observer timeout", [this] { if (timeout_) timeout_->setEnabled(false); });
+    quietly("stopping the observer connection", [this] { if (io_) io_->setEnabled(false); });
+    quietly("releasing the observer sources", [this] {
+        timeout_.reset();
+        io_.reset();
+    });
+    if (fd_ >= 0) ::close(std::exchange(fd_, -1));
 }
 
 void Accessibility::disconnect() {
     const bool wasConnected = fd_ >= 0 || static_cast<bool>(reply_);
-    // The descriptor is closed even when the event loop refuses a source.
-    quietly("stopping the observer timeout", [this] { if (timeout_) timeout_->setEnabled(false); });
-    quietly("stopping the observer connection", [this] { if (io_) io_->setEnabled(false); });
+    if (timeout_) timeout_->setEnabled(false);
+    if (io_) io_->setEnabled(false);
     if (fd_ >= 0) ::close(fd_);
     fd_ = -1;
     input_.clear();

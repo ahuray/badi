@@ -621,7 +621,12 @@ public:
           socketPath_(std::move(socketPath)), started_(Clock::now()) {}
 
     ~Impl() {
+        // Fcitx destroys the transport while its event loop may refuse the
+        // sources. No exception may leave this destructor, and the socket
+        // closes even when disconnect() stopped early. Live paths keep
+        // their own contract.
         quietly("closing the broker connection", [this] { disconnect(); });
+        if (fd_ >= 0) ::close(std::exchange(fd_, -1));
         quietly("releasing retired broker connections", [this] { releaseRetired(); });
     }
 
@@ -652,7 +657,7 @@ public:
     void disconnect() {
         wantConnection_ = false;
         reconnectScheduled_ = false;
-        quietly("stopping the broker reconnect timer", [this] { if (reconnectTimer_) reconnectTimer_->setEnabled(false); });
+        if (reconnectTimer_) reconnectTimer_->setEnabled(false);
         close(false);
     }
 
@@ -715,8 +720,7 @@ public:
     void close(bool notify) {
         const bool active = fd_ >= 0;
         ++connection_;
-        // The descriptor is closed even when the event loop refuses a source.
-        quietly("stopping the broker connection", [this] { if (io_) io_->setEnabled(false); });
+        if (io_) io_->setEnabled(false);
         if (dispatching_) {
             // Inside io_'s own callback the source must outlive the call, and
             // its descriptor the source: the peer sees the end now, and both
@@ -734,9 +738,8 @@ public:
         decoder_ = FrameDecoder{};
         writes_.clear();
         pendingPolicies_.clear();
-        quietly("stopping the broker policy timer", [this] { if (policyTimer_) policyTimer_->setEnabled(false); });
-        quietly("stopping the broker handshake timer",
-            [this] { if (handshakeTimeout_) handshakeTimeout_->setEnabled(false); });
+        if (policyTimer_) policyTimer_->setEnabled(false);
+        if (handshakeTimeout_) handshakeTimeout_->setEnabled(false);
         writeOffset_ = 0;
         queuedBytes_ = 0;
         if (active && notify) {
