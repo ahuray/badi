@@ -6,7 +6,9 @@ the [README](README.md) and the runbooks, open work in
 [docs/decisions](docs/decisions/). A behavior change adds one line under
 Unreleased in the same commit.
 
-## Unreleased
+## 0.3.0 (2026-11-18)
+
+- Aligned the workspace (`Cargo.toml`), root package manifest (`package.json`), Arch `PKGBUILD` and Debian packaging documentation at `0.3.0`.
 
 - Stopped `fcitx5` from aborting when it unloads Badi's addon (every `fcitx5 --replace`, such as an install, and logout): the observer client no longer runs a pending reply or invalidation into the addon being destroyed, the broker and observer connections close their sockets on teardown even when Fcitx's event loop refuses a source, and no teardown step lets an exception leave a destructor; each failed step is logged with its cause.
 
