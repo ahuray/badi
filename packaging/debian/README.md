@@ -94,23 +94,32 @@ As each desktop user, never as root:
    `Qwen3-1.7B` model) with the
    [writing-asset commands](../aur/README.md#writing-assets), which work
    unchanged on Debian and Ubuntu.
-3. Enable the session and observer units, then download and select a writing
-   model with `badi model use ID` while `badi-broker.service` is still
-   `inactive` (`badictl models writing` prints the offline catalog; if
-   `Qwen3-1.7B` is already in `~/.local/share/badi/models/`, run `systemctl
-   --user start badi-broker.service` instead — starting `badi-broker.service`
-   with no model exits 78 and marks the unit failed until a model is present and
-   `badi service start` clears the failure). The broker creates private settings
-   with every app denied:
+3. Enable the session and observer units, then download and start the
+   device-recommended writing model (`gemma-3-1b` on mains power, `qwen3-0.6b`
+   while discharging on battery; switch later on mains with `badi model use
+   gemma-3-1b`) while `badi-broker.service` is still `inactive`:
 
    ```sh
    systemctl --user daemon-reload
    systemctl --user enable --now badi-session.service badi-accessibility.service
-   # Pick one: download a model and start the broker via badi model use,
-   # or, if you already fetched Qwen3-1.7B in step 2, run: systemctl --user start badi-broker.service
-   badi model use gemma-3-1b
+   model_id=$(badictl models writing --json | python3 -c 'import json,sys; r=json.load(sys.stdin).get("recommended"); assert r, "no model fits"; print(r["id"])')
+   badi model use "$model_id"
    ```
 
+   Or, if you already fetched `Qwen3-1.7B` in step 2, start
+   `badi-broker.service` directly instead of running `badi model use` (do not
+   start `badi-broker.service` with no model in `~/.local/share/badi/models/`:
+   it exits 78 and marks the unit failed until a model is present and `badi
+   service start` clears the failure):
+
+   ```sh
+   systemctl --user daemon-reload
+   systemctl --user enable --now badi-session.service badi-accessibility.service
+   systemctl --user start badi-broker.service
+   ```
+
+   Without an installer-written `settings.json`, the broker creates private
+   settings **paused** and with every app and website denied.
    `badi-broker.service` starts on demand at later logins (`badi autostart on`
    loads it at login instead). Outside a Hyprland, KDE Plasma 6 or GNOME session the observer stops at
    once, and `badi doctor` says so instead of reporting a problem; it names
@@ -120,7 +129,8 @@ As each desktop user, never as root:
    Ubuntu, or Fcitx 5 as the Virtual Keyboard in KDE Plasma's settings. Log
    out and back in. The packaged addon sits in Fcitx's own directory, so it
    needs no environment.
-5. Run `badi doctor`, then allow an app (`badi app ID on`) and the editors
+5. Allow an app (`badi app ID on`) and the editors, unpause predictions with
+   `badi resume`, and check setup with `badi doctor`
    ([README](../../README.md#choose-where-badi-writes)).
 
 To remove it, stop and disable the three units, run `sudo apt purge badi`

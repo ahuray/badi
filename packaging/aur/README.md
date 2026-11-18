@@ -107,21 +107,41 @@ addon copies and service overrides take precedence over package files. Keep
 their installer backups; migrate deliberately instead of mixing two builds.
 The package does not delete or rewrite them.
 
-On a fresh unlocked Omarchy session with the runtime installed:
+On a fresh unlocked Omarchy session with only the runtime installed above,
+enable the helpers, download and start the device-recommended model (`gemma-3-1b`
+on mains power, `qwen3-0.6b` while discharging on battery; switch to
+`gemma-3-1b` later on mains if wanted), allow an app and unpause:
 
 ```sh
 systemctl --user daemon-reload
 systemctl --user enable --now badi-accessibility.service badi-session.service
-# Pick one: download a model and start the broker via badi model use (while badi-broker.service is still inactive),
-# or, if you already fetched Qwen3-1.7B above, run: systemctl --user start badi-broker.service
-badi model use gemma-3-1b
+model_id=$(badictl models writing --json | python3 -c 'import json,sys; r=json.load(sys.stdin).get("recommended"); assert r, "no model fits"; print(r["id"])')
+badi model use "$model_id"
 systemctl --user restart omarchy-fcitx5.service
-badi doctor
 badi app omawrite on
+badi resume
+badi doctor
 ```
 
-`badi-broker.service` starts on demand when you type in an editable field or
-ask explicitly (`badi autostart on` loads it at login instead). The broker creates private settings with access denied by default. Follow
+If you already fetched `Qwen3-1.7B` in [Writing assets](#writing-assets)
+instead, start `badi-broker.service` directly:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now badi-accessibility.service badi-session.service
+systemctl --user start badi-broker.service
+systemctl --user restart omarchy-fcitx5.service
+badi app omawrite on
+badi resume
+badi doctor
+```
+
+`badi-broker.service` starts on demand at later logins when you type in an
+editable field or ask explicitly (`badi autostart on` loads it at login
+instead). Without an installer-written `settings.json`, the broker initializes
+private settings **paused** and with every app and website denied, so `badi
+resume` (or the panel's pause switch) is required once alongside your app or
+site grants. Follow
 the [application setup and privacy controls](https://github.com/ahuray/badi/blob/main/README.md)
 for other apps and sites. Accessibility flags and desktop-wide
 `ScreenReaderEnabled` remain explicit user choices. Model readiness alone

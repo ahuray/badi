@@ -292,19 +292,22 @@ service file was restored, and updates the install receipt
    badi status
    ```
 
-2. **Choose languages and where Badi may write.** `scripts/install-desktop.py`
-   starts with only Omawrite and Xournal++ allowed; the Arch and `.deb` packages
-   start with **every app and website denied**.
+2. **Choose languages, allow apps or websites, and unpause if packaged.**
+   `scripts/install-desktop.py` starts **unpaused** with only Omawrite and
+   Xournal++ allowed; the Arch and `.deb` packages start **paused** with every
+   app and website denied.
    - **On Omarchy:** click the **b** mark in the bar (or run `badi settings`) to
      answer the one-time prompts for your writing languages and allowed websites
-     and apps.
-   - **From the terminal (any desktop):** set your languages and allow the apps
-     or websites you want:
+     and apps; on a packaged install, also turn on the pause switch (or right-click
+     **b**, or run `badi resume`).
+   - **From the terminal (any desktop):** set your languages, allow the apps or
+     websites you want, and run `badi resume` (harmless if already unpaused):
 
      ```sh
      badi languages en de
      badi app omawrite on                  # or nvim, obsidian, bash, libreoffice-writer, ...
      badi site https://example.com on      # or: badi sites blocklist (every http(s) site except blocked ones)
+     badi resume
      ```
 
 3. **Enable renderer accessibility for Chromium-based apps** (if using Chromium,
