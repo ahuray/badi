@@ -242,7 +242,7 @@ unchanged. `big` synonyms abstained (`invalid_output` in the completed run,
 file hashes and doctor receipt are in
 `output/native-trials/2026-11-12-installed-neovim-selection/`.
 These are synthesized keys, not physical keyboard presses, and this clean
-startup does not test the user's LazyVim configuration. A separate recorded
+startup does not load a full LazyVim configuration. A separate recorded
 grammar probe exposed the model's `big **cat**` offer; it was visibly marked
 and dismissed without acceptance
 (`output/native-trials/2026-11-12-installed-neovim-selection-markup/`).
@@ -283,7 +283,7 @@ scoped Hyprland captures of the disposable draft described below.
 | 0.12.6 | same installed foot/plugin route after the markup guard (broker SHA-256 `03dbe4b200e6…`) | persistent real revision model (Qwen3 1.7B) | exact `big` grammar request refused with `shape`/`invalid_output`, no preview or edit; ordinary marked grammar preview, Tab and one native undo passed |
 | 0.12.6 | installed recovery update, foot 1.28.0, `-u NORC`, `wtype` keys; same broker hash (2026-11-12) | persistent real revision model (Qwen3 1.7B) | two refused `big` requests both stayed grammar; marked `I has went` → `I have gone`, Tab and one native undo passed. Owned-window captures, exact installed hashes and clean shutdown: `output/revision-recovery/installed-live/trial-lBOV2P/`. Unavailable-model notices remain fixture evidence; desktop model files were kept intact |
 | 0.12.5 | foot, `nvim -u NONE` with the installed start package | real model | pause preview, Tab word by word, Ctrl+→, Insert-mode exit dismisses, streamed growth in the trace |
-| 0.12.5 | foot, this workstation's LazyVim through the installer's lazy.nvim spec | real model | as above, plus Ctrl+Shift+Space as an explicit request; no `output_rejected` in the trace |
+| 0.12.5 | foot, LazyVim through the installer's lazy.nvim spec | real model | as above, plus Ctrl+Shift+Space as an explicit request; no `output_rejected` in the trace |
 | 0.12.6 | Ghostty, the same LazyVim setup | real model | Tab, Ctrl+→ and Ctrl+Shift+Space |
 | 0.12.6 | Ghostty, LazyVim (2026-10-24) | real model | a markdown buffer suggested and Tab took a word; while `badi pause` held, typing sent no request and no text to the broker, and suggestions came back after `badi resume` |
 | 0.12.6 | foot, `nvim --clean` with this plugin and its bridge | real model | the word Tab takes drawn bold and brighter; Ctrl+Shift+Space on a shown suggestion gave three alternatives with new first words, then the first again; Tab took the shown word |

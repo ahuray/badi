@@ -7,10 +7,10 @@ types text, and it changes no accessibility setting or app policy.
 ## App rules
 
 Each supported Fcitx app id maps to one identity rule. The active window's
-process ([Hyprland, KWin or GNOME](#desktops)) must belong to this user, run the listed executable (from
-`/proc/PID/exe`, so a deleted or replaced binary fails) and show the listed
-window class. A rule makes a field eligible; it does not prove the app's
-editing works ([coverage](../../README.md#where-it-works)).
+process ([Hyprland, KWin or GNOME](#desktops)) must belong to the same Unix
+user, run the listed executable (from `/proc/PID/exe`, so a deleted or replaced
+binary fails) and show the listed window class. A rule makes a field eligible;
+it does not prove the app's editing works ([coverage](../../README.md#where-it-works)).
 
 | App id | Executable | Window class | Broker target |
 | --- | --- | --- | --- |
@@ -132,7 +132,7 @@ process id, app id (KWin's `resourceClass`, the Wayland app id, checked as the
 window class), window id and minimized, hidden, managed and deleted flags; no
 title, content or geometry.
 - A report counts only from the owner of `org.kde.KWin` that the bus daemon
-  says runs as this user in a process named `kwin_wayland`
+  says runs as the same user in a process named `kwin_wayland`
   (`/proc/PID/status`: distributions give KWin `CAP_SYS_NICE`, so its exe link
   is unreadable), with this run's token and a rising serial; others are
   refused. A malformed report from KWin means no window.
@@ -152,7 +152,7 @@ title, content or geometry.
 gives no process id and answers only the portal backends, so the user
 enables Badi's [extension](../gnome-shell/README.md), which answers
 `GetFocus` on gnome-shell's own bus connection.
-- At start the observer verifies the `org.gnome.Shell` owner (this user, a
+- At start the observer verifies the `org.gnome.Shell` owner (the same user, a
   process named `gnome-shell`) and follows its `FocusChanged` signal, from
   that unique name only. The extension may be enabled later.
 - Each inspection calls `GetFocus` on that unique name afresh. A missing,
@@ -577,7 +577,7 @@ apt-get install --no-install-recommends gnome-shell dbus python3-gi gir1.2-gtk-4
 
 ### Tested with
 
-Live on the development workstation (Arch Linux, Hyprland 0.56) with
+Live on an Arch Linux / Omarchy workstation (Hyprland 0.56) with
 disposable text in isolated profiles; the
 [Fcitx matrix](../fcitx5/README.md#tested-with) has suggestion and
 acceptance results per app.

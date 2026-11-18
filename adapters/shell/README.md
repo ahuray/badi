@@ -21,8 +21,8 @@ missing space get a notice instead. `TERM=dumb` fails closed.
 
 ## How it works
 
-A display-only loadable builtin, `badi-preview.so`, is compiled against this
-system's Bash and Readline headers. It draws through Readline's public display
+A display-only loadable builtin, `badi-preview.so`, is compiled against the
+host's Bash and Readline headers. It draws through Readline's public display
 hooks and never adds text to `rl_line_buffer`, reads terminal output, intercepts
 other keys or runs a command. The Bash hook is the only mutation path, through
 `READLINE_LINE`, so native undo works. Persian caret positions are counted in

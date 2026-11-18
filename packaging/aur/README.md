@@ -41,40 +41,60 @@ current; it does not replace the system frontend.
 ## Writing assets
 
 Download separately as the desktop user, never as root. `badictl hardware`
-and `badictl models writing` report fit and pinned model advice. The following
-first-install commands fetch the balanced Qwen3-1.7B model (Apache-2.0) and
-the pinned llama.cpp CPU bundle (MIT). They refuse to overwrite existing
-assets. The broker independently verifies the model, archive, executable and
-bundle manifest before launching; an arbitrary system `llama-server` is not
-interchangeable.
+and `badictl models writing` report fit and pinned model advice. Every install
+needs the pinned llama.cpp CPU bundle (`llama-b11840`, MIT), which the broker
+verifies by archive, executable and bundle-manifest hash before launching (a
+system `llama-server` is not interchangeable):
 
 ```bash
 set -euo pipefail
 umask 077
 badi_data="$HOME/.local/share/badi"
 mkdir -p "$badi_data/models" "$badi_data/runtimes/downloads"
-test ! -e "$badi_data/models/Qwen3-1.7B-Q4_K_M.gguf"
 test ! -e "$badi_data/runtimes/llama-b11840"
 test ! -e "$badi_data/runtimes/downloads/llama-b11840-bin-ubuntu-x64.tar.gz"
 badi_stage=$(mktemp -d "$badi_data/.download.XXXXXXXX")
 trap 'rm -rf -- "$badi_stage"' EXIT
-curl --fail --location --connect-timeout 20 --max-time 1800 \
-  --output "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" \
-  'https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/daeb8e2d528a760970442092f6bf1e55c3b659eb/Qwen3-1.7B-Q4_K_M.gguf'
 curl --fail --location --connect-timeout 20 --max-time 300 \
   --output "$badi_stage/llama-b11840-bin-ubuntu-x64.tar.gz" \
   'https://github.com/ggml-org/llama.cpp/releases/download/b11840/llama-b11840-bin-ubuntu-x64.tar.gz'
 (
   cd "$badi_stage"
   sha256sum --check <<'SUMS'
-d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5  Qwen3-1.7B-Q4_K_M.gguf
 5f6e72e772a1264df279d6b7a848570fdc00e5d968b72e7a917d19e07da96400  llama-b11840-bin-ubuntu-x64.tar.gz
 SUMS
   tar --extract --gzip --file llama-b11840-bin-ubuntu-x64.tar.gz --no-same-owner
 )
-mv --no-clobber "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" "$badi_data/models/"
 mv --no-clobber "$badi_stage/llama-b11840" "$badi_data/runtimes/"
 mv --no-clobber "$badi_stage/llama-b11840-bin-ubuntu-x64.tar.gz" "$badi_data/runtimes/downloads/"
+```
+
+If you are installing from a checkout with `python3 scripts/install-desktop.py`,
+stop there: the installer lists the writing models that fit your device and
+downloads the one you pick. For a packaged install (`badi-git` or `.deb`), fetch
+a writing model before starting `badi-broker.service` — either with `badi model
+use ID` (for example `badi model use gemma-3-1b`, which shows and records its
+terms first) after enabling the user units below, or by fetching the balanced
+Apache-2.0 `Qwen3-1.7B` model directly:
+
+```bash
+set -euo pipefail
+umask 077
+badi_data="$HOME/.local/share/badi"
+mkdir -p "$badi_data/models"
+test ! -e "$badi_data/models/Qwen3-1.7B-Q4_K_M.gguf"
+badi_stage=$(mktemp -d "$badi_data/.download.XXXXXXXX")
+trap 'rm -rf -- "$badi_stage"' EXIT
+curl --fail --location --connect-timeout 20 --max-time 1800 \
+  --output "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" \
+  'https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/daeb8e2d528a760970442092f6bf1e55c3b659eb/Qwen3-1.7B-Q4_K_M.gguf'
+(
+  cd "$badi_stage"
+  sha256sum --check <<'SUMS'
+d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5  Qwen3-1.7B-Q4_K_M.gguf
+SUMS
+)
+mv --no-clobber "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" "$badi_data/models/"
 ```
 
 ## User activation and removal

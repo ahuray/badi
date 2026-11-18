@@ -3,8 +3,8 @@
 Badi builds, packages and installs on Debian 13 (trixie) and Ubuntu 24.04
 LTS (noble), x86-64 only, like its pinned llama.cpp runtime.
 [build-deb.sh](build-deb.sh) builds a binary package on the release it runs
-on, and [ci.sh](ci.sh) holds the CI steps for both releases. Nothing here is
-published.
+on, and [ci.sh](ci.sh) holds the CI steps for both releases. No prebuilt `.deb`
+repository is published yet.
 
 One part of the desktop contract differs from Omarchy's: the
 [field observer](../../adapters/accessibility/README.md) runs only in a
@@ -47,7 +47,7 @@ packaging/debian/build-deb.sh      # writes target/debian/badi_<version>_amd64.d
 ```
 
 The script builds the release broker and `badictl` (Cargo fetches the locked
-crates), and the Fcitx addon against this system's Fcitx with
+crates), and the Fcitx addon against the host's Fcitx with
 `dpkg-buildflags` hardening and without `-Werror`, then runs the addon's
 tests. It computes the library dependencies with `dpkg-shlibdeps`. The
 version is `0.1.0+r<commits>.g<commit>-1~debian13` (or `~ubuntu24.04`);
@@ -90,10 +90,10 @@ As each desktop user, never as root:
    [activation](../aur/README.md#user-activation-and-removal) describes:
    files under `~/.local` and `~/.config/systemd/user` take precedence over
    the package's.
-2. Download the pinned llama.cpp runtime with the
+2. Download the pinned llama.cpp runtime and a writing model with the
    [writing-asset commands](../aur/README.md#writing-assets), which work
-   unchanged here. They also fetch an Apache-2.0 model; `badi model use ID`
-   switches later, showing a model's terms before it downloads.
+   unchanged on Debian and Ubuntu (`Qwen3-1.7B` under Apache-2.0, or `badi model
+   use ID` later, which shows a model's terms before it downloads).
 3. Start the services, which create private settings with every app denied:
 
    ```sh
@@ -119,8 +119,9 @@ and log in again. Settings, model and runtime stay in the home directory.
 
 ## Install from a checkout
 
-`python3 scripts/install-desktop.py` installs user-locally here as well,
-with the build dependencies above and no Node.js. It finds no
+`python3 scripts/install-desktop.py` installs user-locally on Debian and Ubuntu
+as well, with the build dependencies above, the pinned runtime from
+[Writing assets](../aur/README.md#writing-assets) and no Node.js. It finds no
 `omarchy-shell`, and then:
 
 - checks no lock state and never restarts Fcitx, since the desktop started

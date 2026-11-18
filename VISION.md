@@ -25,8 +25,7 @@ interaction, the exact editing authority and the policy around them.
   places, executes commands or submits text; Enter stays your action. The
   one exception you ask for explicitly: a selection you mark can be checked
   for grammar or refined, shown in full and applied only when you accept it
-  ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md),
-  user decision 2026-10-23).
+  ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md)).
 - Acceptance is explicit and one-shot. Spelling replacement is a separate,
   narrow mode that requires negotiated replacement support, an exactly bound
   range and explicit acceptance.
@@ -71,8 +70,9 @@ Persian support keeps its safety and regression gates.
 
 ## Integration order
 
-1. **Editor-owned integrations** (Obsidian, Bash Readline) own context, display,
-   the edit and native undo.
+1. **Editor-owned integrations** (Obsidian, Neovim, Bash Readline, the
+   LibreOffice Writer spelling extension) own context, display, the edit and
+   native undo.
 2. **Cooperative Fcitx5 addon** for native apps that expose surrounding text. It
    yields to foreign preedit and candidates, and its commit is dispatched,
    not verified.

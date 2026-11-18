@@ -11,10 +11,10 @@ request shape; the broker never references it. Findings live in
 
 ## Layout
 
-Source is here; everything large or local (llama.cpp builds, models, the
-Python venv, raw results, server logs) goes to the ignored data directory
-`output/llm-bench/`, or `$LLM_BENCH_DATA`. `scripts/bench_paths.py` owns
-that split; `scripts/models.json` lists every model by label, as a Hugging
+Source lives in `evaluation/llm-bench/`; everything large or local (llama.cpp
+builds, models, the Python venv, raw results, server logs) goes to the ignored
+data directory `output/llm-bench/`, or `$LLM_BENCH_DATA`. `scripts/bench_paths.py`
+owns that split; `scripts/models.json` lists every model by label, as a Hugging
 Face repository and file or as a path relative to the repository or `~`.
 
 | Path | Purpose |
@@ -76,10 +76,10 @@ extracting. `llama-roofline` only reaches the network for `inspect` of a URL;
 - **Conditions:** record `conditions.sh` before and after each run and probe
   clocks under 10 s of sustained load first, and read the sustained power
   limit (`/sys/class/powercap/intel-rapl-mmio:0/constraint_0_power_limit_uw`).
-  This laptop's firmware sets it to 15 W, so any timing names the limit it
-  ran under. On its USB-C supply the cores were also held at 0.4–2.0 GHz
-  (2026-10-18), so time on battery. Cache counts, peak memory and greedy text
-  do not depend on clocks.
+  Laptop firmware often clamps sustained CPU power (15 W on the reference
+  `i7-12700H` laptop; USB-C power also held its cores at 0.4–2.0 GHz on
+  2026-10-18), so any timing must name the limit and power source it ran under.
+  Cache counts, peak memory and greedy text do not depend on clocks.
 
 ## Checks
 

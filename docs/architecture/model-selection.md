@@ -1,6 +1,6 @@
 # Model fit and qualification
 
-How Badi decides whether a model fits this machine and whether it is good
+How Badi decides whether a model fits a device and whether it is good
 enough to recommend. Advice, discovery and qualification are separate from the
 running broker, which keeps its installed, verified model until a person
 promotes another.
@@ -78,12 +78,13 @@ promotes another.
   | Qwen3.5-4B base | i1-Q4_K_M, 2.71 GB | 4.00 | 4.07 | – / 1029 ms | 80 of 80 | 3.11 GB |
   | Gemma 3 1B pt (production) | Q4_K_M, 0.81 GB | 3.13 | 4.20 | 406 / 238 ms | 0 of 80 | 0.95 GB |
 
-  The larger models write clearly better German; English is level. This
-  laptop's firmware caps sustained CPU power at 15 W, where only Gemma 3 fits
-  the 550 ms budget; the CPU power limit, not memory bandwidth, bounds
-  generation here. Hybrid models (Qwen3.5, LFM2.5, Granite H) usually re-read
-  the whole prompt after a backspace; no cached result showed stale context.
-  Details and conditions are in the bench's README and results.
+  The larger models write clearly better German; English is level. The
+  benchmarked `i7-12700H` laptop's firmware caps sustained CPU power at 15 W,
+  where only Gemma 3 fits the 550 ms budget; the CPU power limit, not memory
+  bandwidth, bounded generation on that machine. Hybrid models (Qwen3.5, LFM2.5,
+  Granite H) usually re-read the whole prompt after a backspace; no cached
+  result showed stale context. Details and conditions are in the bench's README
+  and results.
 - **The Prediction Lab** ([qualification.rs](../../evaluation/writing/lab-worker/src/qualification.rs))
   owns discovery and qualification; the shipped broker does not contain it.
   The [Lab bridge](../../evaluation/writing/lab/device-qualification.mjs) calls
@@ -94,7 +95,7 @@ promotes another.
 | `inspect_device(cache_path)` | Fresh CPU, RAM, GPU, disk, power and memory-pressure facts (`badi.device-inspection.v1`) |
 | `evidence_identity(candidate, device, settings)` | Identities over the full candidate metadata, hardware and configuration |
 | `assess(&AssessmentInput)` | Pure assessment for explicit inputs, including another device |
-| `assess_current(candidate, settings, evidence, cache_path)` | Refresh this device, then assess; use before any local load |
+| `assess_current(candidate, settings, evidence, cache_path)` | Refresh the local device snapshot, then assess; use before any local load |
 | `rank(&[Assessment])` | Rank candidates that pass every gate, or `no_qualified_model` |
 
 Inputs are strict Serde types that reject unknown fields. A candidate records
@@ -225,8 +226,8 @@ After the hard gates, ranking is lexicographic:
 
 Harmful output fails before ranking, and speed never compensates for
 usefulness. `no_qualified_model` keeps the installed model. A result measured
-here is never relabeled as measured elsewhere, and a model benchmark qualifies
-no adapter's editing behavior.
+on one device is never relabeled as measured on another, and a model benchmark
+qualifies no adapter's editing behavior.
 
 ## Checks
 
