@@ -31,7 +31,7 @@ body:
     id: doctor
     attributes:
       label: "`badi doctor` output"
-      description: Paste the output of `badi doctor` (run `badi resume` first or delete any `Snoozed:` line, private site origins, or personal file paths). Never paste typed text or `badi debug on --text` logs; if you attach a debug trace, use content-free `badi debug on` and `badi debug log` only.
+      description: Paste the output of `badi doctor`, after deleting any `Snoozed:` line, private site origins, app ids, or personal file paths. Never paste typed text or `badi debug on --text` logs; if you also attach a `badi debug log` trace (from `badi debug on` without `--text`), note that it still records app ids and site `host=` fields, so reproduce on a disposable site or strip private hosts and app ids before pasting.
       render: text
     validations:
       required: true
@@ -55,5 +55,5 @@ body:
     attributes:
       label: Privacy check
       options:
-        - label: I checked that this issue contains no real typed prose, credentials, private site origins, personal paths, or `badi debug on --text` output.
+        - label: I checked that this issue contains no real typed prose, credentials, private site origins or `host=` entries, private app ids, personal paths, or `badi debug on --text` output.
           required: true

@@ -26,7 +26,7 @@ public issue, discussion or pull request for an unpatched vulnerability.
 Include in your report:
 
 - the affected component and commit (`badi doctor` names the installed commit;
-  strip any `Snoozed:` line, private site origins or personal paths),
+  delete any `Snoozed:` line, private site origins, app ids or personal paths),
 - your Linux distribution, Wayland compositor / desktop and target app version
   when relevant,
 - minimal reproduction steps using **disposable text only** (never include real

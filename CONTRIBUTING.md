@@ -65,15 +65,18 @@ fingerprint, caret, focus and expiry; sensitive or password fields, foreign IME
 composition, unknown authority and stale context always fail closed rather than
 guessing. Native undo is preserved — and where append-only
 [IME-parity](docs/decisions/0003-ime-parity-append-only.md) cannot guarantee
-single-step undo, that limit is stated plainly — raw keylogging, clipboard
-replacement, blind synthetic typing and remote inference are never product
-integrations (the one bounded exception is an explicitly allowed terminal's
-in-memory typed line and the tracked-typo `DEL`s when `Tab` accepts a checked
-correction, [ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md) and
+single-step undo (with one checked-correction exception that confirms the
+field, deletes the exact typo through Fcitx, commits the fix and reads the
+app's text back without synthetic keys,
 [ADR 0011](docs/decisions/0011-checked-corrections-in-append-only-apps.md)),
-and typed prose and credentials never enter logs, statistics or diagnostics
-outside an explicit, expiring `badi debug on --text` trace. Read the complete
-invariants in
+that limit is stated plainly — raw keylogging, clipboard replacement, blind
+synthetic typing and remote inference are never product integrations (the one
+bounded exception is an explicitly allowed terminal's in-memory typed line and
+the tracked-typo `DEL`s when `Tab` accepts its correction,
+[ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md)), and typed
+prose and credentials never enter logs, statistics or diagnostics outside an
+explicit, expiring `badi debug on --text` trace. Read the complete invariants
+in
 [AGENTS.md#editing-and-privacy-invariants](AGENTS.md#editing-and-privacy-invariants)
 and [VISION.md](VISION.md).
 
@@ -113,9 +116,11 @@ Every pull request is judged against
 [.github/pull_request_template.md](.github/pull_request_template.md):
 
 - **Proof artifact:** include at least one concrete proof in the PR description
-  — a command with its exit code, test output, or (required for desktop
-  input-flow changes) a Hyprland and Fcitx screenshot or recording captured
-  with disposable text in an isolated profile or scratch document.
+  — a command with its exit code, test output, or a screenshot or recording
+  from [verify-badi](.cursor/skills/verify-badi/SKILL.md) (which a desktop
+  input-flow change requires: a Hyprland and Fcitx capture showing the grey
+  suggestion and the field after accept, using disposable text in an isolated
+  profile or scratch document).
 - **Unverified boundaries:** list under `Not verified:` any app, desktop or
   hardware path you could not exercise yourself, so reviewers know what still
   needs a live trial before or after merge.
