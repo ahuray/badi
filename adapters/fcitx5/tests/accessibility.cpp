@@ -1,4 +1,5 @@
 #include "accessibility.h"
+#include "quietly.h"
 
 #include <fcitx-utils/event.h>
 #include <sys/socket.h>
@@ -242,6 +243,33 @@ void hideDuringRequest() {
     require(test.requests.size() == 2 && test.invalidations.empty(), "hide disconnected an active observation");
 }
 
+void destructionRunsNoCallbackAndClosesTheSocket() {
+    // Fcitx destroys the addon, and with it this client, while a request may
+    // be pending. Teardown must not call back into the destroyed owner, and
+    // must still close the connection the observer sees.
+    Harness test;
+    bool calledBack = false;
+    auto owned = std::make_unique<Accessibility>(test.loop, [&](const Json &) { calledBack = true; });
+    test.respond = [&](const Json &) {
+        owned.reset();
+        test.later(50'000, [&] { test.done(); });
+    };
+    require(owned->request(Json{{"op", "snapshot"}}, [&](const Json &) { calledBack = true; }),
+            "snapshot refused before teardown");
+    test.run();
+    require(!calledBack, "teardown ran a callback into its destroyed owner");
+    require(test.peerClosed, "teardown left the observer socket open");
+}
+
+void quietlyNeverThrows() {
+    static_assert(noexcept(badi::fcitx5::quietly("a step", [] {})), "quietly must be noexcept");
+    bool reached = false;
+    badi::fcitx5::quietly("a failing step", [] { throw std::runtime_error("event loop refused"); });
+    badi::fcitx5::quietly("a step throwing a non-exception", [] { throw 42; });
+    badi::fcitx5::quietly("a working step", [&] { reached = true; });
+    require(reached, "quietly did not run its step");
+}
+
 void timeoutDisconnects() {
     Harness test;
     const auto started = std::chrono::steady_clock::now();
@@ -370,6 +398,8 @@ int main() {
         hideDuringRequest();
         backpressuredHideOrdering();
         timeoutDisconnects();
+        destructionRunsNoCallbackAndClosesTheSocket();
+        quietlyNeverThrows();
         failedSendReportsOnlyByItsReturn();
         shallowNestedReply();
         for (const auto &frame : std::vector<std::string>{"{broken\n", "[]\n", "{\"schema\":\"foreign\"}\n",
@@ -381,7 +411,7 @@ int main() {
                  std::string(16'385, 'x'), std::string(16'385, 'x') + "\n"}) malformedDisconnects(frame);
         privateEndpointAndOutgoingBound();
         std::cout << "Accessibility socket: private endpoint, fragments, invalidation, one pending request, hide, timeout, "
-                     "failed send and frame bounds passed\n";
+                     "failed send, frame bounds, teardown and quiet steps passed\n";
         return 0;
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';

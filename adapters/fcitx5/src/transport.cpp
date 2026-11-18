@@ -1,4 +1,5 @@
 #include "transport.h"
+#include "quietly.h"
 
 #include "fcitx_event.h"
 #include "sanitizer.h"
@@ -620,8 +621,8 @@ public:
           socketPath_(std::move(socketPath)), started_(Clock::now()) {}
 
     ~Impl() {
-        disconnect();
-        releaseRetired();
+        quietly("closing the broker connection", [this] { disconnect(); });
+        quietly("releasing retired broker connections", [this] { releaseRetired(); });
     }
 
     bool connect() {
@@ -651,7 +652,7 @@ public:
     void disconnect() {
         wantConnection_ = false;
         reconnectScheduled_ = false;
-        if (reconnectTimer_) reconnectTimer_->setEnabled(false);
+        quietly("stopping the broker reconnect timer", [this] { if (reconnectTimer_) reconnectTimer_->setEnabled(false); });
         close(false);
     }
 
@@ -714,7 +715,8 @@ public:
     void close(bool notify) {
         const bool active = fd_ >= 0;
         ++connection_;
-        if (io_) io_->setEnabled(false);
+        // The descriptor is closed even when the event loop refuses a source.
+        quietly("stopping the broker connection", [this] { if (io_) io_->setEnabled(false); });
         if (dispatching_) {
             // Inside io_'s own callback the source must outlive the call, and
             // its descriptor the source: the peer sees the end now, and both
@@ -732,8 +734,9 @@ public:
         decoder_ = FrameDecoder{};
         writes_.clear();
         pendingPolicies_.clear();
-        if (policyTimer_) policyTimer_->setEnabled(false);
-        if (handshakeTimeout_) handshakeTimeout_->setEnabled(false);
+        quietly("stopping the broker policy timer", [this] { if (policyTimer_) policyTimer_->setEnabled(false); });
+        quietly("stopping the broker handshake timer",
+            [this] { if (handshakeTimeout_) handshakeTimeout_->setEnabled(false); });
         writeOffset_ = 0;
         queuedBytes_ = 0;
         if (active && notify) {

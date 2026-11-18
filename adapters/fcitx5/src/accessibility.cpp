@@ -1,4 +1,5 @@
 #include "accessibility.h"
+#include "quietly.h"
 #include "transport.h"
 
 #include <fcitx-utils/event.h>
@@ -24,14 +25,18 @@ Accessibility::Accessibility(::fcitx::EventLoop &loop, Reply invalidated)
     : loop_(loop), invalidated_(std::move(invalidated)) {}
 
 Accessibility::~Accessibility() {
+    // The owner is being destroyed: release the connection, and run neither
+    // the invalidation nor a pending reply, which would call back into it.
     invalidated_ = {};
-    disconnect();
+    reply_ = {};
+    quietly("closing the observer connection", [this] { disconnect(); });
 }
 
 void Accessibility::disconnect() {
     const bool wasConnected = fd_ >= 0 || static_cast<bool>(reply_);
-    if (timeout_) timeout_->setEnabled(false);
-    if (io_) io_->setEnabled(false);
+    // The descriptor is closed even when the event loop refuses a source.
+    quietly("stopping the observer timeout", [this] { if (timeout_) timeout_->setEnabled(false); });
+    quietly("stopping the observer connection", [this] { if (io_) io_->setEnabled(false); });
     if (fd_ >= 0) ::close(fd_);
     fd_ = -1;
     input_.clear();
