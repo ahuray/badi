@@ -122,6 +122,9 @@ test("a feature-map hero that the panel does not show fails", () => {
   assert.match(featureMapProblems(wrong, source)[0], /ui\/omarchy-plugin/);
   assert.deepEqual(featureMapProblems(right, source), []);
   assert.deepEqual(featureMapProblems([{ path: "README.md", text: "`HELD · SCREEN SHARED`" }], source), []);
+  // Current checkout resolves strings extracted into SettingsModel.js as well as .qml files.
+  const current = spawnSync(process.execPath, ["scripts/check-agent-rules.mjs", "--only", "feature-map"], { encoding: "utf8" });
+  assert.equal(current.status, 0, current.stderr);
 });
 
 test("the feature map before PR 179 fails, and current main passes", () => {

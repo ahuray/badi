@@ -1031,7 +1031,7 @@ if [[ -d $omarchy_root/shell ]]; then
     fail "keyboard navigation did not recover on reopen: $stepped"
 
   # Collapsing All settings directly without reset() destroys siteField and must
-  # clear siteInputFocused via Component.onDestruction.
+  # clear siteInputFocused and restore PanelKeyCatcher focus without caller help.
   focused=$(ipc focusSiteField "https://second.example")
   jq -e '.siteInputFocused and .keyCatcherBlocked' <<<"$focused" >/dev/null ||
     fail "second siteField focus did not arm key-catcher block: $focused"
@@ -1039,14 +1039,24 @@ if [[ -d $omarchy_root/shell ]]; then
   collapsed=""
   for _ in $(seq 1 40); do
     collapsed=$(ipc state)
-    jq -e '(.siteInputPresent | not) and (.siteInputFocused | not) and (.keyCatcherBlocked | not)' \
+    jq -e '(.siteInputPresent | not) and (.siteInputFocused | not) and (.keyCatcherBlocked | not) and .keyCatcherActiveFocus' \
       <<<"$collapsed" >/dev/null && break
     sleep 0.05
   done
   jq -e '
     (.showAll | not) and (.siteInputPresent | not) and (.siteInputFocused | not)
-    and (.editing | not) and (.keyCatcherBlocked | not)
+    and (.editing | not) and (.keyCatcherBlocked | not) and .keyCatcherActiveFocus
   ' <<<"$collapsed" >/dev/null || fail "siteField destruction without reset left keys blocked: $collapsed"
+
+  # Opening a confirmation dialog while siteField is focused must return focus
+  # to PanelKeyCatcher so Escape/Enter answer the dialog.
+  focused=$(ipc focusSiteField "https://confirm.example")
+  jq -e '.siteInputFocused and .keyCatcherBlocked' <<<"$focused" >/dev/null ||
+    fail "confirm-test siteField focus failed: $focused"
+  confirming=$(ipc confirmWhileEditing)
+  jq -e '(.editing | not) and (.keyCatcherBlocked | not) and .keyCatcherActiveFocus' <<<"$confirming" >/dev/null ||
+    fail "ConfirmDialog left keyCatcher blocked while editing: $confirming"
+  ipc cancelConfirmation >/dev/null
 
   # An older destroyed siteField must not clobber a newer siteInput reference.
   focused=$(ipc focusSiteField "")

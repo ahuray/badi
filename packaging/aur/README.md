@@ -28,12 +28,13 @@ MPL-2.0 (spellbook, whose source is linked from the notices), Zlib
 llama.cpp, the Prediction Lab or editor plugins. No install hook starts a
 service, changes accessibility, edits a home directory or downloads anything.
 
-The full desktop contract (field observer, grey preview, settings panel)
-still requires Omarchy/Hyprland and its lock IPC, so those parts are
-optdepends (`hyprland`, `gtk4-layer-shell`, `quickshell`,
-`qt6-declarative`): the base package — broker, session helper, Fcitx addon
-and commands — installs on any Arch Wayland desktop, but that is not yet
-general Linux desktop support. The package requires Fcitx
+The grey preview and the bar settings panel require Omarchy/Hyprland and its
+lock IPC, so those parts are optdepends (`hyprland`, `gtk4-layer-shell`,
+`quickshell`, `qt6-declarative`). The field observer supports Hyprland, KDE
+Plasma 6 ([ADR 0015](../../docs/decisions/0015-kwin-script-reports-plasma-focus.md))
+and GNOME ([ADR 0016](../../docs/decisions/0016-gnome-shell-extension-reports-focus.md),
+[ADR 0017](../../docs/decisions/0017-gnome-ibus-takes-observer-app-id.md)),
+showing suggestions in Fcitx's panel outside Hyprland. The package requires Fcitx
 5.1.23 or later, whose Wayland frontend keeps Chromium's surrounding text
 current; it does not replace the system frontend.
 
@@ -151,11 +152,11 @@ left `/usr/lib/badi/__pycache__`, which pacman does not own, so removal kept
 
 Fresh Omarchy graphical VM and container evidence:
 
-| Where (date) | What passed | Boundary |
+| Where | What passed | Boundary |
 | --- | --- | --- |
-| Fresh Omarchy 4.5.0 graphical VM (2026-11-17): Linux 7.2.11, Hyprland 0.56.2, quickshell 0.3.2, fcitx5 5.1.23, Python 3.14.9, pacman 7.1.0, namcap 3.6.0 | Sequential package builds with `makepkg -s --noconfirm` (`HEAD~1` = `8e6dfab`, `HEAD` = `30f11bf`) ran all tests offline (broker unit/doc tests, 9/9 CTest, 82/82 Python tests). `namcap` reported 0 errors on both. Installed `8e6dfab` (`pacman -Qkk` 74 files, 0 altered; `badictl` and `badi-broker` reported `8e6dfab3b525d6acd3ae0aa0be98415e10fcc3d5`), then upgraded to `30f11bf` (`pacman -Qkk` 74 files, 0 altered; versions reported `30f11bf8c61d5263e09b470b3f0330134fab23fb`). Root `sudo badi doctor` created 0 bytecode directories under `/usr/lib/badi`. User activation in live Hyprland session: Quickshell panel validated and enabled (`omarchy plugin validate` / `enable`), `badi.lua` rule and repair hooks installed, user units enabled and started (`badi-accessibility.service`, `badi-session.service`, `badi-broker.service`, `omarchy-fcitx5.service`; `badi doctor` exit 0). Panel `model-terms` row trial: selecting `gemma-3-1b` presented terms prompt and details, activating recorded receipt in `~/.local/state/badi/model-terms.json` (`schema: "badi.model-terms.v1"`), hid row, and switched model (`badi model` showed Gemma 3 1B in use). Live Omawrite trial: typed `"The quick brown fox "`, inline grey preview mapped and drawn (`placement: "inline"`, `rendered: true`), Tab committed `"jumps"`, remainder `" over the lazy"` carried immediately without extra model roundtrip. Clean removal (`pacman -R badi-git`, disabled plugin and units): filesystem snapshot comparison of `/etc`, `/usr`, `/opt` (106,358 paths, 88,394 file hashes) verified 0 added, 0 removed, 0 modified paths (0 Badi leftovers) | Live graphical Omarchy VM session; GPU device access was not tested (software/CPU inference on QEMU) |
-| Fresh `archlinux:latest` container, current repositories (2026-11-03): Rust 1.99.1, Fcitx 5.1.23, Python 3.14.9, GTK 4.24.1, systemd 262.1, pacman 7.1, namcap 3.6.0 | `makepkg` of `9c1a8fc` and of `8164c1e` with this PKGBUILD (`check()` included); namcap: no errors, the warnings below. Installed `0.2.0.r65.9c1a8fc`, then upgraded to `0.2.0.r69.8164c1e`: `pacman -Qkk` 65 files, 0 altered, both times; `badictl` named each commit; `badi --help` and root `badi doctor`; observer modules import; Fcitx loaded the addon. `pacman -R` then left the filesystem identical to before the install: 44,128 paths (type, mode, owner) and 38,306 file hashes under `/etc`, `/usr`, `/opt` and `/var/lib`, the package database included. The first run found the root-run bytecode leftover fixed above | The image's own `NoExtract` (no `/usr/share/doc`) was removed first, as a stock Arch has none; no Omarchy, panel, model download or user units |
-| Isolated Arch container on the 2026-10-12 snapshot (Rust 1.99, Fcitx 5.1.23) | Build, checks, CLI and phrase-broker control, settings compare-and-swap, typelib and library resolution, file integrity, reinstall and removal (private settings kept, no package files left) | No graphical session or running user service manager |
+| Fresh Omarchy 4.5.0 graphical VM (Hyprland 0.56.2, quickshell 0.3.2, Fcitx 5.1.23, Python 3.14.9, pacman 7.1.0, namcap 3.6.0) | Offline `makepkg -s --noconfirm` build, unit/CTest/Python suites, zero `namcap` errors, `pacman -Qkk` install and upgrade, bytecode-clean `sudo badi doctor`, Quickshell panel validation/enable and `model-terms` receipt flow, `badi.lua` and repair hooks, live Omawrite inline grey preview + `Tab` word commit + carry, and `pacman -R badi-git` leaving zero Badi paths under `/etc`, `/usr` and `/opt` | CPU inference on QEMU; GPU device access untried in VM |
+| `archlinux:latest` container (Rust 1.99.1, Fcitx 5.1.23, Python 3.14.9, GTK 4.24.1, systemd 262.1, pacman 7.1, namcap 3.6.0) | `makepkg` with `check()`, zero `namcap` errors, `pacman -Qkk` across install and upgrade, `badictl` commit identity, root `badi doctor`, observer imports, Fcitx loading the addon, and clean `pacman -R` removal across `/etc`, `/usr`, `/opt` and `/var/lib` | Container only; no graphical session, panel or user units |
+| Isolated Arch container on the pinned CI snapshot (Rust 1.99, Fcitx 5.1.23) | Build, checks, CLI and phrase-broker control, settings compare-and-swap, typelib and library resolution, file integrity, reinstall and removal (private settings kept, no package files left) | No graphical session or running user service manager |
 
 Namcap reported no errors after dependency review. Remaining warnings cover
 the unassigned maintainer, bundled Python imports, Omarchy-owned QML modules,

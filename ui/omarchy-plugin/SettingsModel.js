@@ -288,16 +288,113 @@ function appIdentity(appId) {
 
 function originText(identity) {
   var standard = identity.scheme === "https" ? 443 : 80
-  return identity.scheme + "://" + identity.host + (identity.port === standard ? "" : ":" + identity.port)
+  var host = identity.host.indexOf(":") >= 0 ? "[" + identity.host + "]" : identity.host
+  return identity.scheme + "://" + host + (identity.port === standard ? "" : ":" + identity.port)
 }
 
-// An exact http(s) origin, as `badi site` accepts it (ASCII hosts only here).
+function parseIpv4Octets(raw) {
+  var parts = raw.split(".")
+  if (parts.length !== 4) return null
+  var octets = []
+  for (var i = 0; i < 4; i += 1) {
+    if (!/^[0-9]{1,3}$/.test(parts[i]) || (parts[i].length > 1 && parts[i][0] === "0")) return null
+    var value = Number(parts[i])
+    if (value < 0 || value > 255) return null
+    octets.push(value)
+  }
+  return octets
+}
+
+function canonicalIpv6(raw) {
+  if (raw.length === 0 || raw.length > 45) return null
+  var halves = raw.split("::")
+  if (halves.length > 2) return null
+  var left = halves[0] === "" ? [] : halves[0].split(":")
+  var right = halves.length === 2 ? (halves[1] === "" ? [] : halves[1].split(":")) : []
+  var tailList = halves.length === 2 ? (right.length > 0 ? right : null) : (left.length > 0 ? left : null)
+  var ipv4Groups = null
+  if (tailList !== null && tailList[tailList.length - 1].indexOf(".") >= 0) {
+    var octets = parseIpv4Octets(tailList.pop())
+    if (!octets) return null
+    ipv4Groups = [(octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3]]
+  }
+  var parsedLeft = []
+  for (var i = 0; i < left.length; i += 1) {
+    if (!/^[0-9a-f]{1,4}$/.test(left[i])) return null
+    parsedLeft.push(parseInt(left[i], 16))
+  }
+  var parsedRight = []
+  for (var j = 0; j < right.length; j += 1) {
+    if (!/^[0-9a-f]{1,4}$/.test(right[j])) return null
+    parsedRight.push(parseInt(right[j], 16))
+  }
+  if (ipv4Groups) {
+    if (halves.length === 2) parsedRight = parsedRight.concat(ipv4Groups)
+    else parsedLeft = parsedLeft.concat(ipv4Groups)
+  }
+  var groups = []
+  if (halves.length === 2) {
+    var missing = 8 - parsedLeft.length - parsedRight.length
+    if (missing < 1) return null
+    groups = parsedLeft.slice()
+    for (var z = 0; z < missing; z += 1) groups.push(0)
+    groups = groups.concat(parsedRight)
+  } else {
+    if (parsedLeft.length !== 8) return null
+    groups = parsedLeft
+  }
+  if (groups[0] === 0 && groups[1] === 0 && groups[2] === 0 && groups[3] === 0
+      && groups[4] === 0 && groups[5] === 0xffff) {
+    return "::ffff:" + (groups[6] >> 8) + "." + (groups[6] & 0xff)
+      + "." + (groups[7] >> 8) + "." + (groups[7] & 0xff)
+  }
+  var bestStart = -1
+  var bestLength = 0
+  var runStart = -1
+  var runLength = 0
+  for (var k = 0; k < 8; k += 1) {
+    if (groups[k] === 0) {
+      if (runStart < 0) { runStart = k; runLength = 1 }
+      else runLength += 1
+      if (runLength >= 2 && runLength > bestLength) {
+        bestStart = runStart
+        bestLength = runLength
+      }
+    } else {
+      runStart = -1
+      runLength = 0
+    }
+  }
+  if (bestStart >= 0) {
+    var head = groups.slice(0, bestStart).map(function(g) { return g.toString(16) }).join(":")
+    var tail = groups.slice(bestStart + bestLength).map(function(g) { return g.toString(16) }).join(":")
+    return head + "::" + tail
+  }
+  return groups.map(function(g) { return g.toString(16) }).join(":")
+}
+
+function canonicalHost(raw) {
+  if (raw.length === 0 || raw.length > 253) return null
+  var octets = parseIpv4Octets(raw)
+  if (octets) return octets.join(".")
+  if (/^[0-9.]+$/.test(raw) || /^0x[0-9a-f]+$/.test(raw) || raw[raw.length - 1] === ".") return null
+  var labels = raw.split(".")
+  for (var i = 0; i < labels.length; i += 1) {
+    var label = labels[i]
+    if (label.length === 0 || label.length > 63 || label[0] === "-" || label[label.length - 1] === "-"
+        || !/^[a-z0-9-]+$/.test(label)) return null
+  }
+  return raw
+}
+
+// An exact http(s) origin, matching the broker's canonical host and IP rules.
 function siteIdentity(text) {
-  var match = /^(https?):\/\/([a-z0-9.-]+)(?::([0-9]{1,5}))?\/?$/.exec(String(text || "").trim().toLowerCase())
+  var match = /^(https?):\/\/(?:\[([0-9a-f:.]+)\]|([a-z0-9.-]+))(?::([0-9]{1,5}))?\/?$/.exec(String(text || "").trim().toLowerCase())
   if (!match) return null
-  var port = match[3] ? Number(match[3]) : (match[1] === "https" ? 443 : 80)
-  if (port < 1 || port > 65535 || match[2].length > 253) return null
-  return {kind: "browser_origin", adapter: "chromium", scheme: match[1], host: match[2], port: port}
+  var host = match[2] !== undefined ? canonicalIpv6(match[2]) : canonicalHost(match[3])
+  var port = match[4] ? Number(match[4]) : (match[1] === "https" ? 443 : 80)
+  if (!host || port < 1 || port > 65535 || host.length > 253) return null
+  return {kind: "browser_origin", adapter: "chromium", scheme: match[1], host: host, port: port}
 }
 
 function identityLabel(identity, supportedApps) {

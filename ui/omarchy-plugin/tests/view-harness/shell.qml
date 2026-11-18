@@ -35,7 +35,7 @@ ShellRoot {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: view.editing
+      blocked: view.editing && !badi.confirming
       onMoveRequested: function(dx, dy) { view.move(dx, dy) }
       onActivateRequested: view.activate()
       onDeleteRequested: view.remove()
@@ -92,7 +92,16 @@ ShellRoot {
 
     function collapseWithoutReset(): void {
       badi.showAll = false
-      keyCatcher.forceActiveFocus()
+    }
+
+    function confirmWhileEditing(): string {
+      badi.confirm("Forget every learned word?", "Forget", function() {})
+      return state()
+    }
+
+    function cancelConfirmation(): string {
+      badi.resolveConfirmation(false)
+      return state()
     }
 
     function supersedeAndCollapse(): void {

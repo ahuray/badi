@@ -404,6 +404,26 @@ class ReceiptTests(unittest.TestCase):
                              hashlib.sha256(b'old broker').hexdigest())
             self.assertEqual(receipt['files']['.config/systemd/user/badi-broker.service']['sha256'],
                              hashlib.sha256(b'old unit\n').hexdigest())
+            self.assertEqual(receipt['files']['.config/systemd/user/badi-broker.service']['commit'], 'unknown')
+            self.assertEqual(receipt['source']['commit'], 'unknown')
+
+    def test_restore_recovers_prior_receipt_commit_for_non_versioned_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            observer = home / '.local/lib/badi/accessibility/daemon.py'
+            observer.parent.mkdir(parents=True)
+            observer.write_text('observer v1\n')
+            first = {'commit': 'a' * 40, 'dirty': False}
+            badi_install.write_receipt(home, 'desktop', first, [observer])
+            upgrade = badi_install.Installation(home, 'desktop')
+            upgrade.write(observer, b'observer v2\n', 0o644)
+            badi_install.write_receipt(home, 'desktop', {'commit': 'b' * 40, 'dirty': True}, [observer])
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(badi_install.restore(upgrade.directory), [])
+            receipt = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(receipt['files']['.local/lib/badi/accessibility/daemon.py']['commit'], 'a' * 40)
+            self.assertFalse(receipt['files']['.local/lib/badi/accessibility/daemon.py']['dirty'])
+            self.assertEqual(receipt['source'], first)
 
 
 class RepairTests(unittest.TestCase):

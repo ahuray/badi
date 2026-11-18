@@ -1926,6 +1926,66 @@ sys.exit(1)
             with self.assertRaisesRegex(RuntimeError, 'Badi is stopped'):
                 desktop.control(['status'])
 
+    def test_ipv6_origins_preserve_learning_and_doctor_notes_component_skew(self):
+        document = {'subjects': []}
+        desktop.set_app(document, 'omawrite', True)
+        desktop.set_subject_learning(document, 'app', 'omawrite', 14)
+        desktop.set_app(document, 'omawrite', True)
+        self.assertEqual(document['subjects'][0]['permissions']['learn'], 'allow')
+        self.assertEqual(document['subjects'][0]['permissions']['retention'], {'mode': 'bounded', 'days': 14})
+        desktop.set_app(document, 'omawrite', False)
+        self.assertEqual(document['subjects'][0]['permissions']['learn'], 'block')
+
+        desktop.set_site(document, 'http://[0:0:0:0:0:0:0:1]:8080/', True)
+        desktop.set_site_learning(document, 'http://[::1]:8080', 21)
+        desktop.set_site(document, 'http://[::1]:8080', True)
+        site_rule = next(item for item in document['subjects'] if item['identity']['kind'] == 'browser_origin')
+        self.assertEqual(site_rule['identity']['host'], '::1')
+        self.assertEqual(desktop.origin_text(site_rule['identity']), 'http://[::1]:8080')
+        self.assertEqual(site_rule['permissions']['retention'], {'mode': 'bounded', 'days': 21})
+
+        with patch.object(desktop.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                [], 1, '', 'org.freedesktop.DBus.Error.UnknownObject: /io/github/ahuray/badi/Focus')):
+            self.assertEqual(desktop.gnome_extension_state(), 'absent')
+
+        home = Path(self.temporary.name) / 'skew-home'
+        receipts = home / '.local/state/badi/receipts'
+        receipts.mkdir(parents=True)
+        version = 'badi-broker 0.1.0 commit=' + 'b' * 40 + ' dirty=false'
+        for name, payload in (
+            ('desktop', {
+                'schema': 'badi.install-receipt.v1', 'installer': 'desktop',
+                'installed_at': '2026-10-20T12:00:00Z',
+                'source': {'commit': 'b' * 40, 'dirty': False},
+                'files': {
+                    desktop.INSTALLED_BROKER: {'sha256': 'f' * 64, 'version': version, 'commit': 'b' * 40, 'dirty': False},
+                    '.local/lib/badi/accessibility/daemon.py': {'sha256': 'e' * 64, 'commit': 'a' * 40, 'dirty': False},
+                },
+            }),
+            ('omarchy-ui', {
+                'schema': 'badi.install-receipt.v1', 'installer': 'omarchy-ui',
+                'installed_at': '2026-10-19T12:00:00Z',
+                'source': {'commit': 'c' * 40, 'dirty': False},
+                'files': {'.config/omarchy/plugins/io.github.ahuray.badi/BarWidget.qml': {'sha256': 'd' * 64, 'commit': 'c' * 40, 'dirty': False}},
+            }),
+        ):
+            target = receipts / f'{name}.json'
+            target.write_text(json.dumps(payload))
+            target.chmod(0o600)
+        service = {'loaded': True, 'active': 'active', 'state': 'running', 'autostart': True}
+        with patch.object(desktop.Path, 'home', return_value=home), \
+             patch.object(desktop, 'running_broker_identity', return_value={'version': version, 'sha256': 'f' * 64}), \
+             patch.object(desktop, 'install_state', REAL_INSTALL_STATE), \
+             patch.object(desktop, 'service_state', return_value=service), \
+             patch.object(desktop, 'accessibility_state', return_value={'loaded': False, 'ready': False}), \
+             patch.object(desktop, 'native_state', return_value={'active': 'active', 'addon_loaded': True}), \
+             patch.object(desktop, 'control', return_value='{"metrics": {"provider_calls": 1}}'):
+            report = desktop.health_report()
+        self.assertEqual(report['install']['desktop']['component_commits'], ['a' * 40, 'b' * 40])
+        self.assertTrue(any('multiple source commits' in note for note in report['notes']), report['notes'])
+        self.assertTrue(any('omarchy-ui files are at ccccccc' in note for note in report['notes']), report['notes'])
+        self.assertIn('(mixed: aaaaaaa, bbbbbbb)', desktop.doctor_text(report))
+
 
 if __name__ == '__main__':
     unittest.main()

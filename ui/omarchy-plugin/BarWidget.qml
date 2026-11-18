@@ -88,7 +88,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: view.editing
+      blocked: view.editing && !badi.confirming
       // While the dialog asks, the keys answer it: h/l or arrows choose,
       // Enter decides, Escape cancels.
       onMoveRequested: function(dx, dy) {

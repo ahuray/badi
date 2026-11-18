@@ -352,7 +352,8 @@ function featureMapAt(rev) {
     .filter((file) => file.startsWith(FEATURE_MAP) && file.endsWith(".md"))
     .map((file) => ({ path: file, text: textAt(rev, file) ?? "" }));
   const sources = names.filter((file) =>
-    (file.startsWith("ui/omarchy-plugin/") && file.endsWith(".qml")) || file === "scripts/badi-desktop.py");
+    (file.startsWith("ui/omarchy-plugin/") && (file.endsWith(".qml") || file.endsWith(".js")))
+    || file === "scripts/badi-desktop.py");
   const sourceText = sources.map((file) => textAt(rev, file) ?? "").join("\n");
   return featureMapProblems(markdown, sourceText);
 }

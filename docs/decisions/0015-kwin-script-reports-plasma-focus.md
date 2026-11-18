@@ -109,8 +109,10 @@ Plasma offers two sources of the active window's process and app id:
 - A same-UID process can unload the script; the next inspection notices
   and the observer reloads it. It could also impersonate KWin's reports only
   by running inside KWin, which ADR 0001 already accepts.
-- GNOME still has no backend: `org.gnome.Shell.Introspect` gives no process
-  id and answers only portal backends, so it needs a Shell extension.
+- GNOME needs a separate Shell extension backend because
+  `org.gnome.Shell.Introspect` gives no process id and answers only portal
+  backends ([ADR 0016](0016-gnome-shell-extension-reports-focus.md),
+  [ADR 0017](0017-gnome-ibus-takes-observer-app-id.md)).
 
 ## Alternatives rejected
 
