@@ -114,32 +114,44 @@ power, re-run `badi model` and pass its recommended id to `badi model use ID` if
 a balanced tier fits), allow an app and unpause:
 
 ```sh
-systemctl --user daemon-reload
-systemctl --user enable --now badi-accessibility.service badi-session.service
-model_id=$(badictl models writing --json | python3 -c 'import json,sys; r=json.load(sys.stdin).get("recommended"); assert r, "no model fits"; print(r["id"])')
-badi model use "$model_id"
-systemctl --user restart omarchy-fcitx5.service
-badi app omawrite on
-badi resume
-badi doctor
+(
+  set -euo pipefail
+  systemctl --user daemon-reload
+  systemctl --user enable --now badi-accessibility.service badi-session.service
+  model_id=$(badictl models writing --json | python3 -c 'import json,sys; r=json.load(sys.stdin).get("recommended"); assert r, "no model fits"; print(r["id"])')
+  badi model use "$model_id"          # asks [y/N] on Gemma/Llama; add --accept-license unattended, or pass qwen3-1.7b / qwen3-0.6b
+  systemctl --user restart omarchy-fcitx5.service
+  badi app omawrite on
+  badi resume
+  badi doctor
+)
 ```
 
-If available memory is temporarily tight and `badi model use "$model_id"` times
-out (`error_code=io`) after downloading the weights while the broker is still
-waiting for memory, run `badi service start` (60 s budget, reporting any memory
-wait) and then re-run `badi model use "$model_id"` once the socket answers.
+For Gemma or Llama (`gemma-3-1b` on mains), `badi model use` stops until you
+answer `y` (or pass `--accept-license` when unattended, or pick an Apache-2.0
+model that fits such as `qwen3-1.7b` or `qwen3-0.6b`); the subshell halts before
+`badi app` and `badi resume` if `badi model use` does not exit `0`, so
+`badi-broker.service` is never started without a verified GGUF in
+`~/.local/share/badi/models/`. If available memory is temporarily tight and
+`badi model use "$model_id"` times out (`error_code=io`) after downloading the
+weights while the broker is still waiting for memory, run `badi service start`
+(60 s budget, reporting any memory wait) and then re-run `badi model use
+"$model_id"`, `badi app omawrite on` and `badi resume` once the socket answers.
 
 If you already fetched `Qwen3-1.7B` in [Writing assets](#writing-assets)
 instead, start `badi-broker.service` with `badi service start`:
 
 ```sh
-systemctl --user daemon-reload
-systemctl --user enable --now badi-accessibility.service badi-session.service
-badi service start
-systemctl --user restart omarchy-fcitx5.service
-badi app omawrite on
-badi resume
-badi doctor
+(
+  set -euo pipefail
+  systemctl --user daemon-reload
+  systemctl --user enable --now badi-accessibility.service badi-session.service
+  badi service start
+  systemctl --user restart omarchy-fcitx5.service
+  badi app omawrite on
+  badi resume
+  badi doctor
+)
 ```
 
 `badi-broker.service` starts on demand at later logins when you type in an

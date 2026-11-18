@@ -289,29 +289,36 @@ install receipt ([details](adapters/fcitx5/README.md#install-and-roll-back)).
 1. **Finish session setup and check health.** On Omarchy, the installers restart
    Badi's units and Fcitx right away. On Arch (without Omarchy), Debian and
    Ubuntu, log out and back in so Fcitx loads the addon (on GNOME, then run
-   `gnome-extensions enable badi-focus@ahuray.github.io`). Check everything with:
+   `gnome-extensions enable badi-focus@ahuray.github.io`). For a packaged install
+   (`badi-git` or `.deb`), complete its model activation step first
+   ([Arch](packaging/aur/README.md#user-activation-and-removal),
+   [Debian/Ubuntu](packaging/debian/README.md#use-it)) so a verified catalog GGUF
+   is in `~/.local/share/badi/models/` before any command starts the broker
+   (`badi doctor` inspects passively and never starts an idle broker; `badi
+   status`, `badi languages`, `badi app`, `badi site` and `badi resume` start
+   `badi-broker.service` on demand):
 
    ```sh
    badi doctor
-   badi status
    ```
 
-2. **Choose languages, allow apps or websites, and unpause if packaged.**
-   `scripts/install-desktop.py` starts **unpaused** with only Omawrite and
-   Xournal++ allowed; the Arch and `.deb` packages start **paused** with every
-   app and website denied.
+2. **Choose languages, allow apps or websites, and unpause if packaged** (once a
+   writing model is installed). `scripts/install-desktop.py` starts **unpaused**
+   with only Omawrite and Xournal++ allowed; the Arch and `.deb` packages start
+   **paused** with every app and website denied.
    - **On Omarchy:** click the **b** mark in the bar (or run `badi settings`) to
      answer the one-time prompts for your writing languages and allowed websites
      and apps; on a packaged install, also turn on the pause switch (or right-click
      **b**, or run `badi resume`).
    - **From the terminal (any desktop):** set your languages, allow the apps or
-     websites you want, and run `badi resume` (harmless if already unpaused):
+     websites you want, unpause (harmless if already unpaused), and inspect status:
 
      ```sh
      badi languages en de
      badi app omawrite on                  # or nvim, obsidian, bash, libreoffice-writer, ...
      badi site https://example.com on      # or: badi sites blocklist (every http(s) site except blocked ones)
      badi resume
+     badi status
      ```
 
 3. **Enable renderer accessibility for Chromium-based apps** (if using Chromium,

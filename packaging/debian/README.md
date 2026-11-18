@@ -101,12 +101,19 @@ As each desktop user, never as root:
    while `badi-broker.service` is still `inactive`:
 
    ```sh
-   systemctl --user daemon-reload
-   systemctl --user enable --now badi-session.service badi-accessibility.service
-   model_id=$(badictl models writing --json | python3 -c 'import json,sys; r=json.load(sys.stdin).get("recommended"); assert r, "no model fits"; print(r["id"])')
-   badi model use "$model_id"
+   (
+     set -euo pipefail
+     systemctl --user daemon-reload
+     systemctl --user enable --now badi-session.service badi-accessibility.service
+     model_id=$(badictl models writing --json | python3 -c 'import json,sys; r=json.load(sys.stdin).get("recommended"); assert r, "no model fits"; print(r["id"])')
+     badi model use "$model_id"        # asks [y/N] on Gemma/Llama; add --accept-license unattended, or pass qwen3-1.7b / qwen3-0.6b
+   )
    ```
 
+   For Gemma or Llama (`gemma-3-1b` on mains), answer `y` at the terms prompt
+   (or pass `--accept-license` when unattended, or pick an Apache-2.0 model that
+   fits such as `qwen3-1.7b` or `qwen3-0.6b`) so `badi model use` exits `0` and
+   places a verified GGUF in `~/.local/share/badi/models/` before you run step 5.
    If available memory is temporarily tight and `badi model use "$model_id"`
    times out (`error_code=io`) after downloading the weights while the broker is
    still waiting for memory, run `badi service start` (60 s budget, reporting
@@ -120,9 +127,12 @@ As each desktop user, never as root:
    start` clears the failure):
 
    ```sh
-   systemctl --user daemon-reload
-   systemctl --user enable --now badi-session.service badi-accessibility.service
-   badi service start
+   (
+     set -euo pipefail
+     systemctl --user daemon-reload
+     systemctl --user enable --now badi-session.service badi-accessibility.service
+     badi service start
+   )
    ```
 
    Without an installer-written `settings.json`, the broker creates private
@@ -136,7 +146,10 @@ As each desktop user, never as root:
    Ubuntu, or Fcitx 5 as the Virtual Keyboard in KDE Plasma's settings. Log
    out and back in. The packaged addon sits in Fcitx's own directory, so it
    needs no environment.
-5. Allow an app (`badi app ID on`) and the editors, unpause predictions with
+5. Once step 3 has exited `0` (so a verified catalog GGUF is in
+   `~/.local/share/badi/models/` — `badi app` and `badi resume` start
+   `badi-broker.service` on demand and must not run before a model is installed),
+   allow an app (`badi app ID on`) and the editors, unpause predictions with
    `badi resume`, and check setup with `badi doctor`
    ([README](../../README.md#choose-where-badi-writes)).
 
