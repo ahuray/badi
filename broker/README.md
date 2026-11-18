@@ -297,7 +297,7 @@ names the latest:
 
 | Reason | Meaning |
 | --- | --- |
-| `request_abstained` | Unsupported language, a caret inside a word, a word after the caret while mid-sentence suggestions are off, or a lone unfinished word. |
+| `request_abstained` | Unsupported language, a trailing space in a language the model does not heal, a caret inside a word, a word after the caret while mid-sentence suggestions are off, or a lone unfinished word. |
 | `budget_prefill`, `budget_stream` | The time budget ran out: 550 ms while typing, 1.2 s after an explicit request. |
 | `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check, or did not fit before the text after the caret. |
 | `stale`, `timeout`, `provider_error` | The text changed first, or the model was late or failed. |

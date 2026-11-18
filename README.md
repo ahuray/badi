@@ -20,14 +20,18 @@ clicking the Fcitx candidate) takes it all.
 
 - **Next words as you type:** up to four words (`badi length short` for one or
   two); other languages than English get whole words only, in English and German by default, and French, Spanish and
-  Portuguese when you turn them on.
+  Portuguese when you turn them on (`badi languages`; Persian only through
+  `badi suggest fa on`, which `badi languages` and the panel do not offer).
+  Right after a space, a suggestion appears only in a language the model heals
+  (Gemma 3 1B: all of these; Qwen and Llama: English and Persian);
+  `badi suggest LANG healing on` overrides that.
 - **Typo fixes:** `teh → the` in English out of the box; German, French, Spanish,
   Italian, Dutch and Polish after `badi spelling LANG on` and that language's
   Hunspell package (`badi spelling` names it).
 - **Revise a selection:** select text on one line (character-wise `v` in Neovim)
   in a plain text field, Obsidian or Neovim and press `Ctrl+Shift+Space` for a
   grammar fix; press again for a refined wording, and again for a synonym of a
-  short phrase. Rich editors and LibreOffice Writer are not supported yet. This
+  short phrase. Revision covers English, German, French, Spanish and Portuguese. Rich editors and LibreOffice Writer are not supported yet. This
   uses a second model, Qwen3 1.7B, that `badi revise install` downloads.
 - **Private by design:** the model runs on your CPU in a service with no
   network access, and Badi reads only fields you allowed (with context on, also
@@ -201,8 +205,10 @@ badi debug on && badi debug watch               # a live, text-free trace of eve
 printf 'Please find attached the' | badictl probe -   # try the model directly
 ```
 
-The [broker runbook](broker/README.md#debug-trace) explains every trace event
-and no-suggestion reason.
+Right after a space, a language the model does not heal shows nothing:
+`badi suggest` lists each language's healing, and `badi suggest LANG healing on`
+turns it on. The [broker runbook](broker/README.md#debug-trace) explains every
+trace event and no-suggestion reason.
 
 ## How it works
 
