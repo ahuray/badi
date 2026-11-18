@@ -159,10 +159,11 @@ class Watched:
 class Reporter:
     """Keeps the broker told about the current state, reconnecting with backoff."""
 
-    def __init__(self, link, lookup_key=None, backoff=BACKOFF_SECONDS):
+    def __init__(self, link, lookup_key=None, backoff=BACKOFF_SECONDS, refresh=lambda: None):
         self.link = link
         self.lookup_key = lookup_key
         self.backoff = backoff
+        self.refresh = refresh
         self._key_retry = None
         # Counts broker connections: a key looked up for one goes to it only.
         self._connection = 0
@@ -210,6 +211,7 @@ class Reporter:
         self.problem = None
         if not connected:
             self._schedule_key(GLib.idle_add)
+            self.refresh()
         return True
 
     def _schedule_key(self, schedule):
@@ -282,9 +284,12 @@ class Reporter:
         return GLib.SOURCE_REMOVE
 
     def _lost(self, reason):
+        was_acknowledged = self.acknowledged is not None
         self._unwatch()
         self.link.close()
         self.acknowledged = None
+        if was_acknowledged:
+            self.refresh()
         if reason != self.problem:
             log(f"broker unavailable ({reason}); retrying")
             self.problem = reason
@@ -903,10 +908,11 @@ def main(arguments):
         print("usage: daemon.py [--no-shortcuts]", file=sys.stderr)
         return 2
     loop = GLib.MainLoop()
-    reporter = Reporter(Link(), style_key.lookup if style_key is not None else None)
     # Tests turn off every desktop side effect: toasts, the OSD and bar refreshes.
     desktop_ui = os.environ.get("BADI_SESSION_NOTIFICATIONS") != "off"
-    parts = [ScreenCast(reporter, refresh=refresh_bar if desktop_ui else lambda: None)]
+    refresh = refresh_bar if desktop_ui else lambda: None
+    reporter = Reporter(Link(), style_key.lookup if style_key is not None else None, refresh=refresh)
+    parts = [ScreenCast(reporter, refresh=refresh)]
     try:
         system = bus_for("system")
         parts.append(Logind(system, reporter))

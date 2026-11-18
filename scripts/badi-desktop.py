@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Control the persistent desktop broker, its settings and its diagnostics."""
 
+import contextlib
 import datetime
 import hashlib
 import importlib.util
@@ -30,6 +31,21 @@ TERMINAL_APPS = ("com.mitchellh.ghostty", "foot", "org.codeberg.dnkl.foot")
 SERVICE = "badi-broker.service"
 ACCESSIBILITY_SERVICE = "badi-accessibility.service"
 SESSION_SERVICE = "badi-session.service"
+SERVICE_STOPPED = "service-stopped"
+SERVICE_FAILED = "service-failed"
+_START_ON_DEMAND = True
+
+
+@contextlib.contextmanager
+def passive_control():
+    """Inspect the running broker without cold-starting an idle session unit."""
+    global _START_ON_DEMAND
+    previous = _START_ON_DEMAND
+    _START_ON_DEMAND = False
+    try:
+        yield
+    finally:
+        _START_ON_DEMAND = previous
 BATTERY_TEXT = {
     "normal": "On battery, automatic suggestions behave as on mains power.",
     "quiet": ("On battery or in the power-saver profile, the model starts only after a typing pause. "
@@ -248,13 +264,87 @@ def cli_path():
     return installed if installed.is_file() else ROOT / "target/release/badictl"
 
 
+def live_session_runtime(directory=None):
+    try:
+        directory = runtime_directory() if directory is None else directory
+    except RuntimeError:
+        return False
+    return directory == Path(f"/run/user/{os.getuid()}/badi")
+
+
+def private_marker(name, directory=None):
+    try:
+        directory = runtime_directory() if directory is None else directory
+        info = (directory / name).lstat()
+    except (RuntimeError, OSError):
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077
+
+
+def service_stopped(directory=None):
+    return private_marker(SERVICE_STOPPED, directory)
+
+
+def clear_service_markers(directory=None):
+    try:
+        directory = runtime_directory() if directory is None else directory
+    except RuntimeError:
+        return
+    for name in (SERVICE_STOPPED, SERVICE_FAILED):
+        try:
+            (directory / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def wait_for_broker(endpoint=None, wait=20):
+    endpoint = endpoint or runtime_directory() / "broker.sock"
+    deadline = time.monotonic() + wait
+    with passive_control():
+        while time.monotonic() < deadline:
+            try:
+                control(["status"], endpoint)
+                return True
+            except (RuntimeError, OSError, subprocess.SubprocessError):
+                if private_marker(SERVICE_FAILED) or service_state().get("active") == "failed":
+                    return False
+                time.sleep(0.25)
+    return False
+
+
 def control(arguments, endpoint=None, *, input_text=None):
+    default_endpoint = endpoint is None
     endpoint = endpoint or runtime_directory() / "broker.sock"
     result = subprocess.run([str(cli_path()), "--socket", str(endpoint), *arguments],
                             input=input_text, capture_output=True, text=True, timeout=8)
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "Badi is offline. Run: badi service start")
-    return result.stdout
+    if result.returncode == 0:
+        return result.stdout
+    # Only a connection refusal/absence may cold-start an idle session broker;
+    # broker rejections, conflicts and protocol errors must propagate as-is.
+    stderr = result.stderr.strip()
+    connect_failed = (not stderr
+                      or stderr.startswith(("error_code=io", "error_code=unsafe_socket",
+                                            "error_code=missing_runtime_dir", "error_code=invalid_runtime_dir")))
+    if (connect_failed and default_endpoint and _START_ON_DEMAND
+            and live_session_runtime(endpoint.parent)):
+        if service_stopped(endpoint.parent):
+            raise RuntimeError("Badi is stopped. Run: badi service start")
+        state = service_state()
+        active = state.get("active")
+        if active == "inactive" and not state.get("condition_unmet") and not private_marker(SERVICE_FAILED, endpoint.parent):
+            clear_service_markers(endpoint.parent)
+            subprocess.run(["systemctl", "--user", "start", SERVICE], check=True, timeout=15)
+            active = "activating"
+        if active in ("active", "activating") and wait_for_broker(endpoint, wait=20):
+            refresh_bar()
+            retry = subprocess.run([str(cli_path()), "--socket", str(endpoint), *arguments],
+                                   input=input_text, capture_output=True, text=True, timeout=8)
+            if retry.returncode == 0:
+                return retry.stdout
+            stderr = retry.stderr.strip()
+    if connect_failed and service_stopped(endpoint.parent):
+        raise RuntimeError("Badi is stopped. Run: badi service start")
+    raise RuntimeError(stderr or "Badi is offline. Run: badi service start")
 
 
 def service_state():
@@ -264,6 +354,8 @@ def service_state():
              "active": fields.get("ActiveState", "unknown"),
              "state": fields.get("SubState", "unknown"),
              "autostart": fields.get("UnitFileState") == "enabled"}
+    if service_stopped():
+        state["stopped"] = True
     # The unit starts only with WAYLAND_DISPLAY; systemd skipping it in an
     # X11 (or non-graphical) session is that condition, named in the report.
     if (state["active"] == "inactive" and fields.get("ConditionResult") == "no"
@@ -669,7 +761,51 @@ def vscode_edit_context_note():
             f"surrounding text, so Badi cannot read the text before the caret there; {fix}.")
 
 
+def offline_settings_problem():
+    """Read-only check of ~/.config/badi/settings.json while the broker is idle."""
+    config = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "badi"
+    action = "Repair or replace ~/.config/badi/settings.json and its directory permissions, then badi service restart."
+    message = "Badi's private settings cannot be used, so the service has stopped instead of retrying."
+    try:
+        info = config.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return {"code": "control_plane", "message": "The broker could not open its private settings.", "action": action}
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        return {"code": "settings_unsafe_directory", "message": message, "action": action}
+    path = config / "settings.json"
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return {"code": "settings_unsafe_file", "message": message, "action": action}
+    try:
+        with os.fdopen(descriptor, "rb") as stream:
+            meta = os.fstat(stream.fileno())
+            if not stat.S_ISREG(meta.st_mode) or meta.st_uid != os.getuid() or meta.st_mode & 0o077 or meta.st_size > 65536:
+                return {"code": "settings_unsafe_file", "message": message, "action": action}
+            raw = stream.read(65537)
+    except OSError:
+        return {"code": "settings_unsafe_file", "message": message, "action": action}
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return {"code": "settings_json", "message": message, "action": action}
+    if (not isinstance(document, dict) or document.get("schema") != "badi.settings.v2"
+            or type(document.get("revision")) is not int or document["revision"] < 0
+            or type(document.get("paused")) is not bool or not isinstance(document.get("subjects"), list)):
+        return {"code": "settings_validation", "message": message, "action": action}
+    return None
+
+
 def health_report():
+    with passive_control():
+        return _health_report()
+
+
+def _health_report():
     report = {"schema": "badi.desktop-health.v1", "service": service_state(),
               "native_apps": list(APPS), "problems": [], "notes": []}
     report["notes"].append(f"{IME_APPS} fields use IME-parity: with the field observer and an app or site grant, one append-only acceptance behaves like typed text, so undo may merge it with earlier typing and page script may redirect it.")
@@ -713,8 +849,12 @@ def health_report():
     try:
         report["broker"] = json.loads(control(["status"]))
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
-        report["error"] = "The desktop prediction broker is unreachable."
-        startup = startup_problem() if report["service"]["active"] == "failed" else None
+        active = report["service"].get("active")
+        idle_ok = (active == "inactive" and not report["service"].get("condition_unmet")
+                   and (not report["service"].get("autostart") or report["service"].get("stopped")))
+        if not idle_ok:
+            report["error"] = "The desktop prediction broker is unreachable."
+        startup = startup_problem() if active == "failed" else None
         if startup:
             problems.append(startup)
         if report["service"].get("condition_unmet"):
@@ -724,6 +864,18 @@ def health_report():
                              "action": "Log into a Wayland session (X11 is not supported). A compositor "
                                        "launched from a tty needs uwsm or a display manager so the "
                                        "graphical session exports WAYLAND_DISPLAY to user services."})
+        elif active == "failed":
+            pass
+        elif idle_ok:
+            offline_problem = offline_settings_problem()
+            if offline_problem:
+                problems.append(offline_problem)
+            elif report["service"].get("stopped"):
+                report["notes"].append("The model service was stopped with badi service stop; typing will not "
+                                       "restart it until you run badi service start.")
+            else:
+                report["notes"].append("The model service is idle (autostart is off) and starts on demand when "
+                                       "you type in an allowed field or run a badi command.")
         else:
             problems.append({"code": "broker_unreachable", "message": report["error"],
                              "action": "Run badi service start, then badi doctor. Model startup takes a few seconds."})
@@ -852,7 +1004,11 @@ def doctor_text(report):
     native = report.get("native", {})
     observer = report.get("accessibility", {})
     problems = report["problems"]
-    model = ("paused" if broker.get("paused") else "ready") if broker else "unreachable"
+    idle_ok = (not broker and service.get("active") == "inactive" and not service.get("condition_unmet")
+               and (not service.get("autostart") or service.get("stopped")) and not report.get("error"))
+    model = (("paused" if broker.get("paused") else "ready") if broker
+             else ("stopped" if service.get("stopped") else "idle (on demand)") if idle_ok
+             else "unreachable")
     addon = {True: "loaded", False: "not loaded"}.get(native.get("addon_loaded"), "unknown")
     lines = ["Badi doctor: " + (f"{len(problems)} problem(s)" if problems else "no problems found"),
              f"  Service: {service.get('active', 'unknown')} ({service.get('state', 'unknown')})",
@@ -1088,16 +1244,19 @@ def use_model(model_id, accept_license):
 
 def restart_service(wait=60):
     """Restart the broker and wait until it answers, up to `wait` seconds."""
+    clear_service_markers()
     if service_state()["active"] == "failed":
         subprocess.run(["systemctl", "--user", "reset-failed", SERVICE], check=True, timeout=4)
     subprocess.run(["systemctl", "--user", "restart", SERVICE], check=True, timeout=30)
     deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        try:
-            control(["status"])
-            return True
-        except (RuntimeError, subprocess.SubprocessError):
-            time.sleep(0.5)
+    with passive_control():
+        while time.monotonic() < deadline:
+            try:
+                control(["status"])
+                refresh_bar()
+                return True
+            except (RuntimeError, subprocess.SubprocessError):
+                time.sleep(0.5)
     return False
 
 
@@ -1820,7 +1979,8 @@ def debug_mode(mode, text=False):
         return debug_watch()
     report = {"schema": "badi.debug.v1", **debug_activity()}
     try:
-        health = json.loads(control(["status"]))
+        with passive_control():
+            health = json.loads(control(["status"]))
         report["model"] = {key: health[key] for key in ("provider", "paused", "sessions", "metrics")}
         summary = no_suggestion_summary(health["metrics"])
         if summary and summary["last"]:
@@ -2214,9 +2374,15 @@ def service_command(arguments):
             state["startup_problem"] = startup_problem()
         print(json.dumps(state))
     elif arguments in (["start"], ["stop"], ["restart"]):
-        if arguments[0] != "stop" and service_state()["active"] == "failed":
-            subprocess.run(["systemctl", "--user", "reset-failed", SERVICE], check=True, timeout=4)
+        if arguments[0] == "stop":
+            with contextlib.suppress(RuntimeError, OSError):
+                badi_install.atomic_write(private_directory() / SERVICE_STOPPED, b"1\n")
+        else:
+            clear_service_markers()
+            if service_state()["active"] == "failed":
+                subprocess.run(["systemctl", "--user", "reset-failed", SERVICE], check=True, timeout=4)
         subprocess.run(["systemctl", "--user", arguments[0], SERVICE], check=True, timeout=15)
+        refresh_bar()
         print(json.dumps(service_state()))
     else:
         raise unknown_command()
@@ -2261,6 +2427,7 @@ def doctor_command(arguments):
 def launch_command(arguments):
     if len(arguments) != 1 or arguments[0] not in APPS:
         raise unknown_command()
+    clear_service_markers()
     subprocess.run(["systemctl", "--user", "start", "badi-broker.service"], check=True, timeout=10)
     subprocess.run([
         "systemd-run", "--user", "--collect", "--quiet",

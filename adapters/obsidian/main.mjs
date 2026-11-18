@@ -158,8 +158,10 @@ class WritingView {
     if (update.docChanged) recordActivity('obsidian', 'context', 'context_received');
     if (update.docChanged || (update.selectionSet && !update.startState.selection.eq(update.state.selection)) ||
         (update.focusChanged && !this.view.hasFocus)) this.invalidate();
-    if (update.docChanged && this.eligible()) this.timer = setTimeout(() => void this.request(false), 250);
-    if (update.docChanged && !this.view.state.readOnly && this.view.hasFocus && !this.client.connected) void requestBroker();
+    if (update.docChanged && this.eligible()) {
+      this.timer = setTimeout(() => void this.request(false), 250);
+      if (!this.client.connected) void requestBroker();
+    }
     if ((update.docChanged || update.focusChanged) && this.view.hasFocus && !this.client.connected) {
       void this.client.connect().catch(() => undefined);
     }
@@ -167,31 +169,37 @@ class WritingView {
 
   async request(explicit = true) {
     if (explicit && !this.view.state.selection.main.empty) return this.revise();
-    if (!this.client.connected) {
-      if (explicit) this.client.pauseRetries?.();
-      await requestBroker({ waitMs: explicit ? 20000 : 0 });
-      if (explicit) await this.client.connect(undefined, { immediate: true }).catch(() => undefined);
+    const initialReason = this.blockedReason();
+    if (initialReason || this.pending) {
+      recordActivity('obsidian', 'decision', initialReason ?? 'pending');
+      return;
     }
-    const reason = this.blockedReason();
-    recordActivity('obsidian', 'decision', reason ?? 'eligible');
-    if (reason || this.pending || (!explicit && !this.client.automaticAllowed)) return;
-    clearTimeout(this.timer);
     const snapshot = { doc: this.view.state.doc, selection: this.view.state.selection };
-    const end = snapshot.selection.main.head;
-    // Text after the caret lets the broker suggest only what fits before it.
-    // UTF-16 slices of twice the scalar limits always hold enough scalars.
-    const beforeStart = Math.max(0, end - 1024);
-    const afterEnd = end + 256;
-    const rawBefore = dropSplitSurrogate(
-      snapshot.doc.sliceString(beforeStart, end), beforeStart > 0 ? 'start' : '');
-    const rawAfter = dropSplitSurrogate(
-      snapshot.doc.sliceString(end, afterEnd), afterEnd < snapshot.doc.length ? 'end' : '');
-    const { before, after } = boundedContext(rawBefore, rawAfter);
-    if (!before.trim()) return;
+    clearTimeout(this.timer);
     this.pending = true;
     this.owner.session = this;
     const generation = this.generation;
     try {
+      if (!this.client.connected) {
+        if (explicit) this.client.pauseRetries?.();
+        await requestBroker({ waitMs: explicit ? 20000 : 0 });
+        if (explicit) await this.client.connect(undefined, { immediate: true }).catch(() => undefined);
+      }
+      if (generation !== this.generation || !this.matches(snapshot)) return;
+      const reason = this.blockedReason();
+      recordActivity('obsidian', 'decision', reason ?? 'eligible');
+      if (reason || (!explicit && !this.client.automaticAllowed) || !this.client.allowed) return;
+      const end = snapshot.selection.main.head;
+      // Text after the caret lets the broker suggest only what fits before it.
+      // UTF-16 slices of twice the scalar limits always hold enough scalars.
+      const beforeStart = Math.max(0, end - 1024);
+      const afterEnd = end + 256;
+      const rawBefore = dropSplitSurrogate(
+        snapshot.doc.sliceString(beforeStart, end), beforeStart > 0 ? 'start' : '');
+      const rawAfter = dropSplitSurrogate(
+        snapshot.doc.sliceString(end, afterEnd), afterEnd < snapshot.doc.length ? 'end' : '');
+      const { before, after } = boundedContext(rawBefore, rawAfter);
+      if (!before.trim()) return;
       const language = writingLanguage(before, this.owner.language === 'auto' ? navigator.language : this.owner.language);
       if (!language) throw new Error('Writing language unavailable');
       const text = await this.client.suggest(before, { explicit, language, after });
@@ -214,27 +222,32 @@ class WritingView {
   }
 
   async revise(mode) {
-    if (!this.client.connected) {
-      this.client.pauseRetries?.();
-      await requestBroker({ waitMs: 20000 });
-      await this.client.connect(undefined, { immediate: true }).catch(() => undefined);
-    }
-    const reason = this.blockedReason(true);
-    if (reason || this.pending) return;
-    const snapshot = captureRevision(this.view.state);
-    if (!snapshot) { this.owner.status.setText('Badi · select 1–600 characters on one line'); return; }
-    mode ??= this.revisionCycle && this.matches(this.revisionCycle.snapshot) ? this.revisionCycle.next : 'grammar';
-    if (!revisionModes.has(mode)) return;
+    const initialReason = this.blockedReason(true);
+    if (initialReason || this.pending) return;
+    const preSnapshot = { kind: 'revision', doc: this.view.state.doc, selection: this.view.state.selection };
     clearTimeout(this.timer);
     this.generation++;
     const generation = this.generation;
     this.clearPreview();
-    this.snapshot = snapshot;
     this.pending = true;
     this.revisionReason = null;
     this.owner.session = this;
-    this.owner.status.setText('Badi · revising selection');
     try {
+      if (!this.client.connected) {
+        this.client.pauseRetries?.();
+        await requestBroker({ waitMs: 20000 });
+        await this.client.connect(undefined, { immediate: true }).catch(() => undefined);
+      }
+      if (generation !== this.generation || !this.matches(preSnapshot) || this.blockedReason(true)) {
+        this.invalidate();
+        return;
+      }
+      const snapshot = captureRevision(this.view.state);
+      if (!snapshot) { this.owner.status.setText('Badi · select 1–600 characters on one line'); return; }
+      mode ??= this.revisionCycle && this.matches(this.revisionCycle.snapshot) ? this.revisionCycle.next : 'grammar';
+      if (!revisionModes.has(mode)) return;
+      this.snapshot = snapshot;
+      this.owner.status.setText('Badi · revising selection');
       // revise() retires its own previous preview synchronously while keeping
       // the exact session for synonyms. Other clears still revoke this view.
       this.changingRevision = true;

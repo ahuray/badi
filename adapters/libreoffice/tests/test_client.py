@@ -372,6 +372,33 @@ class OnDemandTest(unittest.TestCase):
         self.assertTrue(broker.request_broker(**options))
         self.assertEqual(len(calls), 1)
 
+    def test_automatic_request_respects_manual_activation_and_stale_socket_detection(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "stale.sock")
+            stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            stale.bind(path)
+            os.chmod(path, 0o600)
+            stale.close()
+            self.assertTrue(broker._socket_ready(path))
+            self.assertFalse(broker._live_socket_ready(path))
+            marker = os.path.join(root, "service-stopped")
+            with open(marker, "wb") as stream:
+                stream.write(b"1\n")
+            os.chmod(marker, 0o600)
+            self.assertTrue(broker._private_marker(marker))
+
+        # Manual activation blocks automatic word-finish checks before context.changed.
+        test_case = ClientTest("test_continuations_are_not_corrections")
+        test_case.setUp()
+        try:
+            fake = test_case.broker(standard(policy={**ALLOWED, "activation": "manual"}))
+            with self.assertRaises(broker.BrokerError) as raised:
+                test_case.attempt(fake).request("adress ", "", "en", explicit=False)
+            self.assertEqual(raised.exception.code, "blocked")
+            self.assertFalse(any(m["type"] == "context.changed" for m in fake.received))
+        finally:
+            test_case.doCleanups()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

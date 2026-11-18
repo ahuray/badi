@@ -125,6 +125,33 @@ pub fn verify_socket_metadata(_path: &Path) -> Result<(), FrameError> {
     Err(FrameError::PeerCredentialsUnavailable)
 }
 
+#[cfg(target_os = "linux")]
+pub fn record_service_failure(socket_path: &Path, failed: bool) {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let Some(parent) = socket_path.parent() else {
+        return;
+    };
+    let Ok(metadata) = std::fs::symlink_metadata(parent) else {
+        return;
+    };
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::getuid().as_raw()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return;
+    }
+    let marker = parent.join("service-failed");
+    if failed {
+        let _ = crate::settings::atomic_write_private(&marker, b"1\n");
+    } else {
+        let _ = crate::settings::remove_private_file(&marker);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn record_service_failure(_socket_path: &Path, _failed: bool) {}
+
 #[derive(Debug, Error)]
 pub enum FrameError {
     #[error("empty_frame")]

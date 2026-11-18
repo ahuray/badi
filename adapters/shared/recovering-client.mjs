@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { isAbsolute } from 'node:path';
 import { BrokerClient } from './broker-client.mjs';
+import { brokerSocketReady } from './request-broker.mjs';
 
 // Recovery only establishes transport and policy. It never replays prose,
 // suggestions or grants from the connection that failed.
@@ -13,6 +15,7 @@ export class RecoveringBrokerClient extends EventEmitter {
   #attempts = 0;
   #started = false;
   #closed = false;
+  #retriesPaused = false;
   // The last focus this editor reported; a new connection repeats a held
   // focus, because the broker forgets it with the old connection.
   #focused = false;
@@ -26,13 +29,14 @@ export class RecoveringBrokerClient extends EventEmitter {
   get alternativeWords() { return this.#client?.alternativeWords ?? null; }
 
   pauseRetries() {
+    this.#retriesPaused = true;
     clearTimeout(this.#timer);
     this.#timer = null;
   }
 
   connect(socketPath = this.#socketPath, { immediate = false } = {}) {
     if (this.#closed) return Promise.reject(new Error('Adapter closed'));
-    if (this.#connection) return this.#connection;
+    if (this.#connection && !immediate) return this.#connection;
     if (this.connected) return Promise.resolve(this.allowed);
     if (this.#timer !== null) {
       this.#attempts = 0;
@@ -40,15 +44,29 @@ export class RecoveringBrokerClient extends EventEmitter {
       clearTimeout(this.#timer);
       this.#timer = null;
     }
+    this.#retriesPaused = false;
     this.#socketPath = socketPath;
     this.#started = true;
     this.#attempts = 0;
     return this.#attempt();
   }
 
+  #resolvedSocketPath() {
+    if (this.#socketPath) return this.#socketPath;
+    const runtime = process.env.XDG_RUNTIME_DIR ?? '';
+    return runtime && isAbsolute(runtime) ? `${runtime}/badi/broker.sock` : null;
+  }
+
   #attempt() {
     this.#attempts++;
     const quietFocusRetry = this.#attempts > 10;
+    if (quietFocusRetry) {
+      const target = this.#resolvedSocketPath();
+      if (!target || !brokerSocketReady(target)) {
+        this.#schedule();
+        return Promise.resolve(false);
+      }
+    }
     const previous = this.#client;
     const client = new BrokerClient(this.#profile, this.#options);
     this.#client = client;
@@ -71,7 +89,7 @@ export class RecoveringBrokerClient extends EventEmitter {
       return allowed;
     }).catch(error => {
       client.close();
-      this.#schedule();
+      if (this.#client === client) this.#schedule();
       throw error;
     }).finally(() => {
       if (this.#connection === connection) this.#connection = null;
@@ -81,7 +99,7 @@ export class RecoveringBrokerClient extends EventEmitter {
   }
 
   #schedule() {
-    if (this.#closed || this.#timer !== null) return;
+    if (this.#closed || this.#retriesPaused || this.#timer !== null) return;
     if (this.#attempts >= 10) {
       if (this.#attempts === 10) this.emit('state', 'offline_retry');
       // While holding terminal focus (ADR 0009), keep watching quietly for an
@@ -91,7 +109,7 @@ export class RecoveringBrokerClient extends EventEmitter {
     const delay = this.#attempts >= 10 ? 1000 : Math.min(5000, 250 * 2 ** Math.max(0, this.#attempts - 1));
     this.#timer = setTimeout(() => {
       this.#timer = null;
-      if (!this.#closed) void this.#attempt().catch(() => undefined);
+      if (!this.#closed && !this.#retriesPaused) void this.#attempt().catch(() => undefined);
     }, delay);
     this.#timer.unref?.();
   }
@@ -128,7 +146,7 @@ export class RecoveringBrokerClient extends EventEmitter {
       this.#timer = null;
     }
     if (!this.connected) {
-      if (this.#focused && !this.#closed && this.#started && !this.#connection && this.#timer === null) {
+      if (this.#focused && !this.#closed && !this.#retriesPaused && this.#started && !this.#connection && this.#timer === null) {
         this.#schedule();
       }
       return Promise.resolve(false);
@@ -139,6 +157,7 @@ export class RecoveringBrokerClient extends EventEmitter {
   cancel() { this.#client?.cancel(); }
   close() {
     this.#closed = true;
+    this.#retriesPaused = true;
     clearTimeout(this.#timer);
     this.#timer = null;
     this.#client?.close();

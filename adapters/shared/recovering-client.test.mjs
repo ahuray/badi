@@ -167,3 +167,25 @@ test('held terminal focus keeps watching past 10 retries, sends editor.focus onc
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('pauseRetries suppresses retry scheduling even when called while an attempt is in flight', async context => {
+  const root = await mkdtemp('/tmp/badi-recovery-pause-');
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const client = new RecoveringBrokerClient('obsidian');
+  const states = [];
+  client.on('state', state => states.push(state));
+  try {
+    const pending = client.connect(`${root}/missing.sock`);
+    client.pauseRetries();
+    await assert.rejects(pending, /ENOENT/);
+    for (let retry = 0; retry < 5; retry++) {
+      context.mock.timers.tick(5000);
+      await settle();
+    }
+    assert.equal(states.filter(state => state === 'offline').length, 1);
+  } finally {
+    client.close();
+    context.mock.timers.reset();
+    await rm(root, { recursive: true, force: true });
+  }
+});

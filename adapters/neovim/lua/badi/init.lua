@@ -127,6 +127,31 @@ local function matches(s)
   return cursor[1] == s.row + 1 and cursor[2] == s.col and blocked_reason(s.buf) == nil
 end
 
+local function coordinates(selection)
+  local win = api.nvim_get_current_win()
+  local buf = api.nvim_win_get_buf(win)
+  return {
+    win = win,
+    buf = buf,
+    tick = api.nvim_buf_get_changedtick(buf),
+    cursor = api.nvim_win_get_cursor(win),
+    visual = selection and vim.fn.getpos('v') or nil,
+  }
+end
+
+local function same_coordinates(c, selection)
+  if not c or not api.nvim_win_is_valid(c.win) or not api.nvim_buf_is_valid(c.buf) then return false end
+  if api.nvim_get_current_win() ~= c.win or api.nvim_win_get_buf(c.win) ~= c.buf then return false end
+  if api.nvim_buf_get_changedtick(c.buf) ~= c.tick then return false end
+  local cursor = api.nvim_win_get_cursor(c.win)
+  if cursor[1] ~= c.cursor[1] or cursor[2] ~= c.cursor[2] then return false end
+  if selection then
+    local visual = vim.fn.getpos('v')
+    if visual[2] ~= c.visual[2] or visual[3] ~= c.visual[3] then return false end
+  end
+  return blocked_reason(c.buf, false, selection) == nil
+end
+
 local function stop_timer()
   if state.timer then
     state.timer:stop()
@@ -452,10 +477,14 @@ function M.revise(mode)
   if reason then set_status(reason); return end
   if not ensure_bridge() then set_status('bridge_unavailable'); return end
   if not state.policy then
+    local initial = coordinates(true)
     local asked = state.generation
+    state.pending = { generation = asked }
     state.bridge:request({ op = 'status', explicit = true }, function(reply)
       if reply.ok then set_policy(reply) end
-      if state.generation == asked and state.policy then M.revise(mode) end
+      if state.generation ~= asked then return end
+      state.pending = nil
+      if state.policy and same_coordinates(initial, true) then M.revise(mode) end
     end)
     return
   end
@@ -528,10 +557,15 @@ function M.request(explicit)
   -- Policy before acquisition: until the bridge has reported the policy,
   -- ask it (a content-free status), then decide as if just requested.
   if not state.policy then
+    if state.pending then return end
+    local initial = coordinates(false)
     local asked = state.generation
+    state.pending = { generation = asked }
     state.bridge:request({ op = 'status', explicit = explicit }, function(reply)
       if reply.ok then set_policy(reply) end
       if state.generation ~= asked then return end
+      state.pending = nil
+      if not same_coordinates(initial, false) then return end
       if state.policy then return M.request(explicit) end
       local why = reply.ok and 'model_offline' or reply.reason
       set_status(why)

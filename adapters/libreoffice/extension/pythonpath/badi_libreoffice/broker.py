@@ -60,7 +60,7 @@ def socket_path(environ=None):
 
 
 _BROKER_START = ["/usr/bin/systemctl", "--user", "start", "--no-block", "badi-broker.service"]
-_broker_start = {"last": None}
+_broker_start = {"last": None, "child": None}
 
 
 def live_session_runtime(environ=None, uid=None):
@@ -70,6 +70,16 @@ def live_session_runtime(environ=None, uid=None):
     if uid is None:
         uid = os.geteuid()
     return isinstance(runtime, str) and runtime == f"/run/user/{uid}"
+
+
+def _private_marker(path, uid=None):
+    try:
+        metadata = os.lstat(path)
+    except OSError:
+        return False
+    expected_uid = os.geteuid() if uid is None else uid
+    return (stat.S_ISREG(metadata.st_mode) and metadata.st_uid == expected_uid
+            and stat.S_IMODE(metadata.st_mode) == 0o600)
 
 
 def _socket_ready(path, uid=None):
@@ -82,8 +92,28 @@ def _socket_ready(path, uid=None):
             and stat.S_IMODE(metadata.st_mode) == 0o600)
 
 
+def _live_socket_ready(path, uid=None):
+    if not _socket_ready(path, uid):
+        return False
+    probe = None
+    try:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM | socket.SOCK_CLOEXEC)
+        probe.settimeout(0.5)
+        probe.connect(path)
+        return True
+    except ConnectionRefusedError:
+        return False
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    finally:
+        if probe is not None:
+            probe.close()
+
+
 def request_broker(environ=None, uid=None, spawn=None, socket_ready=None, now=None,
-                   wait_seconds=0, slot=None):
+                   wait_seconds=0, slot=None, should_stop=None):
     """Start the user broker when a Writer attempt needs it and it is down.
 
     Returns True once the socket exists. A private runtime does nothing, so
@@ -92,29 +122,44 @@ def request_broker(environ=None, uid=None, spawn=None, socket_ready=None, now=No
     if not live_session_runtime(environ, uid):
         return False
     environ = os.environ if environ is None else environ
-    path = os.path.join(environ["XDG_RUNTIME_DIR"], "badi", "broker.sock")
-    ready = (lambda candidate: _socket_ready(candidate, uid)) if socket_ready is None else socket_ready
+    directory = os.path.join(environ["XDG_RUNTIME_DIR"], "badi")
+    blocked = lambda: (_private_marker(os.path.join(directory, "service-stopped"), uid)
+                       or _private_marker(os.path.join(directory, "service-failed"), uid)
+                       or (should_stop is not None and should_stop()))
+    state = _broker_start if slot is None else slot
+    child = state.get("child")
+    if child is not None and child.poll() is not None:
+        state["child"] = None
+    if blocked():
+        return False
+    path = os.path.join(directory, "broker.sock")
+    ready = (lambda candidate: _live_socket_ready(candidate, uid)) if socket_ready is None else socket_ready
     if ready(path):
         return True
     clock = time.monotonic if now is None else now
-    state = _broker_start if slot is None else slot
     at = clock()
     last = state.get("last")
     if last is None or at - last >= 5:
         state["last"] = at
         if spawn is None:
-            subprocess.Popen(_BROKER_START, start_new_session=True, stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                state["child"] = subprocess.Popen(
+                    _BROKER_START, start_new_session=True, stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError:
+                return False
         else:
             spawn(list(_BROKER_START))
     if wait_seconds <= 0:
         return False
     deadline = at + wait_seconds
     while clock() < deadline:
+        if blocked():
+            return False
         if ready(path):
             return True
         time.sleep(0.2)
-    return bool(ready(path))
+    return False if blocked() else bool(ready(path))
 
 
 def check_private_socket(path):
@@ -165,15 +210,17 @@ class Attempt:
 
     # Connection -----------------------------------------------------------
 
-    def _connect(self):
+    def _connect(self, explicit=True):
         try:
             default = socket_path()
         except BrokerError:
             default = None
         # An explicit test socket is not the session broker. Only the live
-        # default socket may start the model, and only because Writer asked.
+        # default socket may start the model, and only an explicit request blocks
+        # waiting for a cold start.
         if default is not None and self._path == default:
-            request_broker(wait_seconds=20)
+            request_broker(wait_seconds=20 if explicit else 0,
+                           should_stop=lambda: self._closed)
         check_private_socket(self._path)
         connection = None
         try:
@@ -345,7 +392,7 @@ class Attempt:
 
     # Correction ---------------------------------------------------------
 
-    def _policy(self):
+    def _policy(self, explicit=True):
         target = {"kind": TARGET_KIND, "app_id": APP_ID, "target_id": str(uuid.uuid4())}
         epoch = self._epoch
         policy = self._rpc("policy.query", {"target": target}, ("policy.status",))["payload"]
@@ -360,7 +407,9 @@ class Attempt:
             raise self._fail("protocol")
         if policy["authority_epoch"] != epoch or epoch != self._epoch:
             raise self._fail("revoked")
-        if (policy["paused"] or policy["activation"] == "never" or not policy["context_allowed"]
+        if (policy["paused"] or policy["activation"] == "never"
+                or (not explicit and policy["activation"] != "always")
+                or not policy["context_allowed"]
                 or not policy["display_allowed"] or not policy["suggestions_allowed"]):
             raise self._fail("blocked")
 
@@ -374,8 +423,8 @@ class Attempt:
         if bounded is None or not badi_text.valid_language_tag(language):
             raise BrokerError("protocol")
         before, after = bounded
-        self._connect()
-        self._policy()
+        self._connect(explicit=explicit)
+        self._policy(explicit=explicit)
         session_id = str(uuid.uuid4())
         self._session = {"session_id": session_id, "focus_epoch": 1, "revision": 1}
         self._fingerprint = hashlib.sha256(uuid.uuid4().bytes + before.encode("utf-8")).hexdigest()

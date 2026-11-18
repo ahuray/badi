@@ -83,6 +83,7 @@ Item {
   property var pickedPlaces: null
   property var serviceState: ({})
   property string serviceError: ""
+  property bool startWhenOpened: false
   property string actionMessage: ""
   // A destructive row asks first, in Omarchy's own confirm dialog.
   property var confirmation: null
@@ -196,8 +197,22 @@ Item {
     probeService()
   }
 
+  function startIfIdle() {
+    if (client.brokerReachable || controlsBusy || typeof serviceState.active !== "string") return
+    if (serviceState.active === "inactive" && serviceState.stopped !== true && serviceState.condition_unmet !== true) {
+      startWhenOpened = false
+      runAction(["service", "start"], "Starting the model", "")
+    }
+  }
+
   function togglePause() {
-    if (!client.canMutateSettings || action.running) return
+    if (!client.canMutateSettings || action.running) {
+      if (!client.brokerReachable && !controlsBusy && serviceState.active === "inactive"
+          && serviceState.stopped !== true && serviceState.condition_unmet !== true) {
+        runAction(["pause", "toggle"], "Updating pause", "Updated")
+      }
+      return
+    }
     // Resuming ends every snooze too, as badi resume does.
     if (client.brokerPaused && snoozes.length > 0) return runAction(["resume"], "Resuming", "Resumed · snooze ended")
     actionMessage = ""
@@ -960,6 +975,7 @@ Item {
         root.serviceState = state
         root.serviceError = state.startup_problem && typeof state.startup_problem.message === "string"
           ? state.startup_problem.message : ""
+        if (root.startWhenOpened) root.startIfIdle()
       } catch (error) {
         root.serviceState = ({})
         root.serviceError = serviceStderr.text.trim() || "Service status unavailable · run badi doctor"

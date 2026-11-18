@@ -7,6 +7,7 @@ leaves those out, and Fcitx loads the addon at the next login.
 """
 
 import argparse
+import contextlib
 from dataclasses import dataclass
 import hashlib
 import importlib.util
@@ -898,6 +899,9 @@ def restart(plan, installation):
     run(["systemctl", "--user", "daemon-reload"])
     # badi-broker.service starts on demand when the user types or asks; leave
     # login autostart as the user's explicit `badi autostart on|off` choice.
+    for marker in ("service-stopped", "service-failed"):
+        with contextlib.suppress(OSError):
+            (runtime / "badi" / marker).unlink(missing_ok=True)
     reset_failed("badi-broker.service")
     run(["systemctl", "--user", "restart", "badi-broker.service"])
     probe = wait_model(home / ".local/lib/badi/badictl", runtime / "badi/broker.sock")

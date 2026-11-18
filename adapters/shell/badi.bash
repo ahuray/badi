@@ -38,6 +38,7 @@ _badi_alive() {
 }
 
 _badi_exchange() {
+  local badi_timeout=${2:-3}
   BADI_REPLY_STATUS=ERROR
   BADI_REPLY_VALUE=connection_closed
   # A bridge exiting at this instant must not end this shell with SIGPIPE:
@@ -49,7 +50,7 @@ _badi_exchange() {
   badi_sent=$?
   if [[ -n $badi_pipe_trap ]]; then eval "$badi_pipe_trap"; else trap - PIPE; fi
   if (( badi_sent )) ||
-      ! IFS=' ' read -r -t 3 -u "$BADI_READER_FD" BADI_REPLY_STATUS BADI_REPLY_VALUE BADI_REPLY_REPLACE; then
+      ! IFS=' ' read -r -t "$badi_timeout" -u "$BADI_READER_FD" BADI_REPLY_STATUS BADI_REPLY_VALUE BADI_REPLY_REPLACE; then
     _badi_stop
     printf '\nBadi: bridge connection closed. Press Ctrl-X Tab to reconnect.\n'
     return 1
@@ -84,7 +85,8 @@ _badi_words() {
   [[ -v READLINE_LINE ]] || return 0
   _badi_renderer || return 0
   _badi_start || return 0
-  _badi_exchange '{"operation":"status"}' || return 0
+  # Status reconnects an idle model if the broker stopped while the bridge lived.
+  _badi_exchange '{"operation":"status"}' 25 || return 0
   if [[ $BADI_REPLY_STATUS != READY ]]; then
     _badi_clear_preview
     [[ $BADI_REPLY_STATUS == BLOCKED ]] || _badi_stop

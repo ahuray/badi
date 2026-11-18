@@ -107,8 +107,10 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     // confirms an editable field, so password fields and urlbars never wake it.
     if (sensitive) {
         binding->observation.pendingBrokerStart = false;
-    } else if (!pressed.modifier && !pressed.repeat) {
-        if (binding->state.editingAvailable()) {
+    } else if (!pressed.modifier && !pressed.repeat && printableKey(typed)) {
+        // Manual native apps suggest only on explicit Tab/Ctrl+Shift+Space, so
+        // ordinary typing there must not cold-start the model.
+        if (binding->state.editingAvailable() && binding->state.editPath() != NativeEditPath::Manual) {
             binding->observation.pendingBrokerStart = false;
             ensureBroker();
         } else if (binding->observationCandidate()) {
@@ -270,9 +272,6 @@ void BadiAddon::holdTab(Binding &binding) {
 // Plain Tab is claimed before Fcitx's candidate navigation only to accept
 // or to request on the manual path; otherwise it stays the application's.
 void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelObservation &panel) {
-    // An explicit key can renew an exhausted recovery budget without
-    // reading the field before the new policy response arrives.
-    ensureBroker();
     const auto facts = requestFacts(binding);
     const auto context = facts.foreignIme ? std::nullopt : currentContext(binding);
     debug_.record("decision", binding.state.appId(), tabDecisionReason(facts, context),
@@ -280,9 +279,11 @@ void BadiAddon::tabKey(::fcitx::KeyEvent &event, Binding &binding, const PanelOb
     switch (decideTabAction(tabEligibleContext(context), binding.state.suggestionVisible(), panel,
                             binding.state.editPath())) {
     case TabAction::AcceptWord:
+        ensureBroker();
         requestAcceptance(binding, true);
         break;
     case TabAction::Invoke:
+        ensureBroker();
         invoke(binding);
         break;
     case TabAction::PassThrough:
@@ -410,8 +411,10 @@ void BadiAddon::keyEvent(::fcitx::KeyEvent &event) {
 // Explicit requests.
 void BadiAddon::invoke(Binding &binding) {
     binding.observation.zenCommit.clear();
-    if (binding.state.editingAvailable() && binding.state.editPath() == NativeEditPath::TypedLine)
+    if (binding.state.editingAvailable() && binding.state.editPath() == NativeEditPath::TypedLine) {
+        ensureBroker();
         return requestTypedLine(binding, true);
+    }
     switch (routeInvoke(binding.state.appId(), binding.state.editingAvailable(), binding.observed())) {
     case InvokeRoute::InspectField:
         return inspectOnRequest(binding);
