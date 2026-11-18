@@ -621,6 +621,7 @@ class ReceiptTests(unittest.TestCase):
             broker.write_bytes(f'#!/bin/sh\necho "{unknown_dirty_v1}"\n'.encode())
             observer.write_bytes(b'observer aligned\n')
             addon.write_bytes(b'addon aligned')
+            addon.chmod(0o755)
             unit.write_bytes(b'unit aligned\n')
             badi_install.write_receipt(home, 'desktop', {'commit': first_commit, 'dirty': False},
                                        [broker, observer, addon, unit])
@@ -651,6 +652,33 @@ class ReceiptTests(unittest.TestCase):
             rolled_back = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
             self.assertEqual(rolled_back['source'], {'commit': first_commit, 'dirty': False})
             self.assertNotIn('partial_components', rolled_back)
+
+            # A dirty full install at first_commit (rebuilt broker dirty=true, byte-identical helpers dirty=false),
+            # followed by a clean --broker-only update at second_commit and a full restore, clears partial_components.
+            dirty_v1_line = f'badi-broker 0.2.0 commit={first_commit} dirty=true'
+            dirty_full = badi_install.Installation(home, 'desktop')
+            self.assertTrue(dirty_full.write(broker, f'#!/bin/sh\necho "{dirty_v1_line}"\n'.encode(), 0o755))
+            self.assertFalse(dirty_full.write(observer, b'observer aligned\n', 0o644))
+            self.assertFalse(dirty_full.write(addon, b'addon aligned', 0o755))
+            self.assertFalse(dirty_full.write(unit, b'unit aligned\n', 0o644))
+            badi_install.write_receipt(home, 'desktop', {'commit': first_commit, 'dirty': True}, dirty_full.current)
+            self.assertNotIn('partial_components', json.loads(badi_install.receipt_path(home, 'desktop').read_text()))
+
+            clean_partial = badi_install.Installation(home, 'desktop')
+            clean_partial.write(broker, f'#!/bin/sh\necho "{v2_line}"\n'.encode(), 0o755)
+            badi_install.write_receipt(home, 'desktop', {'commit': second_commit, 'dirty': False}, clean_partial.current)
+            self.assertEqual(
+                json.loads(badi_install.receipt_path(home, 'desktop').read_text())['partial_components'],
+                expected_partial,
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(badi_install.restore(clean_partial.directory), [])
+            dirty_rolled_back = json.loads(badi_install.receipt_path(home, 'desktop').read_text())
+            self.assertEqual(dirty_rolled_back['source'], {'commit': first_commit, 'dirty': True})
+            self.assertNotIn('partial_components', dirty_rolled_back)
+            report, text = doctor_for(home, dirty_v1_line, badi_install.file_sha256(broker))
+            self.assertFalse(any('Only part of the desktop install was updated' in note for note in report['notes']))
+            self.assertNotIn('(partial)', text)
 
     def test_editor_subset_installs_and_restores_never_set_partial_components(self):
         with tempfile.TemporaryDirectory() as temporary:

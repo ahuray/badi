@@ -416,28 +416,20 @@ def _refreshed_partial_components(receipt, files, restored_set, complete):
         return []
     lib_commits = {item.get("commit") for item in lib_items.values()}
     sole_lib_commit = next(iter(lib_commits)) if len(lib_commits) == 1 else None
-    libs_aligned = (
-        isinstance(sole_lib_commit, str)
-        and bool(re.fullmatch(r"[0-9a-f]{40}", sole_lib_commit))
-        and not any(bool(item.get("dirty")) for item in lib_items.values())
-    )
-    if complete and libs_aligned:
+    if complete and isinstance(sole_lib_commit, str) and re.fullmatch(r"[0-9a-f]{40}", sole_lib_commit):
         return []
     source = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
     source_commit = source.get("commit")
-    source_clean = (
-        isinstance(source_commit, str)
-        and bool(re.fullmatch(r"[0-9a-f]{40}", source_commit))
-        and not bool(source.get("dirty"))
-    )
+    source_known = isinstance(source_commit, str) and bool(re.fullmatch(r"[0-9a-f]{40}", source_commit))
+    source_dirty = bool(source.get("dirty"))
 
     def matches_source(key):
         item = lib_items.get(key)
         return (
-            source_clean
+            source_known
             and isinstance(item, dict)
             and item.get("commit") == source_commit
-            and not bool(item.get("dirty"))
+            and bool(item.get("dirty")) == source_dirty
         )
 
     partial = {
@@ -445,12 +437,9 @@ def _refreshed_partial_components(receipt, files, restored_set, complete):
         if isinstance(key, str) and key in lib_items and not (key in restored_set and matches_source(key))
     }
     restored_libs = {key for key in restored_set if key in lib_items}
-    if restored_libs and not libs_aligned and (
+    if restored_libs and (
         not complete
-        or (
-            len({(item.get("commit"), bool(item.get("dirty"))) for item in lib_items.values()}) > 1
-            and any(item.get("commit") == source_commit for item in lib_items.values())
-        )
+        or (source_known and any(item.get("commit") == source_commit for item in lib_items.values()))
     ):
         partial.update(key for key in restored_libs if not matches_source(key))
     return sorted(partial)
