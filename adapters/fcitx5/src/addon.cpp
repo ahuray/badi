@@ -1,5 +1,6 @@
 #include "addon.h"
 
+#include <fcitx-utils/log.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/addoninstance.h>
 #include <fcitx/addonmanager.h>
@@ -10,6 +11,7 @@
 #include <fcitx/userinterface.h>
 
 #include <array>
+#include <exception>
 #include <memory>
 #include <string>
 #include <utility>
@@ -27,13 +29,28 @@ BadiAddon::BadiAddon(::fcitx::Instance *instance)
 }
 
 BadiAddon::~BadiAddon() {
-    handlers_.clear();
+    // Fcitx unloads its addons while the broker and observer connections may
+    // already be gone. An exception leaving a destructor calls std::terminate,
+    // which aborted fcitx5 on every `fcitx5 --replace` during an install. Each
+    // step runs on its own, and a failure is logged with its cause.
+    const auto guarded = [](const char *step, const auto &action) noexcept {
+        try {
+            action();
+        } catch (const std::exception &error) {
+            FCITX_WARN() << "Badi shutdown: " << step << " failed: " << error.what();
+        } catch (...) {
+            FCITX_WARN() << "Badi shutdown: " << step << " failed";
+        }
+    };
+    guarded("clearing event handlers", [this] { handlers_.clear(); });
     for (auto &[_, binding] : bindings_) {
-        retire(binding, RetireReason::FocusReset);
-        binding.readBack.clearCorrection();
+        guarded("retiring a field", [this, &binding] {
+            retire(binding, RetireReason::FocusReset);
+            binding.readBack.clearCorrection();
+        });
     }
-    accessibility_.reset();
-    transport_.disconnect();
+    guarded("closing the observer connection", [this] { accessibility_.reset(); });
+    guarded("disconnecting from the broker", [this] { transport_.disconnect(); });
 }
 
 WireCallbacks BadiAddon::callbacksFor(BadiAddon *addon) {
