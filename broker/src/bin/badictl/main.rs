@@ -539,10 +539,12 @@ async fn connect(path: &Path) -> Result<UnixStream, CliError> {
     hello.id = Some(request_id.clone());
     tokio::time::timeout(HANDSHAKE_TIMEOUT, write_envelope(&mut stream, &hello))
         .await
-        .map_err(|_| CliError::Handshake)??;
+        .map_err(|_| CliError::Handshake)?
+        .map_err(handshake_error)?;
     let acknowledgment = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_envelope(&mut stream))
         .await
-        .map_err(|_| CliError::Handshake)??
+        .map_err(|_| CliError::Handshake)?
+        .map_err(handshake_error)?
         .ok_or(CliError::ConnectionClosed)?;
     validate_handshake(&acknowledgment, &request_id)?;
     Ok(stream)
@@ -1192,10 +1194,31 @@ enum CliError {
     UnsafeSocket,
 }
 
+/// A connection lost during the hello exchange happened before any command
+/// was written, so it is retryable like an absent socket (`error_code=io`).
+fn handshake_error(error: badi_broker::ipc::FrameError) -> CliError {
+    match error {
+        badi_broker::ipc::FrameError::Io(io_error) => CliError::Io(io_error),
+        other => CliError::from(other),
+    }
+}
+
 impl From<badi_broker::ipc::FrameError> for CliError {
     fn from(error: badi_broker::ipc::FrameError) -> Self {
         match error {
-            badi_broker::ipc::FrameError::Io(io_error) => Self::Io(io_error),
+            // `error_code=io` tells `badi` that no broker is there, so it may
+            // start one and send the command again. Only an absent or refused
+            // socket means that; a reset or broken pipe after the request was
+            // written may follow a committed change, which a replay would
+            // repeat, so those stay frame errors.
+            badi_broker::ipc::FrameError::Io(io_error)
+                if matches!(
+                    io_error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                Self::Io(io_error)
+            }
             badi_broker::ipc::FrameError::UnsafeSocket => Self::UnsafeSocket,
             badi_broker::ipc::FrameError::MissingRuntimeDir => Self::MissingRuntimeDir,
             badi_broker::ipc::FrameError::InvalidRuntimeDir => Self::InvalidRuntimeDir,
