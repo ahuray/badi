@@ -40,8 +40,11 @@ local state = {
   -- The preview: { snapshot, text, display, replace_before, mark, saved }.
   visible = nil,
   accepting = false,
+  applying = false,
   -- Text-only memory of the last preview, for type-through detection.
   shown = nil,
+  -- The changedtick of Badi's own edit, so a deferred TextChangedI ignores it.
+  applied_tick = nil,
   focused = true,
   -- Neovim holds its terminal's focus, as the terminal reported it. While
   -- it does, the broker keeps the input method's typed line out of the
@@ -51,6 +54,7 @@ local state = {
   -- connected: { allowed, automatic }, or nil until then. No buffer text is
   -- read for a request it does not allow.
   policy = nil,
+  pending_refusal = false,
   status = 'idle',
   targets = {},
   target_seq = 0,
@@ -244,18 +248,54 @@ local function ensure_bridge()
         -- preview is gone, so the preview goes too. This also stale-outs an
         -- acceptance whose grant reply has not been applied yet.
         if state.visible or state.accepting then invalidate(nil) end
+      elseif message.event == 'policy' then
+        set_policy(message)
+        if not state.policy or not state.policy.allowed then
+          stop_timer()
+          clear_preview()
+          state.accepting = false
+          state.revision_cycle = nil
+          if state.pending and not state.pending.status_check and not state.pending.explicit then
+            invalidate(nil)
+          end
+        end
       elseif message.event == 'update' then
         extend(message.text, message.word)
       elseif message.event == 'state' then
-        set_status(message.state)
+        local keep_refusal = state.pending_refusal
+          and (message.state == 'paused' or message.state == 'app_disabled')
         set_policy(message)
-        if state.policy and not state.policy.allowed then invalidate(nil) end
-        if message.state == 'offline' or message.state == 'offline_retry' then invalidate(nil) end
+        if state.policy then state.pending_refusal = false end
+        if not keep_refusal or (state.policy and state.policy.allowed) then
+          set_status(message.state)
+        end
+        local refused_policy = (state.policy and not state.policy.allowed)
+          or message.state == 'paused' or message.state == 'policy_never'
+        if not state.policy or refused_policy
+            or message.state == 'offline' or message.state == 'offline_retry' then
+          local pending = state.pending
+          if pending and pending.status_check and message.state ~= 'offline' and message.state ~= 'offline_retry' then
+            stop_timer()
+            clear_preview()
+            state.accepting = false
+            state.revision_cycle = nil
+          else
+            invalidate(nil)
+            if pending and pending.explicit and refused_policy then
+              set_status('app_disabled_or_model_paused')
+              if not state.policy then state.pending_refusal = true end
+              if pending.echo_refusal then
+                api.nvim_echo({ { 'Badi: app disabled or model paused' } }, true, {})
+              end
+            end
+          end
+        end
       end
     end,
     on_exit = function()
       invalidate(nil)
       state.policy = nil
+      state.pending_refusal = false
       set_status('bridge_exited')
     end,
   })
@@ -484,19 +524,32 @@ end
 --- Requests a suggestion for the caret now. `explicit` is a user request;
 --- on a shown suggestion it asks for another one instead.
 function M.revise(mode)
-  if not state.config or state.accepting or state.pending then return end
+  if not state.config or state.accepting then return end
+  if state.pending then
+    if not state.pending.explicit or (state.pending.status_check
+        and not same_coordinates(state.pending.initial, state.pending.selection == true)) then
+      invalidate(nil)
+    else
+      return
+    end
+  end
   local reason = blocked_reason(nil, false, true)
   if reason then set_status(reason); return end
   if not ensure_bridge() then set_status('bridge_unavailable'); return end
   if not state.policy then
     local initial = coordinates(true)
     local asked = state.generation
-    state.pending = { generation = asked }
+    state.pending = {
+      generation = asked, status_check = true, initial = initial, selection = true,
+      explicit = true, echo_refusal = false,
+    }
     state.bridge:request({ op = 'status', explicit = true }, function(reply)
       if reply.ok then set_policy(reply) end
       if state.generation ~= asked then return end
       state.pending = nil
-      if state.policy and same_coordinates(initial, true) then M.revise(mode) end
+      if not same_coordinates(initial, true) then return end
+      if state.policy then return M.revise(mode) end
+      set_status(reply.ok and 'model_offline' or reply.reason)
     end)
     return
   end
@@ -509,18 +562,19 @@ function M.revise(mode)
   if mode ~= 'grammar' and mode ~= 'refine' and mode ~= 'synonyms' then set_status('invalid_request'); return end
   invalidate(nil)
   local generation = state.generation
-  state.pending = { generation = generation, snapshot = s }
+  state.pending = { generation = generation, snapshot = s, explicit = true, echo_refusal = false }
   set_status('revising')
   state.bridge:request({ op = 'revise', mode = mode, before = s.before, selected = s.selected, after = s.after,
     selection = s.selection, language = state.config.language, target_id = target_id(s.buf) }, function(reply)
     if state.generation ~= generation then return end
     state.pending = nil
     local current = matches(s)
-    if not reply.ok or not current then
+    local denied = not state.policy and 'stale' or policy_reason(true)
+    if not reply.ok or not current or denied then
       invalidate('cancel')
       state.bridge:notify({ op = 'cancel' })
-      set_status(reply.ok and 'stale' or reply.reason)
-      if current and reply.reason == 'revision_unavailable' then
+      set_status(not reply.ok and reply.reason or denied or 'stale')
+      if current and not reply.ok and reply.reason == 'revision_unavailable' then
         api.nvim_echo({ { 'Badi revisions unavailable — run badi revise' } }, true, {})
       end
       return
@@ -569,10 +623,20 @@ function M.request(explicit)
   -- Policy before acquisition: until the bridge has reported the policy,
   -- ask it (a content-free status), then decide as if just requested.
   if not state.policy then
-    if state.pending then return end
     local initial = coordinates(false)
+    if state.pending then
+      if (explicit and not state.pending.explicit) or (state.pending.status_check
+          and not same_coordinates(state.pending.initial, state.pending.selection == true)) then
+        invalidate(nil)
+      else
+        return
+      end
+    end
     local asked = state.generation
-    state.pending = { generation = asked }
+    state.pending = {
+      generation = asked, status_check = true, initial = initial, selection = false,
+      explicit = explicit, echo_refusal = explicit,
+    }
     state.bridge:request({ op = 'status', explicit = explicit }, function(reply)
       if reply.ok then set_policy(reply) end
       if state.generation ~= asked then return end
@@ -596,7 +660,7 @@ function M.request(explicit)
   if not before:find('%S') then return end
   invalidate(nil)
   local generation = state.generation
-  state.pending = { generation = generation, snapshot = s }
+  state.pending = { generation = generation, snapshot = s, explicit = explicit, echo_refusal = explicit }
   set_status('thinking')
   state.bridge:request({
     op = 'suggest', before = before, after = after, explicit = explicit, language = state.config.language,
@@ -607,6 +671,15 @@ function M.request(explicit)
     if not reply.ok then
       set_status(reply.reason)
       if explicit then api.nvim_echo({ { 'Badi: ' .. tostring(reply.reason):gsub('_', ' ') } }, true, {}) end
+      return
+    end
+    local denied = not state.policy and 'stale' or policy_reason(explicit)
+    if denied then
+      set_status(denied)
+      state.bridge:notify({ op = 'cancel' })
+      if explicit and denied ~= 'stale' then
+        api.nvim_echo({ { 'Badi: ' .. denied:gsub('_', ' ') } }, true, {})
+      end
       return
     end
     if not context.insertable(reply.text) then
@@ -680,7 +753,7 @@ accept = function(acceptance)
       expected = reply.replace_before == nil and (acceptance == 'all' and text == visible.text
         or (acceptance == 'word' and context.insertable(text) and visible.text:sub(1, #text) == text))
     end
-    local policy_allowed = state.policy == nil or policy_reason(true) == nil
+    local policy_allowed = state.policy ~= nil and policy_reason(true) == nil
     local safe = is_revision and revision.safe_text(text) or context.insertable(text)
     if not expected or not policy_allowed or not safe or not matches(s) then
       state.bridge:notify({ op = 'result', status = 'stale' })
@@ -688,17 +761,43 @@ accept = function(acceptance)
       set_status('stale')
       return
     end
+    local carries_rest = not is_revision and replace_before == nil and #text < #visible.text
     clear_preview()
+    stop_timer()
+    if not carries_rest then state.shown = nil end
     state.generation = state.generation + 1
     state.revision_cycle = nil
+    state.applying = true
     local applied = is_revision and revision.apply(s, text) or (not is_revision and apply(s, text, replace_before))
+    state.applying = false
+    if applied and api.nvim_buf_is_valid(s.buf) then
+      local tick = api.nvim_buf_get_changedtick(s.buf)
+      state.applied_tick = { buf = s.buf, tick = tick }
+      if carries_rest and state.config.automatic and not blocked_reason(s.buf) then
+        local cursor = api.nvim_win_get_cursor(s.win)
+        state.timer = vim.uv.new_timer()
+        state.scheduled = { buf = s.buf, tick = tick, row = cursor[1] - 1, col = cursor[2] }
+        local next_generation = state.generation
+        state.timer:start(TYPE_THROUGH_DELAY_MS, 0, vim.schedule_wrap(function()
+          if state.generation ~= next_generation then return end
+          stop_timer()
+          M.request(false)
+        end))
+      end
+    else
+      state.applied_tick = nil
+    end
     state.bridge:notify({ op = 'result', status = applied and 'applied' or 'failed' })
     set_status(applied and 'applied' or 'failed')
   end)
 end
 
 local function on_text_changed()
+  if state.applying then return end
   local s = snapshot()
+  local applied = state.applied_tick
+  state.applied_tick = nil
+  if applied and applied.buf == s.buf and applied.tick == s.tick then return end
   local through = context.typed_through(state.shown,
     { buf = s.buf, row = s.row, line_before = s.line:sub(1, s.col) })
   invalidate('cancel')
@@ -714,6 +813,10 @@ local function on_text_changed()
 end
 
 local function on_cursor_moved()
+  if state.pending and state.pending.status_check then
+    if not same_coordinates(state.pending.initial, state.pending.selection == true) then invalidate(nil) end
+    return
+  end
   local active = state.visible and state.visible.snapshot or state.pending and state.pending.snapshot
     or state.revision_cycle and state.revision_cycle.snapshot
   if active then
@@ -737,12 +840,16 @@ local function dismiss()
     invalidate('cancel')
   end
   state.shown = nil
+  state.applied_tick = nil
 end
 
 function M.setup(options)
   state.config = vim.tbl_deep_extend('force', vim.deepcopy(defaults), options or {})
   state.targets = {}
   state.target_seq = 0
+  state.applying = false
+  state.applied_tick = nil
+  state.pending_refusal = false
   if state.bridge then
     invalidate('cancel')
     state.bridge:stop()
@@ -829,6 +936,9 @@ end
 function M.reconnect()
   invalidate('cancel')
   state.shown = nil
+  state.applying = false
+  state.applied_tick = nil
+  state.pending_refusal = false
   if state.bridge then state.bridge:stop() end
   state.bridge = nil
   return ensure_bridge()

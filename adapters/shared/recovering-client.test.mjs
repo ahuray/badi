@@ -54,6 +54,7 @@ test('immediate connect bypasses an armed backoff timer after an on-demand broke
     // A plain connect yields to the scheduled backoff timer.
     assert.equal(await client.connect(endpoint), false);
     server = createServer(socket => {
+      socket.on('error', () => {});
       let buffer = Buffer.alloc(0);
       socket.on('data', chunk => {
         buffer = Buffer.concat([buffer, chunk]);
@@ -116,6 +117,7 @@ test('held terminal focus keeps watching past 10 retries, sends editor.focus onc
 
     server = createServer(socket => {
       attemptsSeen++;
+      socket.on('error', () => {});
       let buffer = Buffer.alloc(0);
       socket.on('data', chunk => {
         buffer = Buffer.concat([buffer, chunk]);

@@ -22,11 +22,17 @@ export class RecoveringBrokerClient extends EventEmitter {
 
   constructor(profile, options = {}) { super(); this.#profile = profile; this.#options = { ...options }; }
   get connected() { return !this.#closed && this.#client?.connected === true; }
+  get policyKnown() { return !this.#closed && this.#client?.policyKnown === true; }
   get allowed() { return !this.#closed && this.#client?.allowed === true; }
   get automaticAllowed() { return !this.#closed && this.#client?.automaticAllowed === true; }
   get replacementBefore() { return this.#client?.replacementBefore; }
   get acceptWord() { return this.#client?.acceptWord; }
   get alternativeWords() { return this.#client?.alternativeWords ?? null; }
+
+  ensurePolicy() {
+    if (!this.connected) return Promise.resolve(false);
+    return this.#client.ensurePolicy();
+  }
 
   pauseRetries() {
     this.#retriesPaused = true;
@@ -71,7 +77,7 @@ export class RecoveringBrokerClient extends EventEmitter {
     const client = new BrokerClient(this.#profile, this.#options);
     this.#client = client;
     previous?.close();
-    for (const event of ['clear', 'update', 'activity', 'state']) {
+    for (const event of ['clear', 'update', 'activity', 'state', 'authority']) {
       client.on(event, value => {
         if (this.#closed || this.#client !== client) return;
         if (event === 'state' && value === 'offline') {
@@ -138,7 +144,7 @@ export class RecoveringBrokerClient extends EventEmitter {
     if (!this.allowed) return Promise.reject(new Error('Revision expired'));
     return this.#client.authorizeRevision();
   }
-  report(...args) { if (this.allowed) this.#client.report(...args); }
+  report(...args) { if (this.connected) this.#client.report(...args); }
   reportFocus(focused) {
     this.#focused = focused === true;
     if (!this.#focused && this.#attempts >= 10 && this.#timer !== null) {

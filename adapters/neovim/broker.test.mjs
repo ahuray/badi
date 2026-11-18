@@ -19,9 +19,13 @@ test('Neovim edits through the real broker only under its exact grant', { skip }
   const root = await mkdtemp('/tmp/badi-neovim-broker-');
   const environment = { ...process.env, XDG_RUNTIME_DIR: join(root, 'runtime'),
     XDG_CONFIG_HOME: join(root, 'config'), XDG_DATA_HOME: join(root, 'data') };
-  const control = async (args, input = '') => {
+  const control = async (args, input) => {
     const running = promisify(execFile)(join(ROOT, 'target/debug/badictl'), args, { env: environment, encoding: 'utf8' });
-    running.child.stdin.end(input);
+    if (running.child.stdin) {
+      running.child.stdin.on('error', () => {});
+      if (input !== undefined) running.child.stdin.end(input);
+      else running.child.stdin.end();
+    }
     return JSON.parse((await running).stdout);
   };
   // The broker counts a commit once the editor reports it applied.
