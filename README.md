@@ -23,12 +23,14 @@ clicking the Fcitx candidate) takes it all.
 - **Typo fixes:** `teh → the` in English out of the box; German, French, Spanish,
   Italian, Dutch and Polish after `badi spelling LANG on` and that language's
   Hunspell package (`badi spelling` names it).
-- **Revise a selection:** select one line and press `Ctrl+Shift+Space` for a
+- **Revise a selection:** select text on one line (character-wise `v` in Neovim)
+  in a plain text field, Obsidian or Neovim and press `Ctrl+Shift+Space` for a
   grammar fix; press again for a refined wording, and again for a synonym of a
-  short phrase. This uses a second model, Qwen3 1.7B, that `badi revise install`
-  downloads and that starts on the first request.
+  short phrase. Rich editors and LibreOffice Writer are not supported yet. This
+  uses a second model, Qwen3 1.7B, that `badi revise install` downloads.
 - **Private by design:** the model runs on your CPU in a service with no
-  network access, and it only reads fields you allowed. See [Privacy](#privacy).
+  network access, and Badi reads only fields you allowed (with context on, also
+  text near them, never kept). See [Privacy](#privacy).
 - **Your keyboard stays yours:** Badi runs beside your Fcitx 5 input method,
   never submits anything, and steps aside while another input method composes.
 - **Where you write:** browsers and web apps, VS Code, Telegram, LibreOffice
@@ -48,8 +50,8 @@ on GNOME and KDE Plasma). On Omarchy or Arch Linux:
 1. Install the build and runtime packages, and get the code:
 
    ```sh
-   sudo pacman -S --needed git rust cmake ninja nlohmann-json fcitx5 gtk4 gtk4-layer-shell \
-     python python-gobject python-cairo at-spi2-core pipewire curl
+   sudo pacman -S --needed base-devel git rust cmake ninja nlohmann-json fcitx5 gtk4 \
+     gtk4-layer-shell python python-gobject python-cairo at-spi2-core pipewire curl
    git clone https://github.com/ahuray/badi && cd badi
    ```
 
@@ -64,8 +66,10 @@ on GNOME and KDE Plasma). On Omarchy or Arch Linux:
    ```
 
    On Omarchy, Badi is ready at once. On plain Arch, log out and back in so
-   Fcitx loads the addon; on GNOME, then run `gnome-extensions enable
-   badi-focus@ahuray.github.io`.
+   Fcitx loads the addon; a compositor started from a TTY must also start
+   `graphical-session.target` (through a display manager, `uwsm`, or
+   `systemctl --user start graphical-session.target`). On GNOME, then run
+   `gnome-extensions enable badi-focus@ahuray.github.io`.
 4. Check the setup with `badi doctor`, then allow an app and start typing
    (`badi revise install` adds the model for revising a selection):
 
@@ -82,8 +86,9 @@ allowed, so run `badi resume` after allowing an app.
   setup for KDE Plasma and GNOME.
 - [Arch package](packaging/aur/README.md): a `makepkg` candidate, not on the AUR
   yet.
-- Editor integrations: `npm ci`, then `python3 scripts/install-editors.py --vault
-  /path/to/vault --bash --neovim --libreoffice`.
+- Editor integrations need Node.js 22.20 or newer and `npm ci`, then
+  `python3 scripts/install-editors.py` with any of `--vault /path/to/vault`,
+  `--bash`, `--neovim` and `--libreoffice` (close LibreOffice first).
 - Chromium-based apps need [renderer accessibility](adapters/accessibility/README.md#installation-and-the-renderer-flag).
   On Omarchy run `python3 scripts/install-desktop.py --observed-app APP` with
   `chromium`, `brave-origin`, `code` (VS Code), `cursor`, `chatgpt` (Codex),
@@ -96,7 +101,7 @@ allowed, so run `badi resume` after allowing an app.
 | Key | What it does |
 | --- | --- |
 | `Tab` | Accept the next word, drawn a little brighter on Hyprland (a typo fix or revision applies whole) |
-| `Ctrl+→` | Accept the whole suggestion (also `Ctrl+Shift+Y`, or a click on the Fcitx candidate) |
+| `Ctrl+→` | Accept the whole suggestion (in Fcitx apps also `Ctrl+Shift+Y`, or a click on the suggestion) |
 | Keep typing | Typing the suggested letters keeps the rest, with no new model call |
 | `Escape` | Dismiss |
 | `Ctrl+Shift+Space` | Ask for a suggestion. On a suggestion, list other first words to pick with `1`–`4`. On selected text, show a grammar fix; each further press while it shows moves to a refined wording, then, for a phrase of up to three words, a synonym. `Tab` applies the one on screen |
@@ -158,8 +163,10 @@ Everything here is also in the Omarchy settings panel.
   finishes a word from text near the field and words you wrote before.
 - [Style learning](broker/README.md#style-learning-opt-in) (`badi style on`)
   keeps sealed samples of your writing; suggestions do not use them yet.
-- `badi battery`, `badi screen-share` and `badi mid-line` adjust behaviour on
-  battery, while you share your screen, and in the middle of a sentence.
+- `badi battery quiet|normal|explicit` (default `quiet`: wait for a typing
+  pause on battery), `badi screen-share hold|suggest` (default `hold`: no
+  suggestions while you share your screen) and `badi mid-line on|off` (default
+  `off`: no suggestion when a word follows the caret).
 
 ## Privacy
 
