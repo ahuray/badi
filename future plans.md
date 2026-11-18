@@ -486,9 +486,15 @@ Measured alternatives that were not adopted are in the
       generated tokens, or showing the first word once its own tokens and
       the rest pass, are candidates; each needs a held-out quality comparison.
 - [ ] Pin the runtime's four threads to performance cores (`taskset`/
-      `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
-      generate tokens per second for Qwen3-1.7B, a second under load saw no
-      consistent gain. Measure on an idle machine before changing the launch.
+      `--cpu-mask`): measured on an idle machine on 2026-11-18 (`b11840`,
+      15 W PL1, [runtime](broker/README.md#runtime-tested-with)) with no
+      consistent gain in resident `llama-server` typing latency (p50 338.8
+      against 338.8 ms on `performance`, 408.4 against 402.4 ms on
+      `power-saver`; >95% of unpinned worker samples already run on P-cores
+      under `balanced` and `performance`), while external `taskset -c 0-11`
+      fails with `EINVAL` whenever `intel_lpmd` confines `user.slice`
+      `AllowedCPUs` to E-cores `16–19` under `power-saver`; launch left
+      unchanged unless a non-ITMT hybrid host shows a consistent gain.
 - [ ] Battery scheduling: finish the [paced trial](evaluation/power/battery-trial.py)
       on the balanced profile, real typing intervals and a privileged energy
       counter ([results so far](adapters/session/README.md#battery)).
