@@ -634,5 +634,9 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] `adapters/shell/test-preview.py` failed once in CI in
       `test_the_display_timer_runs_only_while_a_preview_is_held`: the PTY
       never emitted `HOOK:`, only a cleared line (#133, no shell change).
-      It passed three local runs. If it recurs, find whether the Readline
-      hook prints before the test starts reading.
+      On 2026-11-18 (after `9bd1fe9` fixed Readline 8.3.0's `rl_event_hook`
+      input spin in `preview.c`), it passed 200 of 200 loaded runs alongside
+      20 CPU burner processes (`PYTHONDONTWRITEBYTECODE=1 python3 -c 'import os, subprocess, sys; bs = [subprocess.Popen([sys.executable, "-I", "-c", "while True: pass"]) for _ in range(os.cpu_count() or 8)]; rc = 0; [rc := rc | subprocess.call([sys.executable, "adapters/shell/test-preview.py", "PreviewTests.test_the_display_timer_runs_only_while_a_preview_is_held"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(200)]; [b.kill() or b.wait() for b in bs]; sys.exit(rc)'`),
+      plus 400 loaded `taskset -c 0,1` runs and 50 loaded full-suite runs;
+      no code changed. If it recurs, find whether the Readline hook prints
+      before the test starts reading.
