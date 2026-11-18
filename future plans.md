@@ -567,9 +567,10 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       270M), then continue greedily. On 100 held-out English prefixes, with
       the parameters fixed on 78 development cases and blind review, it
       showed 79 suggestions against greedy's 77, 55 useful against 46
-      (12 wins, 3 losses) and no harmful one. Ignoring the floor, the 270M
-      model's picks fell below it and only 32 of 78 development cases showed
-      anything. Production shape: one 1-token request with the top 8
+      (12 wins, 3 losses) and no harmful one. The 270M model only supplies
+      the penalty term. Contrastive choice at every token that ignores the
+      1B floor while choosing is afterwards hidden by it: 32 of 78
+      development cases showed anything. Production shape: one 1-token request with the top 8
       candidates, while the 270M model scores the same prompt, then the rest
       from the cached prompt; p50 424 → 536 ms, p90 552 → 697 ms. Text-only
       evidence is in `~/.local/state/badi/archive/english-cd-2026-11-18`.
