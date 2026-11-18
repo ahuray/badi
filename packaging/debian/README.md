@@ -90,16 +90,25 @@ As each desktop user, never as root:
    [activation](../aur/README.md#user-activation-and-removal) describes:
    files under `~/.local` and `~/.config/systemd/user` take precedence over
    the package's.
-2. Download the pinned llama.cpp runtime and a writing model with the
+2. Download the pinned llama.cpp runtime (and optionally the Apache-2.0
+   `Qwen3-1.7B` model) with the
    [writing-asset commands](../aur/README.md#writing-assets), which work
-   unchanged on Debian and Ubuntu (`Qwen3-1.7B` under Apache-2.0, or `badi model
-   use ID` later, which shows a model's terms before it downloads).
-3. Start the services, which create private settings with every app denied:
+   unchanged on Debian and Ubuntu.
+3. Enable the session and observer units, then download and select a writing
+   model with `badi model use ID` while `badi-broker.service` is still
+   `inactive` (`badictl models writing` prints the offline catalog; if
+   `Qwen3-1.7B` is already in `~/.local/share/badi/models/`, run `systemctl
+   --user start badi-broker.service` instead — starting `badi-broker.service`
+   with no model exits 78 and marks the unit failed until a model is present and
+   `badi service start` clears the failure). The broker creates private settings
+   with every app denied:
 
    ```sh
    systemctl --user daemon-reload
    systemctl --user enable --now badi-session.service badi-accessibility.service
-   systemctl --user start badi-broker.service
+   # Pick one: download a model and start the broker via badi model use,
+   # or, if you already fetched Qwen3-1.7B in step 2, run: systemctl --user start badi-broker.service
+   badi model use gemma-3-1b
    ```
 
    `badi-broker.service` starts on demand at later logins (`badi autostart on`

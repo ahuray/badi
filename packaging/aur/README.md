@@ -71,11 +71,13 @@ mv --no-clobber "$badi_stage/llama-b11840-bin-ubuntu-x64.tar.gz" "$badi_data/run
 
 If you are installing from a checkout with `python3 scripts/install-desktop.py`,
 stop there: the installer lists the writing models that fit your device and
-downloads the one you pick. For a packaged install (`badi-git` or `.deb`), fetch
-a writing model before starting `badi-broker.service` — either with `badi model
-use ID` (for example `badi model use gemma-3-1b`, which shows and records its
-terms first) after enabling the user units below, or by fetching the balanced
-Apache-2.0 `Qwen3-1.7B` model directly:
+downloads the one you pick. For a packaged install (`badi-git` or `.deb`), put a
+writing model in place before starting `badi-broker.service` (without one, the
+broker exits 78 and stays failed) — either run `badi model use ID` while
+`badi-broker.service` is still `inactive` in
+[User activation and removal](#user-activation-and-removal) below
+(`badictl models writing` prints the offline recommendation and catalog), or
+fetch the balanced Apache-2.0 `Qwen3-1.7B` model directly now:
 
 ```bash
 set -euo pipefail
@@ -105,12 +107,14 @@ addon copies and service overrides take precedence over package files. Keep
 their installer backups; migrate deliberately instead of mixing two builds.
 The package does not delete or rewrite them.
 
-On a fresh unlocked Omarchy session with the assets installed:
+On a fresh unlocked Omarchy session with the runtime installed:
 
 ```sh
 systemctl --user daemon-reload
 systemctl --user enable --now badi-accessibility.service badi-session.service
-systemctl --user start badi-broker.service
+# Pick one: download a model and start the broker via badi model use (while badi-broker.service is still inactive),
+# or, if you already fetched Qwen3-1.7B above, run: systemctl --user start badi-broker.service
+badi model use gemma-3-1b
 systemctl --user restart omarchy-fcitx5.service
 badi doctor
 badi app omawrite on
@@ -123,10 +127,13 @@ for other apps and sites. Accessibility flags and desktop-wide
 `ScreenReaderEnabled` remain explicit user choices. Model readiness alone
 does not prove that an application exposes a supported field.
 
-A packaged install has no model yet: `badi model` shows the recommendation,
-and `badi model use ID` shows the terms that come with a Gemma or Llama model
-and downloads it only after you accept. The commands above fetch an Apache-2.0
-model instead.
+Before the broker starts, `badictl models writing` prints the offline
+recommendation and catalog; `badi model` queries the running broker once
+started, and `badi model use ID` shows any Gemma or Llama terms before
+downloading. Do not run `systemctl --user start badi-broker.service` before a
+verified catalog model is in `~/.local/share/badi/models/`: without one the
+broker exits 78 and marks the unit failed, blocking on-demand starts until a
+model is on disk and `badi service start` clears the failed state.
 
 The optional panel files are in `/usr/share/badi/omarchy`. For a fresh panel,
 create a new `io.github.ahuray.badi` directory under `~/.config/omarchy/plugins`,

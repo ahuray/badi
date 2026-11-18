@@ -147,8 +147,9 @@ can redirect it like a keystroke
 identity and caret position before showing a suggestion and again before
 inserting it, and it never reads a field the toolkit marks as a password.
 
-Spelling replaces the mistyped word in Bash, Obsidian, Neovim, and native exact
-fields such as Omawrite, Telegram and Xournal++. English is built in;
+Spelling replaces the mistyped word in Bash, Obsidian and Neovim, and on native
+exact Fcitx fields when the toolkit honours surrounding-text deletion (verified
+in Omawrite 0.5.0). English is built in;
 `badi spelling LANG on` adds German, French, Spanish, Italian, Dutch or Polish
 from that language's Hunspell dictionary (`badi spelling` lists them and names
 the package to install). A single dictionary candidate is offered at once;
@@ -168,10 +169,11 @@ that correction — check the text". A page that moves focus at that moment can
 still split it, the typo deleted in one field and the fix typed into another
 ([decision](docs/decisions/0011-checked-corrections-in-append-only-apps.md)).
 In Chromium one `Ctrl+Z` restores the typo. In Omawrite 0.5.0 a spelling
-replacement is two native undos: the first removes the correction and the
-second restores the mistyped word. With `fcitx5-qt` 5.1.16, Qt drops the
-deletion, so Omawrite 0.7.x and Telegram get no spelling replacement until
-`fcitx5-qt` is updated.
+replacement took two native undos: the first removed the correction and the
+second restored the mistyped word. With `fcitx5-qt` 5.1.16, Qt drops
+surrounding-text deletion, so Omawrite 0.7.x and Telegram get no spelling
+replacement until `fcitx5-qt` is updated; Xournal++ spelling replacement has not
+been retried.
 
 Chromium-based apps must start with `--force-renderer-accessibility=complete`.
 On Omarchy, `python3 scripts/install-desktop.py --observed-app
@@ -335,11 +337,11 @@ Badi recommends, among the models that fit your device's memory and power state,
 the one that gave the most useful suggestions in its blind development screen;
 the panel's **Model** row offers the same choice. Gemma and Llama come with
 their own terms, which `badi model use`, the installer and the settings panel
-show and ask you to accept before downloading (`--accept-license` or
-`--accept-model-license` unattended); each acceptance is recorded locally in
-`~/.local/state/badi/model-terms.json`. The broker uses your choice when it is
-installed and fits, and the recommendation otherwise
-([how](docs/architecture/model-selection.md)).
+show and ask you to accept before downloading (unattended: `badi model use ID
+--accept-license`, or `install-desktop.py --model ID --accept-model-license`);
+each acceptance is recorded locally in `~/.local/state/badi/model-terms.json`.
+The broker uses your choice when it is installed and fits, and the
+recommendation otherwise ([how](docs/architecture/model-selection.md)).
 
 ## Choose where Badi writes
 
