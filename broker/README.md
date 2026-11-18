@@ -297,14 +297,16 @@ names the latest:
 
 | Reason | Meaning |
 | --- | --- |
-| `app_disabled` | The app or site has no grant. |
 | `request_abstained` | Unsupported language, a caret inside a word, a word after the caret while mid-sentence suggestions are off, or a lone unfinished word. |
 | `budget_prefill`, `budget_stream` | The time budget ran out: 550 ms while typing, 1.2 s after an explicit request. |
 | `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check, or did not fit before the text after the caret. |
 | `stale`, `timeout`, `provider_error` | The text changed first, or the model was late or failed. |
 | `low_confidence` | A word of the suggestion was too unlikely to show ([suggestion limits](#suggestion-limits)). |
 | `repeated` | That next word was turned down at the same spot in this app or site before. |
-| `typo_suspected` | Spelling found a possible typo it cannot replace here, so the continuation waits until the word is resolved. |
+| `typo_suspected` | Spelling found a possible typo and this request could not offer a correction, because the field cannot replace it or no candidate was chosen; the continuation waits until the word is resolved. |
+
+A field in an app or site without a grant is refused before any request, so
+it never reaches these counters; the debug trace records it as `app_disabled`.
 
 Its `type_through` counts requests answered from the carry (`carried`) and,
 for admitted requests that reached the provider although a carry existed,

@@ -37,7 +37,8 @@ GNOME. X11 is not supported.
 
 Badi needs `x86_64` Linux with AVX2 and glibc 2.34 or later, a Wayland session
 whose services run under `systemd --user`, PipeWire, and Fcitx 5 (5.1.23 or
-later on Hyprland, 5.1.7 on GNOME and KDE Plasma). On Omarchy or Arch Linux:
+later on Hyprland, Sway and other input-method-v2 compositors, 5.1.7 or later
+on GNOME and KDE Plasma). On Omarchy or Arch Linux:
 
 1. Install the build and runtime packages, and get the code:
 
@@ -91,11 +92,12 @@ addon. The Arch and Debian packages start paused with nothing allowed, so run
 | `Ctrl+→` | Accept the whole suggestion |
 | Keep typing | Typing the suggested letters keeps the rest, with no new model call |
 | `Escape` | Dismiss |
-| `Ctrl+Shift+Space` | Ask for a suggestion. On a suggestion, list other first words to pick with `1`–`4`. On selected text, check grammar, then refine, then offer synonyms |
-| `Ctrl+Shift+Tab` | Send the app a real `Tab` while a suggestion shows |
+| `Ctrl+Shift+Space` | Ask for a suggestion. On a suggestion, list other first words to pick with `1`–`4`. On selected text, check grammar, then refine; a word or a phrase of up to three words then gets synonyms |
+| `Ctrl+Shift+Tab` | In Fcitx apps, send the app a real `Tab` while Badi would take it; elsewhere it stays the app's key |
 
-Bash uses `Ctrl-X Tab` to request and accept, and LibreOffice Writer uses
-`Alt+F7` for spelling. The full key behaviour is in each surface's runbook:
+Bash uses `Ctrl-X Tab` to request and accept. LibreOffice Writer uses `Alt+F7`
+for spelling, or the infobar's **Replace** button on GNOME, where `Alt+F7` moves
+the window. The full key behaviour is in each surface's runbook:
 [Fcitx apps](adapters/fcitx5/README.md), [Obsidian](adapters/shared/README.md),
 [Neovim](adapters/neovim/README.md), [Bash](adapters/shell/README.md) and
 [Writer](adapters/libreoffice/README.md).
@@ -114,8 +116,9 @@ Bash uses `Ctrl-X Tab` to request and accept, and LibreOffice Writer uses
 | Bash | Readline | Never submits a command |
 | Ghostty, foot (any TUI) | The line you type | Allow it with `badi app`; typo fixes such as `teh → the` |
 
-Not yet: Firefox (other than Zen), editors built on Chromium's EditContext, and
-terminals other than Ghostty and foot.
+Not yet: Firefox (other than Zen), editors built on Chromium's EditContext, a
+caret inside a list, quote, table or image in a rich editor, and terminals other
+than Ghostty and foot.
 
 In apps without an editor channel, Badi accepts with one append, like typed
 text, so undo may merge it with your typing
@@ -129,12 +132,13 @@ the [Fcitx](adapters/fcitx5/README.md#tested-with),
 ```sh
 badi app telegram on                # allow an app (badi app list, badi app NAME reset)
 badi site https://example.com on    # allow a website
-badi apps blocklist                 # or: every supported app except blocked ones
+badi apps blocklist                 # or: every observed app except blocked ones
+                                    # (manual apps, Ghostty and foot still need badi app)
 badi languages en de fr             # the languages you write in
 badi pause                          # badi resume; badi snooze for 10 minutes in this app
 badi model                          # your model, the recommendation and the choices
 badi model use gemma-3-1b           # download (pinned, hash-checked) and switch
-badi length short | normal          # one or two words, or up to four
+badi length short                   # one or two words; badi length normal for up to four
 badi stats                          # words saved per day and app, counts only
 badi doctor                         # what is wrong, if anything
 badi --help                         # every command
