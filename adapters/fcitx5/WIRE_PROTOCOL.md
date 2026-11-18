@@ -45,8 +45,8 @@ differs from the last one observed.
 
 ## Sessions and targets
 
-An allowed `policy.status` may include `language_override` (`en`, `de` or
-`fa`). It takes precedence over the keyboard hint for requests and manual Tab
+An allowed `policy.status` may include `language_override` (`en`, `de`, `fa`,
+`fr`, `es` or `pt`). It takes precedence over the keyboard hint for requests and manual Tab
 eligibility. It grants no permission and is cleared with the policy on focus,
 field, authority or connection changes. The broker independently applies the
 same preference after admitting context.

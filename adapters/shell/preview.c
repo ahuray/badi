@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <locale.h>
+#include <sys/ioctl.h>
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
@@ -52,6 +53,22 @@ static double now_seconds(void) {
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now)) return -1;
     return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
+}
+
+/* Bash 5.3's bundled Readline 8.3.0 omits readline83-001 in rl_gather_tyi():
+ * _rl_timeout_select() returning > 0 leaves result != -1, skipping FIONREAD
+ * and returning 0 without reading TTY input while rl_event_hook is set. When
+ * unread TTY input is still waiting on entry to rl_event_hook, buffer one
+ * character through Readline's own input stream and rl_stuff_char() so
+ * rl_read_key() exits its loop on the next iteration. */
+static void gather_unbuffered_input(void) {
+    if (!rl_instream || !rl_getc_function) return;
+    int descriptor = fileno(rl_instream);
+    if (descriptor < 0) return;
+    int available = 0;
+    if (ioctl(descriptor, FIONREAD, &available) == 0 && available > 0) {
+        rl_stuff_char((*rl_getc_function)(rl_instream));
+    }
 }
 
 static void disarm_event_hook(void) {
@@ -162,6 +179,7 @@ static int event(void) {
     int result = previous_event ? previous_event() : 0;
     if (preview && !current()) { hide(); forget(); }
     if (!preview) disarm_event_hook();
+    else gather_unbuffered_input();
     return result;
 }
 

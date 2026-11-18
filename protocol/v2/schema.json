@@ -768,7 +768,7 @@
         "suggestions_allowed": { "type": "boolean" },
         "learning_allowed": { "type": "boolean" },
         "reason": { "$ref": "#/$defs/policyResolutionReason" },
-        "language_override": { "enum": ["en", "de", "fa"] },
+        "language_override": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
         "context_words": {
           "type": "boolean",
           "description": "Context is on for this target (ADR 0010): an observed field may send the text near it as window_text. It grants nothing else. Producers omit it when false."
@@ -804,6 +804,10 @@
             "required": ["context_words"],
             "properties": { "context_words": { "const": true } }
           },
+          "then": { "properties": { "suggestions_allowed": { "const": true } } }
+        },
+        {
+          "if": { "required": ["language_override"] },
           "then": { "properties": { "suggestions_allowed": { "const": true } } }
         },
         {

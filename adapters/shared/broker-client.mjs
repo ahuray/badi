@@ -168,8 +168,12 @@ export class BrokerClient extends EventEmitter {
         !['paused', 'context_allowed', 'display_allowed', 'suggestions_allowed', 'learning_allowed']
           .every(key => typeof policy[key] === 'boolean') ||
         !['always', 'manual', 'never'].includes(policy.activation) ||
-        policy.learning_allowed || (policy.suggestions_allowed && (!policy.context_allowed || !policy.display_allowed)) ||
-        (policy.paused && (policy.context_allowed || policy.display_allowed || policy.suggestions_allowed))) {
+        (policy.language_override !== undefined &&
+          (!['en', 'de', 'fa', 'fr', 'es', 'pt'].includes(policy.language_override) || !policy.suggestions_allowed)) ||
+        (policy.learning_allowed && !policy.suggestions_allowed) ||
+        (policy.suggestions_allowed && (!policy.context_allowed || !policy.display_allowed)) ||
+        (policy.paused && (policy.context_allowed || policy.display_allowed ||
+          policy.suggestions_allowed || policy.learning_allowed))) {
       throw new Error('Invalid editor policy');
     }
     if (epoch !== this.#epoch || policy.authority_epoch !== epoch) return;

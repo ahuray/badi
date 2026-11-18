@@ -1672,6 +1672,73 @@ def session(root, report):
                       'non-GNOME desktops, locked GNOME, mismatched PIDs, manual-only apps and terminals without '
                       'opening manual or typed-line paths')
 
+        # Per-subject style learning (`learning_allowed: true`) and European
+        # `language_overrides` (`fr`, `es`, `pt`) must be accepted on the real
+        # broker wire without dropping Fcitx's connection.
+        before_learning = control('settings', 'show', '--json')
+        learning_subjects = []
+        for rule in before_learning['subjects']:
+            ident = rule['identity']
+            if (ident.get('app_id') == 'omawrite' or
+                    (ident.get('kind') == 'browser_origin' and ident.get('host') == 'allowed.example.test')):
+                learning_subjects.append({
+                    'identity': ident,
+                    'permissions': {'context_read': 'allow', 'display': 'allow', 'suggest': 'allow',
+                                    'learn': 'allow', 'retention': {'mode': 'bounded', 'days': 30}},
+                })
+            else:
+                learning_subjects.append(rule)
+        with_learning = {
+            **before_learning,
+            'revision': before_learning['revision'] + 1,
+            'style_learning': True,
+            'writing_languages': ['en', 'de', 'fr', 'es', 'pt'],
+            'language_overrides': {'omawrite': 'fr', 'chromium': 'es'},
+            'subjects': learning_subjects,
+        }
+        control('settings', 'replace', '--if-revision', str(before_learning['revision']),
+                '--json', json.dumps(with_learning))
+        try:
+            open_context('omawrite')
+            prev_calls = provider_calls()
+            context.text('merci beaucoup')
+            wait(lambda: reason_count('app_allowed') > 0, 'omawrite policy allowed with learn=allow and fr override')
+            assert context.key(desktop.TAB), 'manual Tab eligible under French language_override'
+            wait(lambda: provider_calls() > prev_calls and control('status')['sessions'] == 1,
+                 'omawrite opens session and queries provider under learn=allow and language_override=fr', timeout=8)
+            backend.browser, backend.uri, backend.role = True, ALLOWED_URI, 'text'
+            open_context('chromium')
+            prev_calls = provider_calls()
+            change(PREFIX, new_field=True)
+            wait(lambda: provider_calls() > prev_calls and control('status')['sessions'] == 1,
+                 'chromium opens session and queries provider under site learn=allow and language_override=es',
+                 timeout=8)
+            english_learning = {**with_learning, 'revision': with_learning['revision'] + 1,
+                                'language_overrides': {'omawrite': 'en', 'chromium': 'en'}}
+            control('settings', 'replace', '--if-revision', str(with_learning['revision']),
+                    '--json', json.dumps(english_learning))
+            open_context('omawrite')
+            context.text(PREFIX)
+            wait(lambda: control('status')['sessions'] >= 0, 'broker responsive')
+            quiet(.15)
+            assert context.key(desktop.TAB)
+            wait(lambda: context.candidate() == SHOWN, 'omawrite suggests with learn=allow', timeout=8)
+            commits = context.commits()
+            assert context.key(desktop.TAB)
+            wait(lambda: context.commits() == [*commits, ' for'], 'omawrite Tab commits with learn=allow')
+            backend.browser, backend.uri, backend.role = True, ALLOWED_URI, 'text'
+            open_context('chromium')
+            change(PREFIX, new_field=True)
+            wait(lambda: context.candidate() == SHOWN, 'chromium suggests with site learn=allow', timeout=8)
+            assert context.key(desktop.ESCAPE)
+            quiet(.15)
+        finally:
+            current_learning = control('settings', 'show', '--json')
+            control('settings', 'replace', '--if-revision', str(current_learning['revision']),
+                    '--json', json.dumps({**before_learning, 'revision': current_learning['revision'] + 1}))
+        checks.append('Real broker `learning_allowed: true` and `language_override` (`fr`, `es`) keep Fcitx '
+                      'connected and suggesting in Omawrite and Chromium')
+
         # A correction is negotiated on IME-parity observed sessions too
         # (ADR 0011): one bound to the typed text shows as typo → fix.
         broker_metrics = control('status')['metrics']

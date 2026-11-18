@@ -223,8 +223,17 @@ class ClientTest(unittest.TestCase):
             self.assertEqual(raised.exception.code, "blocked")
             self.assertNotIn("context.changed", [message["type"] for message in fake.received])
 
+    def test_learning_allowed_is_accepted_when_suggestions_are_allowed(self):
+        fake = self.broker(standard(policy={**ALLOWED, "learning_allowed": True}))
+        proposal = self.attempt(fake).request("We need an adress ", "", "en")
+        self.assertIsNotNone(proposal)
+
     def test_invalid_policy_shapes_are_protocol_errors(self):
-        for policy in ({**ALLOWED, "learning_allowed": True}, {**ALLOWED, "paused": "no"},
+        for policy in ({**ALLOWED, "learning_allowed": True, "suggestions_allowed": False,
+                        "display_allowed": False, "context_allowed": False, "activation": "never"},
+                       {**ALLOWED, "paused": True, "learning_allowed": True, "suggestions_allowed": False,
+                        "display_allowed": False, "context_allowed": False, "activation": "never"},
+                       {**ALLOWED, "paused": "no"},
                        {**ALLOWED, "context_allowed": False}):
             fake = self.broker(standard(policy=policy))
             with self.assertRaises(broker.BrokerError) as raised:

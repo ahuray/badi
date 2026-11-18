@@ -352,11 +352,11 @@ class Attempt:
         if (not _counter(policy.get("authority_epoch")) or not _counter(policy.get("settings_revision"))
                 or any(not isinstance(policy.get(key), bool) for key in _POLICY_FLAGS)
                 or policy.get("activation") not in ("always", "manual", "never")
-                or policy["learning_allowed"]
+                or (policy["learning_allowed"] and not policy["suggestions_allowed"])
                 or (policy["suggestions_allowed"]
                     and not (policy["context_allowed"] and policy["display_allowed"]))
                 or (policy["paused"] and (policy["context_allowed"] or policy["display_allowed"]
-                                          or policy["suggestions_allowed"]))):
+                                          or policy["suggestions_allowed"] or policy["learning_allowed"]))):
             raise self._fail("protocol")
         if policy["authority_epoch"] != epoch or epoch != self._epoch:
             raise self._fail("revoked")
