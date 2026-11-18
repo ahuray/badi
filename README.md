@@ -39,7 +39,7 @@ Inference and settings stay on your device. Badi is pre-release software.
 | **Ctrl+Shift+Space** | Ask for a suggestion. On a shown continuation in an Fcitx app, Obsidian or Neovim, list up to four other first words; **`1`–`4`** (or a click in Fcitx) shows that word's continuation, and pressing again lists the rest ([ADR 0014](docs/decisions/0014-numbered-alternative-words.md)). On selected text, check its grammar; press again for a refined wording, and again — for a word or 1–3 word phrase — for a synonym, then another synonym on each further press ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md), [ADR 0013](docs/decisions/0013-synonyms-for-one-short-selection.md)). **Tab** applies what it shows, **Escape** keeps your text. |
 | **Ctrl+Shift+Tab** | In Fcitx apps where Badi would take `Tab`, retire the suggestion and send the app a real `Tab`. Elsewhere it stays the app's key (such as a browser's previous tab). |
 | **Bash** | **Ctrl-X** then **Tab** requests and accepts; **Ctrl-X** then **Escape** dismisses; **Ctrl-_** undoes; plain **Tab** stays Bash completion, and commands are never submitted ([Bash runbook](adapters/shell/README.md)). |
-| **Writer spelling** | **Alt+F7** shows a correction for the word at or before the caret; **Alt+F7** again (or the infobar's **Replace** button, needed on GNOME where `Alt+F7` moves windows) replaces it in one undo step ([Writer runbook](adapters/libreoffice/README.md)). |
+| **Writer spelling** | **Alt+F7** shows a correction for the word at or before the caret and **Alt+F7** again replaces it in one undo step. On GNOME, where `Alt+F7` moves windows (`begin-move`), use the automatic infobar or *Tools ▸ Add-Ons* and the infobar's **Replace** button (or rebind `begin-move`; [Writer runbook](adapters/libreoffice/README.md)). |
 
 Every surface uses that word-first order: Obsidian, Neovim in prose buffers
 after a typing pause, and the Fcitx apps below.
@@ -117,7 +117,7 @@ Plasma use their own Fcitx frontends.
 | Zen and Zen Twilight | Grey preview on Hyprland; `Ctrl+Z` undoes an acceptance alone ([Fcitx matrix](adapters/fcitx5/README.md#tested-with), [observer matrix](adapters/accessibility/README.md#tested-with)) | Zen 1.23b, 1.23.3b; Zen Twilight 1.24t, 1.25t |
 | VS Code, Cursor | Needs `"editor.editContext": false` in VS Code ([Fcitx matrix](adapters/fcitx5/README.md#tested-with)) | VS Code 1.140–1.143, Cursor 3.21 |
 | Codex desktop | Composer ([Fcitx matrix](adapters/fcitx5/README.md#tested-with)) | 26.930 |
-| LibreOffice Writer | Document paragraphs (`libreoffice-gtk3` with `SAL_USE_VCLPLUGIN=gtk3` and `GTK_IM_MODULE=` unset on Plasma/GNOME; Calc gets nothing). Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word, `Alt+F7` shows one for the word at the caret, `Alt+F7` again replaces it in one undo step ([Fcitx matrix](adapters/fcitx5/README.md#tested-with), [Writer matrix](adapters/libreoffice/README.md#tested-with), [Debian matrix](packaging/debian/README.md#tested-with)) | 25.2 (Debian 13), 26.8, 26.8.1 |
+| LibreOffice Writer | Document paragraphs (`libreoffice-gtk3` with `SAL_USE_VCLPLUGIN=gtk3` and `GTK_IM_MODULE=` unset on Plasma/GNOME; Calc gets nothing). Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word (or on `Alt+F7` / *Tools ▸ Add-Ons*) and replaces it via `Alt+F7` or the infobar's **Replace** button (needed on GNOME where `Alt+F7` moves windows) in one undo step ([Fcitx matrix](adapters/fcitx5/README.md#tested-with), [Writer matrix](adapters/libreoffice/README.md#tested-with), [Debian matrix](packaging/debian/README.md#tested-with)) | 25.2 (Debian 13), 26.8, 26.8.1 |
 | Telegram | Composer (Qt Widgets): grey preview and `Tab`; as in Omawrite, no typo replacement with `fcitx5-qt` 5.1.16 ([Fcitx matrix](adapters/fcitx5/README.md#tested-with)) | 7.3.2 |
 | Omawrite | With `fcitx5-qt` 5.1.16, Qt's input module withdraws the text around the caret after every key; Badi keeps suggesting in Qt fields it observes, but cannot replace a typo there ([Fcitx matrix](adapters/fcitx5/README.md#tested-with)) | 0.5.0, 0.7.0, 0.7.2 |
 | Xournal++ text tool, Kate, Mousepad, GNOME Text Editor | Manual native Fcitx path (`badi app xournalpp|kate|org.kde.kate|mousepad|gnome-text-editor on`): `Tab` at the end of a phrase requests, `Tab` again accepts a word, exact native undo (`GTK_IM_MODULE=fcitx` for GTK apps Xournal++, Mousepad and GNOME Text Editor; [Fcitx matrix](adapters/fcitx5/README.md#tested-with), [Debian matrix](packaging/debian/README.md#tested-with)) | Xournal++ 1.3.7–1.3.8, Kate 25.04, Mousepad 0.6, GNOME Text Editor 48.3 |
@@ -278,10 +278,11 @@ sessions, remain unverified.
 
 **Backups and rollback:** each installer backs up everything it replaces under
 `~/.local/state/badi/` (`install-backups/`, `ui-backups/`, `editor-backups/`),
-keeping the newest three backups plus the pre-Badi notes. `python3
-scripts/badi_install.py restore DIR` rolls one back, reloads user units when a
-service file was restored, and updates the install receipt
-([details](adapters/fcitx5/README.md#install-and-roll-back)).
+keeping the newest three ordinary backups plus the pinned original backup
+directory from before Badi (with `accessibility-*.json` receipts from pruned
+runs saved under `notes/`). `python3 scripts/badi_install.py restore DIR` rolls
+one back, reloads user units when a service file was restored, and updates the
+install receipt ([details](adapters/fcitx5/README.md#install-and-roll-back)).
 
 ### First run
 
@@ -537,10 +538,12 @@ quieted, and `badi stats forget` resets it with the counts
   [Usage statistics](#usage-statistics)),
   `~/.local/share/badi/personalization.json` (per-app and per-site daily
   shown/dismissed/accepted counts with zero prose; cleared with `badictl memory
-  clear`), and — only when you opt in — XChaCha20-Poly1305 keyring-encrypted
-  `learned-words.json` ([Context](#context-opt-in)) and `style.json`
-  ([Style learning](#style-learning-opt-in)), never collected from terminals or
-  shells.
+  clear`), and — only when you opt in — `learned-words.json`
+  ([Context](#context-opt-in)) and `style.json`
+  ([Style learning](#style-learning-opt-in)), whose word lists and sentences are
+  XChaCha20-Poly1305 encrypted with your keyring key while each record's app or
+  site identity and day stay in the clear for key-free expiry and per-subject
+  deletion, never collected from terminals or shells.
 - **What the debug trace may hold.** Tracing is off by default, lives in RAM
   (`$XDG_RUNTIME_DIR/badi/debug-trace.jsonl`), and ends automatically after 15
   minutes (`badi debug off` or logout deletes it sooner). Plain `badi debug on`

@@ -124,13 +124,18 @@ badi resume
 badi doctor
 ```
 
+If available memory is temporarily tight and `badi model use "$model_id"` times
+out (`error_code=io`) after downloading the weights while the broker is still
+waiting for memory, run `badi service start` (60 s budget, reporting any memory
+wait) and then re-run `badi model use "$model_id"` once the socket answers.
+
 If you already fetched `Qwen3-1.7B` in [Writing assets](#writing-assets)
-instead, start `badi-broker.service` directly:
+instead, start `badi-broker.service` with `badi service start`:
 
 ```sh
 systemctl --user daemon-reload
 systemctl --user enable --now badi-accessibility.service badi-session.service
-systemctl --user start badi-broker.service
+badi service start
 systemctl --user restart omarchy-fcitx5.service
 badi app omawrite on
 badi resume

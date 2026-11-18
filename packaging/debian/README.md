@@ -107,16 +107,22 @@ As each desktop user, never as root:
    badi model use "$model_id"
    ```
 
-   Or, if you already fetched `Qwen3-1.7B` in step 2, start
-   `badi-broker.service` directly instead of running `badi model use` (do not
-   start `badi-broker.service` with no model in `~/.local/share/badi/models/`:
-   it exits 78 and marks the unit failed until a model is present and `badi
-   service start` clears the failure):
+   If available memory is temporarily tight and `badi model use "$model_id"`
+   times out (`error_code=io`) after downloading the weights while the broker is
+   still waiting for memory, run `badi service start` (60 s budget, reporting
+   any memory wait) and re-run `badi model use "$model_id"` once the socket
+   answers.
+
+   Or, if you already fetched `Qwen3-1.7B` in step 2, start the broker with
+   `badi service start` instead of running `badi model use` (do not start
+   `badi-broker.service` with no model in `~/.local/share/badi/models/`: it
+   exits 78 and marks the unit failed until a model is present and `badi service
+   start` clears the failure):
 
    ```sh
    systemctl --user daemon-reload
    systemctl --user enable --now badi-session.service badi-accessibility.service
-   systemctl --user start badi-broker.service
+   badi service start
    ```
 
    Without an installer-written `settings.json`, the broker creates private
