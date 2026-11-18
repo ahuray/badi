@@ -256,47 +256,49 @@ struct SettingsDocument {
     schema: String,
     revision: u64,
     paused: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     all_web_origins: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     all_linux_apps: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     mid_line: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     escape_quiet_seconds: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     battery_mode: Option<BatteryMode>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     screen_share: Option<ScreenShareMode>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     suggestion_length: Option<SuggestionLength>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     languages_chosen: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     places_chosen: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     style_learning: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     context_words: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     context_words_off: Option<Vec<StableIdentity>>,
-    #[serde(default, deserialize_with = "present_language_overrides")]
+    #[serde(default, deserialize_with = "present")]
     language_overrides: Option<BTreeMap<String, PredictionLanguage>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     spelling_languages: Option<Vec<SpellingLanguage>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     writing_model: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     writing_languages: Option<Vec<PredictionLanguage>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     trailing_space_healing: Option<BTreeMap<PredictionLanguage, bool>>,
     subjects: Vec<SubjectRule>,
 }
 
-fn present_language_overrides<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<BTreeMap<String, PredictionLanguage>>, D::Error> {
-    BTreeMap::deserialize(deserializer).map(Some)
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 impl<'de> Deserialize<'de> for SettingsV2 {
@@ -307,6 +309,9 @@ impl<'de> Deserialize<'de> for SettingsV2 {
         let decoded = SettingsDocument::deserialize(deserializer)?;
         if decoded.schema != SETTINGS_SCHEMA {
             return Err(serde::de::Error::custom("unsupported_settings_schema"));
+        }
+        if decoded.escape_quiet_seconds == Some(0) {
+            return Err(serde::de::Error::custom("escape_quiet_out_of_range"));
         }
         Ok(Self {
             schema: SETTINGS_SCHEMA.to_owned(),

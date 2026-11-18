@@ -191,9 +191,13 @@ impl StyleStore {
 
     #[must_use]
     pub fn status(&self) -> StyleStatus {
-        let mut subjects = self
+        let non_terminal: Vec<&SealedSample> = self
             .document
             .records
+            .iter()
+            .filter(|record| !record.identity.is_terminal())
+            .collect();
+        let mut subjects = non_terminal
             .iter()
             .map(|record| &record.identity)
             .collect::<Vec<_>>();
@@ -201,7 +205,7 @@ impl StyleStore {
         subjects.dedup();
         StyleStatus {
             key: self.key_state(),
-            samples: u64::try_from(self.document.records.len()).unwrap_or(u64::MAX),
+            samples: u64::try_from(non_terminal.len()).unwrap_or(u64::MAX),
             subjects: u64::try_from(subjects.len()).unwrap_or(u64::MAX),
         }
     }
@@ -287,6 +291,7 @@ impl StyleStore {
         self.document
             .records
             .iter()
+            .filter(|record| !record.identity.is_terminal())
             .map(|record| {
                 Ok(StyleSample {
                     identity: record.identity.clone(),
@@ -308,6 +313,13 @@ impl StyleStore {
     }
 
     fn persist(&mut self, next: StyleDocument) -> Result<(), StyleError> {
+        if next
+            .records
+            .iter()
+            .any(|record| record.identity.is_terminal())
+        {
+            return Err(StyleError::Corrupt);
+        }
         if next.records.is_empty() {
             remove_private_file(&self.path)?;
         } else {
@@ -461,12 +473,13 @@ fn validate_document(document: &StyleDocument) -> Result<(), StyleError> {
     } else {
         decode_hex(&document.key_id).is_some_and(|bytes| bytes.len() == KEY_ID_BYTES)
     };
+    // Pre-#198 stores may hold terminal records; open() admits valid shapes so
+    // reconcile() can scrub them on startup without marking the store corrupt.
     if document.schema != STYLE_SCHEMA
         || !key_ok
         || document.records.len() > MAX_STYLE_SAMPLES
         || document.records.iter().any(|record| {
             record.identity.validate().is_err()
-                || record.identity.is_terminal()
                 || decode_hex(&record.nonce).is_none_or(|bytes| bytes.len() != NONCE_BYTES)
                 || decode_hex(&record.ciphertext).is_none()
         })
@@ -525,7 +538,7 @@ pub fn authored_sample(before: &str) -> Option<String> {
     let lower = sample.to_lowercase();
     let factual = sample
         .chars()
-        .any(|character| character.is_ascii_digit() || character == '@')
+        .any(|character| character.is_numeric() || character == '@')
         || lower.contains("http")
         || lower.contains("www.");
     (sample.chars().count() >= MIN_SAMPLE_CHARS && !factual).then_some(sample)

@@ -324,7 +324,10 @@ impl Broker {
             })
             .and_then(|revision| {
                 let context = session.context.as_ref()?;
-                if session.target.target.kind == TargetKind::Terminal
+                if matches!(
+                    session.target.target.kind,
+                    TargetKind::Terminal | TargetKind::Libreoffice
+                ) || !context.field.identity_known
                     || context.field.purpose != FieldPurpose::Normal
                     || context.field.sensitive
                     || context.field.lock_screen

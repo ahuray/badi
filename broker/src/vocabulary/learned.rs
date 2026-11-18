@@ -113,9 +113,14 @@ impl LearnedStore {
 
     #[must_use]
     pub fn status(&self) -> LearnedStatus {
+        let non_terminal: Vec<&SealedSubject> = self
+            .document
+            .subjects
+            .iter()
+            .filter(|record| !record.identity.is_terminal())
+            .collect();
         let words = (self.key_state() == StyleKeyState::Ready).then(|| {
-            self.document
-                .subjects
+            non_terminal
                 .iter()
                 .filter_map(|record| self.words_of(record).ok())
                 .map(|words| u64::try_from(words.len()).unwrap_or(u64::MAX))
@@ -123,7 +128,7 @@ impl LearnedStore {
         });
         LearnedStatus {
             key: self.key_state(),
-            subjects: u64::try_from(self.document.subjects.len()).unwrap_or(u64::MAX),
+            subjects: u64::try_from(non_terminal.len()).unwrap_or(u64::MAX),
             words,
         }
     }
@@ -226,7 +231,9 @@ impl LearnedStore {
                 .subjects
                 .iter()
                 .filter(|record| {
-                    !record.identity.is_terminal() && settings.context_words_for(&record.identity)
+                    !record.identity.is_terminal()
+                        && !explicitly_blocked(&record.identity, settings)
+                        && settings.context_words_for(&record.identity)
                 })
                 .filter_map(|record| {
                     let words: Vec<(String, u64)> = self
@@ -242,8 +249,9 @@ impl LearnedStore {
         )
     }
 
-    /// Drops every subject where context is now off, and every subject
-    /// unchanged past retention. Needs no key.
+    /// Drops every subject where context is now off, every explicitly blocked
+    /// subject, every terminal record, and every subject unchanged past
+    /// retention. Needs no key.
     pub fn reconcile(&mut self, settings: &SettingsV2, today: u64) -> Result<bool, StyleError> {
         let subjects: Vec<SealedSubject> = self
             .document
@@ -251,6 +259,7 @@ impl LearnedStore {
             .iter()
             .filter(|record| {
                 !record.identity.is_terminal()
+                    && !explicitly_blocked(&record.identity, settings)
                     && !settings.context_words_off.contains(&record.identity)
                     && within_retention(record.day, today)
             })
@@ -299,6 +308,13 @@ impl LearnedStore {
     }
 
     fn persist(&mut self, next: LearnedDocument) -> Result<(), StyleError> {
+        if next
+            .subjects
+            .iter()
+            .any(|record| record.identity.is_terminal())
+        {
+            return Err(StyleError::Corrupt);
+        }
         if next.subjects.is_empty() {
             remove_private_file(&self.path)?;
         } else {
@@ -347,18 +363,25 @@ const fn within_retention(day: u64, today: u64) -> bool {
     day <= today && today - day < LEARNED_RETENTION_DAYS
 }
 
+fn explicitly_blocked(identity: &StableIdentity, settings: &SettingsV2) -> bool {
+    let resolution = settings.resolve_identity_validated(identity);
+    resolution.source == crate::settings::PolicySource::Rule
+        && resolution.permissions.suggest == crate::settings::PermissionDecision::Block
+}
+
 fn validate_document(document: &LearnedDocument) -> Result<(), StyleError> {
     let key_ok = if document.subjects.is_empty() {
         document.key_id.is_empty() || decode_hex(&document.key_id).is_some()
     } else {
         decode_hex(&document.key_id).is_some_and(|bytes| bytes.len() == KEY_ID_BYTES)
     };
+    // Pre-#198 stores may hold terminal records; open() admits valid shapes so
+    // reconcile() can scrub them on startup without marking the store corrupt.
     if document.schema != LEARNED_SCHEMA
         || !key_ok
         || document.subjects.len() > MAX_LEARNED_SUBJECTS
         || document.subjects.iter().any(|record| {
             record.identity.validate().is_err()
-                || record.identity.is_terminal()
                 || decode_hex(&record.nonce).is_none_or(|bytes| bytes.len() != NONCE_BYTES)
                 || decode_hex(&record.ciphertext).is_none()
         })

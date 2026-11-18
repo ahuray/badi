@@ -365,6 +365,46 @@ fn samples_are_the_last_complete_sentences_without_facts() {
     );
     // A decimal point is not a sentence end.
     assert_eq!(authored_sample("Version 1.5 works"), None);
+    // Persian and Arabic-Indic digits are factual numbers just like ASCII digits.
+    assert_eq!(
+        authored_sample("گزارش را در ساعت ۱۴ برای تیم فرستادم. بله"),
+        None
+    );
+    assert_eq!(
+        authored_sample("Please call extension ٤٢١٠ before noon tomorrow. Ok"),
+        None
+    );
+}
+
+#[test]
+fn pre_exclusion_terminal_style_records_open_and_self_heal_on_reconcile() {
+    let (directory, mut store) = store();
+    let path = directory.path().join("badi/style.json");
+    let shared_key = key("ab");
+    store.set_key(shared_key.clone());
+    store
+        .record(&learning(), TODAY, &site("mail.example"), SAMPLE)
+        .unwrap();
+
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let sample = raw["records"][0].clone();
+    raw["records"].as_array_mut().unwrap().push(serde_json::json!({
+        "identity": { "kind": "linux_app", "adapter": "fcitx", "app_id": "com.mitchellh.ghostty" },
+        "day": TODAY,
+        "nonce": sample["nonce"],
+        "ciphertext": sample["ciphertext"]
+    }));
+    std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+    let mut reopened =
+        StyleStore::open(path.clone()).expect("pre-#198 terminal style record opens");
+    reopened.set_key(shared_key);
+    assert_eq!(reopened.status().samples, 1);
+    assert_eq!(reopened.export().unwrap().len(), 1);
+    assert!(reopened.reconcile(&learning(), TODAY).unwrap());
+    let healed: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(healed["records"].as_array().unwrap().len(), 1);
 }
 
 #[test]

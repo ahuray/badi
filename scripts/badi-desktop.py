@@ -25,9 +25,9 @@ import badi_install
 LIBRARY = Path(__file__).resolve().parent
 ROOT = LIBRARY.parent
 APPS = ("xournalpp", "omawrite")
-APP_IDS = {"omawrite": "omawrite", "xournalpp": "com.github.xournalpp.xournalpp"}
+APP_IDS = {"omawrite": "omawrite", "xournalpp": "com.github.xournalpp.xournalpp", "ghostty": "com.mitchellh.ghostty"}
 APP_ADAPTERS = {"obsidian": "obsidian", "bash": "shell", "nvim": "neovim", "libreoffice-writer": "libreoffice"}
-TERMINAL_APPS = ("com.mitchellh.ghostty", "foot", "org.codeberg.dnkl.foot")
+TERMINAL_APPS = ("com.mitchellh.ghostty", "ghostty", "foot", "org.codeberg.dnkl.foot")
 SERVICE = "badi-broker.service"
 ACCESSIBILITY_SERVICE = "badi-accessibility.service"
 SESSION_SERVICE = "badi-session.service"
@@ -1349,6 +1349,8 @@ def set_subject_learning(document, kind, value, days):
     identity = app_identity(value) if kind == "app" else site_identity(value)
     if is_terminal_identity(identity, value):
         raise RuntimeError("Terminals and shells never learn style samples.")
+    if days is not None and identity["kind"] == "linux_app" and identity["adapter"] == "libreoffice":
+        raise RuntimeError("Writer's spelling extension corrects single words and never learns style samples.")
     subject = next((item for item in document["subjects"] if item["identity"] == identity), None)
     if days is not None and (subject is None or subject["permissions"]["suggest"] != "allow"):
         raise RuntimeError(f"Allow the {kind} first: badi {kind} {value} on")

@@ -60,6 +60,7 @@
               "app_id": {
                 "enum": [
                   "com.mitchellh.ghostty",
+                  "ghostty",
                   "foot",
                   "org.codeberg.dnkl.foot"
                 ]

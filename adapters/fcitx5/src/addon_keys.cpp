@@ -29,6 +29,14 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
                   app.empty() && !(binding && binding->observation.unnamedIbus) ? "unidentified_app"
                                                                                 : "input_received");
     if (!binding || !binding->state.focused()) return;
+    // A password field's keys leave no line, carry or held Tab at all: even
+    // without text, their count and timing would describe the password.
+    const bool sensitive =
+        static_cast<bool>(event.inputContext()->capabilityFlags() & ::fcitx::CapabilityFlag::PasswordOrSensitive);
+    if (sensitive) {
+        binding->observation.pendingBrokerStart = false;
+        binding->typeThrough.reset();
+    }
     if (binding->revisionActive() && revisionKey(event, *binding)) return;
     if (!key.isModifier()) binding->observation.schedule.input(monotonicUs());
     const bool literalChord = isLiteralTabChord(event.key());
@@ -97,17 +105,11 @@ void BadiAddon::preKeyEvent(::fcitx::KeyEvent &event) {
     }
     const auto action = decidePreKey(pressed, binding->state.editingAvailable(), binding->noticeShown(),
                                      binding->state.suggestionVisible(), panel);
-    // A password field's keys leave no line at all: even without text,
-    // their count and timing would describe the password.
-    const bool sensitive =
-        static_cast<bool>(event.inputContext()->capabilityFlags() & ::fcitx::CapabilityFlag::PasswordOrSensitive);
     // A typed key is the moment an app needs the model. Modifiers, repeats of
     // a key that already asked, and password fields do not start it. Observed
     // apps and unnamed GNOME IBus contexts defer the start until async inspect
     // confirms an editable field, so password fields and urlbars never wake it.
-    if (sensitive) {
-        binding->observation.pendingBrokerStart = false;
-    } else if (!pressed.modifier && !pressed.repeat && printableKey(typed)) {
+    if (!sensitive && !pressed.modifier && !pressed.repeat && printableKey(typed)) {
         // Manual native apps suggest only on explicit Tab/Ctrl+Shift+Space, so
         // ordinary typing there must not cold-start the model.
         if (binding->state.editingAvailable() && binding->state.editPath() != NativeEditPath::Manual) {

@@ -675,6 +675,30 @@ fn strictly_reduces_authority(current: &SettingsV2, next: &SettingsV2) -> bool {
             _ => {}
         }
     }
+    match (current.screen_share, next.screen_share) {
+        (ScreenShareMode::Hold, ScreenShareMode::Suggest) => return false,
+        (ScreenShareMode::Suggest, ScreenShareMode::Hold) => reduced = true,
+        _ => {}
+    }
+    match (current.context_words, next.context_words) {
+        (None | Some(false), Some(true)) => return false,
+        (Some(true), None | Some(false)) => reduced = true,
+        _ => {}
+    }
+    if current
+        .context_words_off
+        .iter()
+        .any(|identity| next.context_words_off.binary_search(identity).is_err())
+    {
+        return false;
+    }
+    if next
+        .context_words_off
+        .iter()
+        .any(|identity| current.context_words_off.binary_search(identity).is_err())
+    {
+        reduced = true;
+    }
 
     // Compare effective permissions: an unlisted identity has its document's
     // default, deny or the all-web default for an origin. Removing an explicit

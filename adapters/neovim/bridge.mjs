@@ -12,6 +12,7 @@ import { bridgeLanguage } from '../shared/writing-language.mjs';
 import { nextRevisionMode, revisionDiff, revisionModes } from '../shared/revision.mjs';
 
 const LANGUAGE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/;
+const TARGET_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const ACCEPTANCE = new Set(['all', 'word']);
 const RESULTS = new Set(['applied', 'stale', 'failed']);
 
@@ -47,6 +48,7 @@ const validContext = (value, limit) => typeof value === 'string' && Buffer.byteL
 async function suggest(command) {
   if (!validContext(command.before, 4096) || !validContext(command.after ?? '', 1024) ||
       typeof command.explicit !== 'boolean' ||
+      (command.target_id !== undefined && (typeof command.target_id !== 'string' || !TARGET_ID.test(command.target_id))) ||
       (command.language !== undefined && (typeof command.language !== 'string' || !LANGUAGE.test(command.language)))) {
     return { ok: false, reason: 'invalid_request' };
   }
@@ -62,7 +64,9 @@ async function suggest(command) {
   if (!language) return { ok: false, reason: 'language_unavailable' };
   recordActivity('neovim', 'context', command.explicit ? 'explicit_buffer' : 'automatic_buffer');
   grant = null;
-  const text = await client.suggest(before, { language, explicit: command.explicit, after });
+  const text = await client.suggest(before, {
+    language, explicit: command.explicit, after, targetId: command.target_id,
+  });
   return text ? { ok: true, text, word: client.acceptWord,
     ...(client.replacementBefore !== undefined ? { replace_before: client.replacementBefore } : {}) }
     : { ok: true, text: null };
@@ -72,7 +76,9 @@ async function handle(command) {
   switch (command.op) {
     case 'revise': {
       if (!validContext(command.before, 4096) || !validContext(command.after ?? '', 1024) ||
-          !validContext(command.selected, 2400) || !revisionModes.has(command.mode)) {
+          !validContext(command.selected, 2400) || !revisionModes.has(command.mode) ||
+          (command.target_id !== undefined &&
+            (typeof command.target_id !== 'string' || !TARGET_ID.test(command.target_id)))) {
         return { ok: false, reason: 'invalid_request' };
       }
       if (!client.connected) {
@@ -87,7 +93,7 @@ async function handle(command) {
       revisionRequest = pending;
       try {
         const result = await client.revise({ before, after, selected: command.selected, selection: command.selection,
-          mode: command.mode, language: command.language });
+          mode: command.mode, language: command.language, targetId: command.target_id });
         if (revisionRequest !== pending) return { ok: false, reason: 'stale' };
         // A clear names its own refusal. Only no_change permits the next
         // revision mode; missing assets, policy and provider failures do not.

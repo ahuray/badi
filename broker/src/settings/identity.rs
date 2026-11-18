@@ -13,8 +13,12 @@ use crate::protocol::{
 
 /// Native terminal app ids whose typed line Badi may assist on opt-in
 /// (ADR 0009), and which must never learn style samples or context words.
-pub const TERMINAL_FCITX_APP_IDS: [&str; 3] =
-    ["com.mitchellh.ghostty", "foot", "org.codeberg.dnkl.foot"];
+pub const TERMINAL_FCITX_APP_IDS: [&str; 4] = [
+    "com.mitchellh.ghostty",
+    "ghostty",
+    "foot",
+    "org.codeberg.dnkl.foot",
+];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]

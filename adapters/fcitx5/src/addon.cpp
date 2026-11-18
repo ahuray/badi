@@ -191,9 +191,11 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     const bool digestChanged = digest != binding->surrounding.digest;
     bool zenRebased = false;
     if (binding->observation.zenCommit.active()) {
+        const auto &zenApp = !binding->state.appId().empty() ? binding->state.appId()
+            : (binding->observation.unnamedIbus ? binding->observation.zenCommit.appId() : binding->state.appId());
         const auto raw = zenSurroundingWindow(*binding);
         zenRebased = raw &&
-            binding->observation.zenCommit.updateFcitx(binding->state.appId(), *raw) == ZenFcitxUpdate::Rebased;
+            binding->observation.zenCommit.updateFcitx(zenApp, *raw) == ZenFcitxUpdate::Rebased;
         if (!raw) binding->observation.zenCommit.clear();
     }
     if (digestChanged) {
@@ -234,7 +236,7 @@ void BadiAddon::surroundingTextUpdated(::fcitx::InputContext &inputContext) {
     // ends its observation anyway; the typing pause is the fallback. A
     // suggestion still waits out the typing pause.
     if (!unchangedObserved) {
-        if (zenRebased && !binding->observed()) return;
+        if (zenRebased) return;
         const bool awaitReport = binding->observed() && binding->observation.schedule.fieldReportsEdits();
         // Foreign preedit must go through inspection, which yields and
         // resumes when the composition clears. A direct read would skip that.
@@ -264,7 +266,10 @@ void BadiAddon::capabilityChanged(::fcitx::InputContext &inputContext, ::fcitx::
     }
     debug_.record("authority", app, "capabilities_changed");
     if (!binding || (app.empty() && !activeUnnamed)) return;
-    if (after & ::fcitx::CapabilityFlag::PasswordOrSensitive) binding->observation.pendingBrokerStart = false;
+    if (after & ::fcitx::CapabilityFlag::PasswordOrSensitive) {
+        binding->observation.pendingBrokerStart = false;
+        binding->typeThrough.reset();
+    }
     binding->observation.zenCommit.clear();
     if (binding->revisionActive()) cancelRevision(*binding);
     // Capability changes can leave the previous widget's buffer cached.

@@ -122,6 +122,7 @@ bool BadiAddon::revisionChord(Binding &binding) {
     if (hasForeignImeUi(observePanel(binding))) return false;
     auto selection = currentSelection(binding);
     if (!selection) {
+        if (binding.observation.unnamedIbus && app.empty()) return false;
         debug_.record("revision", app, "selection_unreadable");
         showNotice(binding, notice::kRevisionSelection);
         return true;

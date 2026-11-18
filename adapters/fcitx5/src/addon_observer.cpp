@@ -121,6 +121,7 @@ void BadiAddon::bindObservedField(Binding &binding, const Json &focus, NativeEdi
         binding.observation.visit = focus;
         binding.observation.visitId = *session;
         binding.suggestion.dismissedContext.reset();
+        binding.typeThrough.reset();
     }
     closeBrokerSession(binding);
     clearAllUi(binding);
@@ -152,6 +153,7 @@ void BadiAddon::observerUnavailable(Binding &binding, const Json &error) {
     const bool explicitRequest = binding.observation.explicitRequest;
     binding.observation.pendingBrokerStart = false;
     binding.observation.zenCommit.clear();
+    binding.typeThrough.reset();
     binding.observation.schedule.found(false);
     binding.observation.clearVisit();
     // A failed inspection must not keep the previous field's grant.
@@ -171,7 +173,9 @@ void BadiAddon::observerUnavailable(Binding &binding, const Json &error) {
 }
 
 void BadiAddon::observerInvalidated(const Json &event) {
-    const bool fieldChanged = event.value("reason", Json()) == "field_changed";
+    const auto reason = event.value("reason", Json());
+    const bool fieldChanged = reason == "field_changed";
+    const bool windowLeft = reason == "window_changed" || reason == "desktop_locked";
     for (auto &[_, binding] : bindings_) {
         if (!binding.state.focused() || !invalidates(event, binding.state.appId())) continue;
         debug_.record("observer", binding.state.appId(), "observer_invalidated");
@@ -179,6 +183,7 @@ void BadiAddon::observerInvalidated(const Json &event) {
             binding.observation.pendingBrokerStart = false;
             binding.observation.zenCommit.clear();
         }
+        if (windowLeft) binding.typeThrough.reset();
         // A revision's own inspection is binding the focused field: the
         // observer may first retire the field it tracked before. Its reply
         // must still arrive.

@@ -259,3 +259,70 @@ fn forget_removes_every_word_but_keeps_the_shared_key() {
         (StyleKeyState::Ready, 0, Some(0))
     );
 }
+
+#[test]
+fn pre_exclusion_terminal_records_self_heal_on_reconcile_and_explicit_blocks_purge_words() {
+    let (directory, mut store) = store();
+    let path = directory.path().join("badi/learned-words.json");
+    let on = context(Some(true), Vec::new());
+    let shared_key = key("ab");
+    store.set_key(shared_key.clone());
+    let telegram = app("telegram");
+    for _ in 0..OFFER_AFTER_FIELDS {
+        store
+            .record(&on, TODAY, &telegram, &words(&["Okonkwo"]))
+            .unwrap();
+    }
+
+    // Inject a pre-#198 terminal subject alongside the legitimate subject.
+    let mut raw: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let sample = raw["subjects"][0].clone();
+    raw["subjects"].as_array_mut().unwrap().insert(
+        0,
+        serde_json::json!({
+            "identity": { "kind": "linux_app", "adapter": "fcitx", "app_id": "com.mitchellh.ghostty" },
+            "day": TODAY,
+            "nonce": sample["nonce"],
+            "ciphertext": sample["ciphertext"]
+        }),
+    );
+    std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+    let mut reopened =
+        LearnedStore::open(path.clone()).expect("pre-#198 terminal record opens cleanly");
+    reopened.set_key(shared_key);
+    assert_eq!(
+        reopened.status().subjects,
+        1,
+        "terminal subject hidden before reconcile"
+    );
+    assert!(
+        reopened
+            .reconcile(&on, TODAY)
+            .expect("reconcile heals terminal record")
+    );
+    let healed: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(healed["subjects"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        reopened.offerable(&on).of(&telegram, TODAY),
+        vec!["Okonkwo".to_owned()]
+    );
+
+    // Explicitly blocking telegram purges its learned words on reconcile.
+    let mut blocked = on.clone();
+    blocked.subjects.push(crate::settings::SubjectRule {
+        identity: telegram.clone(),
+        permissions: crate::settings::SubjectPermissions::deny_all(),
+    });
+    assert_eq!(
+        reopened.offerable(&blocked).of(&telegram, TODAY),
+        Vec::<String>::new()
+    );
+    assert!(
+        reopened
+            .reconcile(&blocked, TODAY)
+            .expect("explicit block purges subject")
+    );
+    assert!(!path.exists(), "empty store removed after purge");
+}

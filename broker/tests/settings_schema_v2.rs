@@ -278,10 +278,23 @@ fn suggestion_length_is_an_optional_choice() {
         assert!(!validator().is_valid(&document));
         assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
     }
-    // Producers never write null; typed decoding reads it as absence, as it
-    // does for every optional settings key.
+    // Both the JSON schema and typed Rust decoding reject explicit JSON null
+    // and out-of-range zero escape_quiet_seconds.
     document["suggestion_length"] = json!(null);
     assert!(!validator().is_valid(&document));
+    assert!(serde_json::from_value::<SettingsV2>(document.clone()).is_err());
+
+    let mut zero_quiet = json!({
+        "schema": "badi.settings.v2",
+        "revision": 4,
+        "paused": false,
+        "escape_quiet_seconds": 0,
+        "subjects": []
+    });
+    assert!(!validator().is_valid(&zero_quiet));
+    assert!(serde_json::from_value::<SettingsV2>(zero_quiet.clone()).is_err());
+    zero_quiet["escape_quiet_seconds"] = json!(null);
+    assert!(serde_json::from_value::<SettingsV2>(zero_quiet).is_err());
 }
 
 #[test]
