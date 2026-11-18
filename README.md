@@ -1,18 +1,21 @@
 # Badi
 
 Badi (`بعدی`, Persian for “next”) is a local writing assistant for Linux Wayland
-sessions, starting with Omarchy on Hyprland and also running on Arch Linux,
-Debian 13 and Ubuntu 24.04 (Hyprland, KDE Plasma 6 and GNOME). While you type in
-an app or editor you allow, a local model suggests up to four next words (`badi
-length short` shows one or two), finishes half-typed words, offers spelling
-fixes, and — when you select one line and press `Ctrl+Shift+Space` — checks
-grammar, refines wording or offers a synonym. Nothing changes in your document
-until you accept it (`Tab` for one word, `Ctrl+→` for all of it). Inference and
-settings stay on your device. Badi is pre-release software.
+sessions, starting with Omarchy on Hyprland and verified live on Arch Linux and
+Debian 13 (KDE Plasma 6 and GNOME), with container-tested packaging for Ubuntu
+24.04 (live Ubuntu 24.04 graphical sessions are not yet verified). While you
+type in an app or editor you allow, a local model suggests up to four next words
+(`badi length short` shows one or two), finishes half-typed words, offers
+spelling fixes, and — when you select one line and press `Ctrl+Shift+Space` —
+checks grammar, refines wording or offers a synonym. Nothing changes in your
+document until you accept it (`Tab` for one word, `Ctrl+→` for all of it).
+Inference and settings stay on your device. Badi is pre-release software.
 
 **What Badi is not:**
-- **Not a cloud service:** the model service runs without network access; the
-  only network requests are explicit, hash-checked runtime and model downloads.
+- **Not a cloud service:** the installed model service runs without network
+  access; explicit commands only fetch hash-pinned runtime and model files (plus
+  optional Hugging Face searches in the standalone Prediction Lab;
+  [Privacy](#privacy)).
 - **Not a chat bot, agent, code-completion tool or unrequested rewriter:** Badi
   appends a short continuation (or applies one accepted typo fix or single-line
   revision); it never submits forms, executes commands or edits multiple places,
@@ -117,7 +120,7 @@ Plasma use their own Fcitx frontends.
 | LibreOffice Writer | Document paragraphs (`libreoffice-gtk3` with `SAL_USE_VCLPLUGIN=gtk3` and `GTK_IM_MODULE=` unset on Plasma/GNOME; Calc gets nothing). Spelling: the [Badi extension](adapters/libreoffice/README.md) shows a correction after a finished word, `Alt+F7` shows one for the word at the caret, `Alt+F7` again replaces it in one undo step ([Fcitx matrix](adapters/fcitx5/README.md#tested-with), [Writer matrix](adapters/libreoffice/README.md#tested-with), [Debian matrix](packaging/debian/README.md#tested-with)) | 25.2 (Debian 13), 26.8, 26.8.1 |
 | Telegram | Composer (Qt Widgets): grey preview and `Tab`; as in Omawrite, no typo replacement with `fcitx5-qt` 5.1.16 ([Fcitx matrix](adapters/fcitx5/README.md#tested-with)) | 7.3.2 |
 | Omawrite | With `fcitx5-qt` 5.1.16, Qt's input module withdraws the text around the caret after every key; Badi keeps suggesting in Qt fields it observes, but cannot replace a typo there ([Fcitx matrix](adapters/fcitx5/README.md#tested-with)) | 0.5.0, 0.7.0, 0.7.2 |
-| Xournal++ text tool, Kate, Mousepad, GNOME Text Editor | Manual native Fcitx path (`badi app ID on`): `Tab` at the end of a phrase requests, `Tab` again accepts a word, exact native undo (`GTK_IM_MODULE=fcitx` for Xournal++ and GNOME Text Editor; [Fcitx matrix](adapters/fcitx5/README.md#tested-with), [Debian matrix](packaging/debian/README.md#tested-with)) | Xournal++ 1.3.7–1.3.8, Kate 25.04, Mousepad 0.6, GNOME Text Editor 48.3 |
+| Xournal++ text tool, Kate, Mousepad, GNOME Text Editor | Manual native Fcitx path (`badi app xournalpp|kate|org.kde.kate|mousepad|gnome-text-editor on`): `Tab` at the end of a phrase requests, `Tab` again accepts a word, exact native undo (`GTK_IM_MODULE=fcitx` for GTK apps Xournal++, Mousepad and GNOME Text Editor; [Fcitx matrix](adapters/fcitx5/README.md#tested-with), [Debian matrix](packaging/debian/README.md#tested-with)) | Xournal++ 1.3.7–1.3.8, Kate 25.04, Mousepad 0.6, GNOME Text Editor 48.3 |
 | Obsidian | Badi plugin; inline preview, `Tab`, `Ctrl+→`, one-step undo, recovery after a broker restart, and explicit selection revision with marked changes and native undo ([editor matrix](adapters/shared/README.md), [revision limits](adapters/shared/README.md#obsidian-selection-revision)) | 1.13.7, 1.14.4 |
 | Bash | Grey Readline preview and narrow English spelling fixes ([Bash matrix](adapters/shell/README.md#verification), [Debian matrix](packaging/debian/README.md#tested-with)) | Bash 5.3.15–5.3.20 in Ghostty 1.3.1–1.4.0 and Konsole |
 | Ghostty (any TUI, such as a coding agent's prompt) | `badi app com.mitchellh.ghostty on`; suggestions follow the line you type and show in a panel at the cursor; `Tab` types a word, `Ctrl+→` all of it, a correction shows as `teh → the` and `Tab` fixes the typo, and an automatic miss stays quiet ([ADR 0009](docs/decisions/0009-terminals-use-the-typed-line.md), [Fcitx matrix](adapters/fcitx5/README.md#tested-with)) | Ghostty 1.3.1, 1.4.0 |
@@ -386,8 +389,9 @@ badi app discord reset              # drop a rule; the app follows the mode
 
 In app blocklist mode Badi opens only fields its observer can verify, so manual
 Fcitx apps such as Xournal++ still need an explicit rule (`badi app xournalpp
-on`). A field the toolkit marks as a password, or whose accessible name or
-description names a credential, is refused in every mode
+on`). A field the input method marks as a password or special purpose is refused
+in every Fcitx mode, and on observed fields the accessibility observer also
+refuses credential-labelled fields
 ([sensitive fields](adapters/accessibility/README.md#sensitive-fields)). The
 **b** mark in the Omarchy bar opens the same settings as a keyboard-driven
 popout (`j`/`k`, `Space`, `h`/`l`, `/` to search), and right-clicking it pauses
@@ -519,17 +523,22 @@ quieted, and `badi stats forget` resets it with the counts
   [ADR 0001](docs/decisions/0001-same-uid-trust-boundary.md)),
   `ProtectHome=read-only` outside `~/.config/badi` and `~/.local/share/badi`,
   and `LimitCORE=0` (no core dumps). Adapters check exact app or website policy
-  before reading any text, and toolkit-marked passwords plus credential-labelled
-  fields are refused ([context firewall](VISION.md#context-firewall),
+  before reading any text; Fcitx refuses input-method password and special-purpose
+  fields, and on observed fields the accessibility observer also refuses
+  accessible names or descriptions that name credentials (unobserved manual
+  Fcitx fields see only input-method flags;
+  [context firewall](VISION.md#context-firewall),
   [sensitive fields](adapters/accessibility/README.md#sensitive-fields)).
 - **What stays in memory and what touches disk.** Ordinary drafts, nearby window
   words, active snoozes and hashes of turned-down words stay in memory only.
   Persistent files are user-private (`0600` in `0700` directories):
   `~/.config/badi/settings.json` (settings and permissions),
   `~/.local/share/badi/stats.json` (90-day counts only, zero prose;
-  [Usage statistics](#usage-statistics)), and — only when you opt in —
-  XChaCha20-Poly1305 keyring-encrypted `learned-words.json`
-  ([Context](#context-opt-in)) and `style.json`
+  [Usage statistics](#usage-statistics)),
+  `~/.local/share/badi/personalization.json` (per-app and per-site daily
+  shown/dismissed/accepted counts with zero prose; cleared with `badictl memory
+  clear`), and — only when you opt in — XChaCha20-Poly1305 keyring-encrypted
+  `learned-words.json` ([Context](#context-opt-in)) and `style.json`
   ([Style learning](#style-learning-opt-in)), never collected from terminals or
   shells.
 - **What the debug trace may hold.** Tracing is off by default, lives in RAM

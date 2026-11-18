@@ -108,9 +108,10 @@ their installer backups; migrate deliberately instead of mixing two builds.
 The package does not delete or rewrite them.
 
 On a fresh unlocked Omarchy session with only the runtime installed above,
-enable the helpers, download and start the device-recommended model (`gemma-3-1b`
-on mains power, `qwen3-0.6b` while discharging on battery; switch to
-`gemma-3-1b` later on mains if wanted), allow an app and unpause:
+enable the helpers, download and start the device-recommended model (on battery
+discharging, `badictl models writing` recommends `qwen3-0.6b`; once on mains
+power, re-run `badi model` and pass its recommended id to `badi model use ID` if
+a balanced tier fits), allow an app and unpause:
 
 ```sh
 systemctl --user daemon-reload

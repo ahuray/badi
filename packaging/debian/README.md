@@ -95,9 +95,10 @@ As each desktop user, never as root:
    [writing-asset commands](../aur/README.md#writing-assets), which work
    unchanged on Debian and Ubuntu.
 3. Enable the session and observer units, then download and start the
-   device-recommended writing model (`gemma-3-1b` on mains power, `qwen3-0.6b`
-   while discharging on battery; switch later on mains with `badi model use
-   gemma-3-1b`) while `badi-broker.service` is still `inactive`:
+   device-recommended writing model (on battery discharging, `badictl models
+   writing` recommends `qwen3-0.6b`; once on mains power, re-run `badi model`
+   and pass its recommended id to `badi model use ID` if a balanced tier fits)
+   while `badi-broker.service` is still `inactive`:
 
    ```sh
    systemctl --user daemon-reload
