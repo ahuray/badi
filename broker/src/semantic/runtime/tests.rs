@@ -227,7 +227,20 @@ fn contained_launch_execs_through_the_parent_death_helper() -> Result<(), Box<dy
 
     let direct = LlamaCppLaunch::new(binary.clone(), bundle, model.clone(), "fixture", 1)?;
     assert_eq!(direct.runtime_command()?.get_program(), binary_path);
-    let command = direct.contained().runtime_command()?;
+    assert_eq!(direct.runtime_command()?.get_args().count(), 0);
+    let masked = direct.clone().with_cpu_mask(Some("0xfff".to_owned()))?;
+    let masked_direct = masked.runtime_command()?;
+    let masked_direct_args: Vec<_> = masked_direct.get_args().collect();
+    assert_eq!(
+        masked_direct_args,
+        [
+            std::ffi::OsStr::new("--cpu-mask"),
+            std::ffi::OsStr::new("0xfff")
+        ]
+    );
+    assert_eq!(masked.identity().cpu_mask.as_deref(), Some("0xfff"));
+    assert_ne!(masked.identity().sha256(), direct.identity().sha256());
+    let command = direct.clone().contained().runtime_command()?;
     assert_eq!(command.get_program(), std::env::current_exe()?);
     let arguments: Vec<_> = command.get_args().collect();
     assert_eq!(
@@ -238,8 +251,42 @@ fn contained_launch_execs_through_the_parent_death_helper() -> Result<(), Box<dy
             binary_path.as_os_str(),
         ]
     );
-    // The helper passes no arguments, so a fixture cannot be contained.
+    let masked_contained = masked.contained().runtime_command()?;
+    let masked_contained_args: Vec<_> = masked_contained.get_args().collect();
+    assert_eq!(
+        masked_contained_args,
+        [
+            std::ffi::OsStr::new(crate::semantic::process::EXEC_HELPER_FLAG),
+            std::ffi::OsStr::new(&std::process::id().to_string()),
+            binary_path.as_os_str(),
+            std::ffi::OsStr::new("--cpu-mask"),
+            std::ffi::OsStr::new("0xfff"),
+        ]
+    );
+    for invalid in [
+        "",
+        "fff",
+        "0x",
+        "0x0",
+        "0x0fff",
+        "0xFFF",
+        "0xg",
+        &format!("0x1{}", "0".repeat(128)),
+    ] {
+        assert!(
+            matches!(
+                direct.clone().with_cpu_mask(Some(invalid.to_owned())),
+                Err(RuntimeError::InvalidConfig("cpu_mask"))
+            ),
+            "{invalid:?}"
+        );
+    }
+    // The helper passes no fixture arguments, and fixtures do not accept CPU masks.
     let fixture = LlamaCppLaunch::for_fixture(binary, model, FixtureBehavior::Ready)?;
+    assert!(matches!(
+        fixture.clone().with_cpu_mask(Some("0xfff".to_owned())),
+        Err(RuntimeError::InvalidConfig("cpu_mask"))
+    ));
     assert!(matches!(
         fixture.contained().validate(),
         Err(RuntimeError::InvalidConfig("runtime_bundle"))
@@ -430,6 +477,7 @@ fn owned_runtime_at(endpoint: std::net::SocketAddr) -> Result<OwnedRuntime, Box<
             ubatch_size: Some(16),
             memory_map: true,
             full_swa_cache: false,
+            cpu_mask: None,
         },
     })
 }

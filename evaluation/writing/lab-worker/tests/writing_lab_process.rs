@@ -23,6 +23,23 @@ fn lab_binary_exec_helper_runs_before_model_or_tokio_startup() -> Result<(), Box
     );
     assert_eq!(output.stdout, [] as [u8; 0]);
     assert_eq!(output.stderr, [] as [u8; 0]);
+
+    let echo = std::fs::canonicalize("/bin/echo")?;
+    let masked = Command::new(env!("CARGO_BIN_EXE_badi-writing-lab"))
+        .arg(EXEC_HELPER_FLAG)
+        .arg(std::process::id().to_string())
+        .arg(&echo)
+        .args(["--cpu-mask", "0xfff"])
+        .env_clear()
+        .process_group(0)
+        .output()?;
+    assert!(
+        masked.status.success(),
+        "masked helper failed: {:?}",
+        masked.stderr
+    );
+    assert_eq!(masked.stdout, b"--cpu-mask 0xfff\n");
+    assert_eq!(masked.stderr, [] as [u8; 0]);
     Ok(())
 }
 
