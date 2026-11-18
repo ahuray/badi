@@ -560,9 +560,22 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       already replaces the suffix in one undo step.
 - [ ] Lift English with Gemma 3 1B, its weakest language (29% useful against
       Qwen3 1.7B's 40% and Granite 4.0 H-Tiny's 42% in the
-      [European-language screen](docs/architecture/model-selection.md)):
-      measure a second, English-only resident model (about 2.5 GB together)
-      against prompt and decoding changes before choosing.
+      [European-language screen](docs/architecture/model-selection.md)),
+      by choosing the first token contrastively (2026-11-18): among the
+      tokens at or above both the confidence floor and a tenth of Gemma 3
+      1B's best, take the one maximising log p(1B) − 0.5 · log p(Gemma 3
+      270M), then continue greedily. On 100 held-out English prefixes, with
+      the parameters fixed on 78 development cases and blind review, it
+      showed 79 suggestions against greedy's 77, 55 useful against 46
+      (12 wins, 3 losses) and no harmful one. Ignoring the floor, the 270M
+      model's picks fell below it and only 32 of 78 development cases showed
+      anything. Production shape: one 1-token request with the top 8
+      candidates, while the 270M model scores the same prompt, then the rest
+      from the cached prompt; p50 424 → 536 ms, p90 552 → 697 ms. Text-only
+      evidence is in `~/.local/state/badi/archive/english-cd-2026-11-18`.
+      Before shipping: decide whether +110 ms and a second ~300 MB runtime
+      are worth it, pin the 270M model, run it in the broker for English
+      only, and confirm with a paired `production_boundary` Lab run.
 - [ ] Offer Granite 4.0 H-Tiny base on machines that fit it: best English and
       German in that screen, but 7.7 GB peak and 96 of 325 requests over
       550 ms here.
