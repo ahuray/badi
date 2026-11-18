@@ -30,10 +30,10 @@ settings stay on your device. Badi is pre-release software.
 | Key | Action |
 | --- | --- |
 | **Tab** | Accept only the next word, which the grey preview or panel draws a step brighter; the rest returns. Spelling corrections and selection revisions apply whole. In manual Fcitx fields (such as Xournal++'s Text tool), `Tab` at the end of a phrase requests first and `Tab` again accepts a word. Without a suggestion or manual request, `Tab` stays `Tab`. |
-| **Ctrl+→** | Accept all of it (`Cmd+→` also works in Obsidian). |
+| **Ctrl+→** | Accept all of it (`Cmd+→` also works in Obsidian; **Ctrl+Shift+Y** also accepts all of a visible suggestion in Fcitx apps). |
 | Keep typing | Typing the suggestion's next letters keeps the rest with no new model call ([type-through](docs/decisions/0004-type-through-carries-text-not-authority.md)). |
 | **Escape** | Dismiss the suggestion, alternative list or revision preview (in Neovim, leaving Insert mode dismisses a continuation). |
-| **Ctrl+Shift+Space** | Ask for a suggestion (or **Ctrl+Shift+Y** in Fcitx apps). On a shown continuation in an Fcitx app, Obsidian or Neovim, list up to four other first words; **`1`–`4`** (or a click in Fcitx) shows that word's continuation, and pressing again lists the rest ([ADR 0014](docs/decisions/0014-numbered-alternative-words.md)). On selected text, check its grammar; press again for a refined wording, and again — for a word or 1–3 word phrase — for a synonym, then another synonym on each further press ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md), [ADR 0013](docs/decisions/0013-synonyms-for-one-short-selection.md)). **Tab** applies what it shows, **Escape** keeps your text. |
+| **Ctrl+Shift+Space** | Ask for a suggestion. On a shown continuation in an Fcitx app, Obsidian or Neovim, list up to four other first words; **`1`–`4`** (or a click in Fcitx) shows that word's continuation, and pressing again lists the rest ([ADR 0014](docs/decisions/0014-numbered-alternative-words.md)). On selected text, check its grammar; press again for a refined wording, and again — for a word or 1–3 word phrase — for a synonym, then another synonym on each further press ([ADR 0012](docs/decisions/0012-explicit-revision-of-one-selection.md), [ADR 0013](docs/decisions/0013-synonyms-for-one-short-selection.md)). **Tab** applies what it shows, **Escape** keeps your text. |
 | **Ctrl+Shift+Tab** | In Fcitx apps where Badi would take `Tab`, retire the suggestion and send the app a real `Tab`. Elsewhere it stays the app's key (such as a browser's previous tab). |
 | **Bash** | **Ctrl-X** then **Tab** requests and accepts; **Ctrl-X** then **Escape** dismisses; **Ctrl-_** undoes; plain **Tab** stays Bash completion, and commands are never submitted ([Bash runbook](adapters/shell/README.md)). |
 | **Writer spelling** | **Alt+F7** shows a correction for the word at or before the caret; **Alt+F7** again (or the infobar's **Replace** button, needed on GNOME where `Alt+F7` moves windows) replaces it in one undo step ([Writer runbook](adapters/libreoffice/README.md)). |
@@ -316,10 +316,14 @@ service file was restored, and updates the install receipt
    `--force-renderer-accessibility=complete` to the app's flags file on other
    desktops ([flags](adapters/accessibility/README.md#installation-and-the-renderer-flag)),
    then relaunch the app. In VS Code, also set `"editor.editContext": false`.
-4. **Type in an allowed field.** `badi-broker.service` starts on demand on your
-   first keystroke or explicit `Ctrl+Shift+Space` (`badi autostart on` starts it
-   at login instead) and stays loaded until logout or `badi service stop`. Press
-   `Tab` to accept one word, `Ctrl+→` for all of it, or `Escape` to dismiss.
+4. **Type in an allowed field.** `badi-broker.service` starts on demand on the
+   first typed key in an observed, terminal typed-line, Obsidian or Neovim
+   field, and on the first explicit request in manual native Fcitx fields (`Tab`
+   or `Ctrl+Shift+Space`, where the first `Tab` requests and the next `Tab`
+   accepts a word) or Bash (`Ctrl-X` then `Tab`). `badi autostart on` starts it
+   at login instead, and once loaded it stays up until logout or `badi service
+   stop`. Once a suggestion shows, press `Tab` to accept one word, `Ctrl+→` for
+   all of it, or `Escape` to dismiss.
 
 ## Choose the writing model
 
