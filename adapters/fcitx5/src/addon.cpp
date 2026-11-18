@@ -1,4 +1,5 @@
 #include "addon.h"
+#include "quietly.h"
 
 #include <fcitx/addonfactory.h>
 #include <fcitx/addoninstance.h>
@@ -27,13 +28,19 @@ BadiAddon::BadiAddon(::fcitx::Instance *instance)
 }
 
 BadiAddon::~BadiAddon() {
-    handlers_.clear();
+    // Fcitx unloads its addons while the broker and observer connections may
+    // already be gone. An exception leaving a destructor calls std::terminate,
+    // which aborted fcitx5 on `fcitx5 --replace` during installs, so each step
+    // runs on its own and a failure is logged with its cause.
+    quietly("clearing event handlers", [this] { handlers_.clear(); });
     for (auto &[_, binding] : bindings_) {
-        retire(binding, RetireReason::FocusReset);
-        binding.readBack.clearCorrection();
+        quietly("retiring a field", [this, &binding] {
+            retire(binding, RetireReason::FocusReset);
+            binding.readBack.clearCorrection();
+        });
     }
-    accessibility_.reset();
-    transport_.disconnect();
+    quietly("closing the observer connection", [this] { accessibility_.reset(); });
+    quietly("disconnecting from the broker", [this] { transport_.disconnect(); });
 }
 
 WireCallbacks BadiAddon::callbacksFor(BadiAddon *addon) {

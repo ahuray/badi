@@ -1,4 +1,5 @@
 #include "transport.h"
+#include "quietly.h"
 
 #include "fcitx_event.h"
 #include "sanitizer.h"
@@ -620,8 +621,13 @@ public:
           socketPath_(std::move(socketPath)), started_(Clock::now()) {}
 
     ~Impl() {
-        disconnect();
-        releaseRetired();
+        // Fcitx destroys the transport while its event loop may refuse the
+        // sources. No exception may leave this destructor, and the socket
+        // closes even when disconnect() stopped early. Live paths keep
+        // their own contract.
+        quietly("closing the broker connection", [this] { disconnect(); });
+        if (fd_ >= 0) ::close(std::exchange(fd_, -1));
+        quietly("releasing retired broker connections", [this] { releaseRetired(); });
     }
 
     bool connect() {
