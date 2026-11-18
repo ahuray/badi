@@ -238,7 +238,7 @@ While `badi debug on` runs, `debug_trace.rs` appends each wire frame in and
 out of the broker (allowlisted fields; settings, style, memory and
 statistics frames by type only; health and statistics polls not at all), each `model start` and `model done`
 with latency and outcome, and each `carry` decision to the
-[debug trace](../README.md#debug-trace). When the local runtime reports
+[debug trace](#debug-trace). When the local runtime reports
 them, `model done` also carries content-free `ttft_ms`, `prompt_tokens`
 (llama.cpp `prompt_n`, newly evaluated), `cache_tokens` (`cache_n`, reused)
 and `generated_tokens`; a cancelled, shutdown or timed-out call records
@@ -249,6 +249,24 @@ candidates and the model's answer. Malformed optional timing statistics stay
 unknown rather than invalidating the completion, and no new text is recorded
 ([ADR 0008](../docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
 Unit tests never write to a live trace.
+
+`badi debug on [--text]` writes one line per event to
+`$XDG_RUNTIME_DIR/badi/debug-trace.jsonl`, from every part of Badi; `badi debug
+watch` follows it as readable lines, `badi debug log [--json]` prints it, and
+`badi debug off` deletes it. It ends after 15 minutes and at logout. Without
+`--text` it holds lengths, ids, reasons and positions only; with `--text` also
+the text around the caret, typed characters and suggestions, except from a
+field that reports itself sensitive, and a password field's keys are never
+recorded. Test commands set `BADI_DEBUG_TRACE=off` to stay out of a running
+trace.
+
+| Source | Events |
+| --- | --- |
+| `broker` | Each message to and from an adapter (`in context.changed`, `out suggestion.show`, `out suggestion.clear` with its reason, commits), `model start` / `model done` with latency, outcome and content-free token and timing counts, `carry` (type-through kept, or the gate that declined it), `spelling`, `vocabulary` with context on, and `window_chars` on `context.changed` |
+| `fcitx` | `key` with the action taken and whether a suggestion was showing; `ghost shown` as the `overlay` (grey text at the caret) or the `panel` (Fcitx's popup); `ghost hidden`; every blocked request or display with its reason |
+| `observer` | Each field request; `preview drawn` with its placement (`inline`, `caret_line`, `chip`, `edge_panel`) and box, `preview declined` with its reason, `preview mapped`, `preview hidden` with its cause |
+| `compositor` | While `badi debug watch` runs: whether Hyprland has the grey preview on screen, and where |
+| `obsidian`, `neovim`, `terminal` | Editor activity; Obsidian's `ghost shown` and `hidden` |
 
 ## badictl
 
@@ -275,7 +293,19 @@ badictl models writing --json
 (`request_abstained`, `budget_prefill`, `budget_stream`, `model_abstained`,
 `output_rejected`, `stale`, `timeout`, `provider_error`, `low_confidence`,
 `repeated`, `typo_suspected`) and
-names the latest.
+names the latest:
+
+| Reason | Meaning |
+| --- | --- |
+| `app_disabled` | The app or site has no grant. |
+| `request_abstained` | Unsupported language, a caret inside a word, a word after the caret while mid-sentence suggestions are off, or a lone unfinished word. |
+| `budget_prefill`, `budget_stream` | The time budget ran out: 550 ms while typing, 1.2 s after an explicit request. |
+| `model_abstained`, `output_rejected` | The model declined, or its words failed a language, dictionary, number or safety check, or did not fit before the text after the caret. |
+| `stale`, `timeout`, `provider_error` | The text changed first, or the model was late or failed. |
+| `low_confidence` | A word of the suggestion was too unlikely to show ([suggestion limits](#suggestion-limits)). |
+| `repeated` | That next word was turned down at the same spot in this app or site before. |
+| `typo_suspected` | Spelling found a possible typo it cannot replace here, so the continuation waits until the word is resolved. |
+
 Its `type_through` counts requests answered from the carry (`carried`) and,
 for admitted requests that reached the provider although a carry existed,
 the gate that declined it (`scope`, `after_changed`, `language_changed`,
@@ -556,6 +586,11 @@ fingerprint, field or window detail is kept.
   16 that lead any of those windows; `stats.forget` deletes everything. Both
   need the CLI settings capability (`badictl stats status|forget`, or `badi
   stats`).
+- **Quieter where seldom taken.** An app or site with at least 50 suggestions
+  shown in the last 7 days and fewer than 8 in 100 accepted gets only surer
+  ones, and fewer than 4 in 100 surer still. It never gets bolder than the
+  default, an explicit request is never quieted, and `badi stats forget`
+  resets it with the counts ([suggestion limits](#suggestion-limits)).
 
 ## Suggestion limits
 

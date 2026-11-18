@@ -83,7 +83,7 @@ links to it. A tested app version is not a claim about Linux in general.
   (b11393).
 - **Diagnosis:** `badi debug on [--text]`, `badi debug watch` and `badi debug
   log` trace every request (with first-token time and new and reused prompt
-  tokens), suggestion, key and ghost ([README](README.md#debug-trace),
+  tokens), suggestion, key and ghost ([README](broker/README.md#debug-trace),
   [ADR 0008](docs/decisions/0008-debug-trace-may-hold-text-on-request.md)).
   Use it for every live trial.
 - **Context and learning:** `badi context on` (or the panel's one-time
@@ -353,7 +353,7 @@ publish need the user's go-ahead first; the rest can start at once.
      Neovim, picked by digit (or click in Fcitx), live-verified in
      Omawrite ([ADR 0014](docs/decisions/0014-numbered-alternative-words.md));
    - words saved per day and per app or site, as counts only
-     ([`badi stats`](README.md#usage-statistics));
+     ([`badi stats`](broker/README.md#usage-statistics));
    - inline grey text in the field's font with the word Tab takes drawn
      brighter, Tab for a word, a key for all of it, Escape quiet and a
      request key;
