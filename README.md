@@ -5,8 +5,9 @@ allow, a small model on your own machine suggests the next few words, finishes
 half-typed English words and fixes typos. In browsers and apps Badi can observe
 on Hyprland, the suggestion shows as grey text at the caret; elsewhere (KDE
 Plasma, GNOME, terminals and manual Fcitx apps) it shows as an Fcitx candidate. Nothing
-changes until you accept it: `Tab` takes the next word, and `Ctrl+→` (or
-clicking the Fcitx candidate) takes it all.
+changes until you accept it: `Tab` takes the next word of a continuation (a
+typo fix or revision applies whole), and `Ctrl+→` (or clicking the Fcitx
+candidate) takes it all.
 
 [![CI](https://github.com/ahuray/badi/actions/workflows/ci.yml/badge.svg)](https://github.com/ahuray/badi/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -93,9 +94,10 @@ allowed, so run `badi resume` after allowing an app.
   yet.
 - Editor integrations: `python3 scripts/install-editors.py` with any of
   `--vault /path/to/vault` (Obsidian; run `npm ci` first), `--bash`, `--neovim`
-  and `--libreoffice` (close LibreOffice first). Obsidian, Bash and Neovim need
-  Node.js `^22.20`, `^24.12` or 25+; `--bash` also needs a C compiler and the
-  Readline headers ([editors runbook](adapters/shared/README.md)).
+  and `--libreoffice` (close LibreOffice first). Building the Obsidian plugin
+  needs Node.js `^22.20`, `^24.12` or 25+; Bash and Neovim need only `node` on
+  `PATH` (Node 18 and 20 are [tested](packaging/debian/README.md)); `--bash`
+  also needs a C compiler and the Readline headers ([editors runbook](adapters/shared/README.md)).
 - Chromium-based apps need [renderer accessibility](adapters/accessibility/README.md#installation-and-the-renderer-flag).
   On Omarchy run `python3 scripts/install-desktop.py --observed-app APP` with
   `chromium`, `brave-origin`, `code` (VS Code), `cursor`, `chatgpt` (Codex),
