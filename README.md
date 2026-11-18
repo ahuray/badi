@@ -2,8 +2,9 @@
 
 **Local, private next-word suggestions for Linux.** While you type in an app you
 allow, a small model on your own machine suggests the next few words, finishes
-half-typed words and fixes typos. On Hyprland the suggestion shows as grey text
-at the caret; on KDE Plasma and GNOME it shows as an Fcitx candidate. Nothing
+half-typed English words and fixes typos. In browsers and apps Badi can observe
+on Hyprland, the suggestion shows as grey text at the caret; elsewhere (KDE
+Plasma, GNOME, terminals and manual Fcitx apps) it shows as an Fcitx candidate. Nothing
 changes until you accept it: `Tab` takes the next word, and `Ctrl+→` (or
 clicking the Fcitx candidate) takes it all.
 
@@ -18,7 +19,7 @@ clicking the Fcitx candidate) takes it all.
 ## Features
 
 - **Next words as you type:** up to four words (`badi length short` for one or
-  two), in English and German by default, and French, Spanish and
+  two); other languages than English get whole words only, in English and German by default, and French, Spanish and
   Portuguese when you turn them on.
 - **Typo fixes:** `teh → the` in English out of the box; German, French, Spanish,
   Italian, Dutch and Polish after `badi spelling LANG on` and that language's
@@ -86,9 +87,11 @@ allowed, so run `badi resume` after allowing an app.
   setup for KDE Plasma and GNOME.
 - [Arch package](packaging/aur/README.md): a `makepkg` candidate, not on the AUR
   yet.
-- Editor integrations need Node.js 22.20 or newer and `npm ci`, then
-  `python3 scripts/install-editors.py` with any of `--vault /path/to/vault`,
-  `--bash`, `--neovim` and `--libreoffice` (close LibreOffice first).
+- Editor integrations: `python3 scripts/install-editors.py` with any of
+  `--vault /path/to/vault` (Obsidian; run `npm ci` first), `--bash`, `--neovim`
+  and `--libreoffice` (close LibreOffice first). Obsidian, Bash and Neovim need
+  Node.js `^22.20`, `^24.12` or 25+; `--bash` also needs a C compiler and the
+  Readline headers ([editors runbook](adapters/shared/README.md)).
 - Chromium-based apps need [renderer accessibility](adapters/accessibility/README.md#installation-and-the-renderer-flag).
   On Omarchy run `python3 scripts/install-desktop.py --observed-app APP` with
   `chromium`, `brave-origin`, `code` (VS Code), `cursor`, `chatgpt` (Codex),
@@ -100,8 +103,8 @@ allowed, so run `badi resume` after allowing an app.
 
 | Key | What it does |
 | --- | --- |
-| `Tab` | Accept the next word, drawn a little brighter on Hyprland (a typo fix or revision applies whole) |
-| `Ctrl+→` | Accept the whole suggestion (in Fcitx apps also `Ctrl+Shift+Y`, or a click on the suggestion) |
+| `Tab` | Accept the next word, drawn a little brighter on Hyprland (a typo fix or revision applies whole). In manual Fcitx apps such as Xournal++, `Tab` at the end of a phrase first asks for a suggestion. With nothing showing, `Tab` stays `Tab` |
+| `Ctrl+→` | Accept the whole suggestion (in Fcitx apps also `Ctrl+Shift+Y`, or a click on the single suggestion; in the numbered list a click picks like `1`–`4`) |
 | Keep typing | Typing the suggested letters keeps the rest, with no new model call |
 | `Escape` | Dismiss |
 | `Ctrl+Shift+Space` | Ask for a suggestion. On a suggestion, list other first words to pick with `1`–`4`. On selected text, show a grammar fix; each further press while it shows moves to a refined wording, then, for a phrase of up to three words, a synonym. `Tab` applies the one on screen |
@@ -156,7 +159,8 @@ badi doctor                         # what is wrong, if anything
 badi --help                         # every command
 ```
 
-Everything here is also in the Omarchy settings panel.
+The Omarchy settings panel offers the same settings; `badi doctor`, `badi stats`
+and `badi --help` stay terminal commands.
 
 **Opt-in extras:**
 - [Context](docs/decisions/0010-context-finishes-words.md) (`badi context on`)
