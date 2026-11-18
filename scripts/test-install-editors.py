@@ -119,6 +119,24 @@ class InstallEditorsTests(unittest.TestCase):
             replies = [json.loads(line) for line in result.stdout.splitlines()]
             self.assertIn({'id': 1, 'ok': True, 'connected': False, 'allowed': False, 'automatic': False}, replies)
 
+    def test_bash_then_neovim_subset_installs_do_not_mark_editors_receipt_partial(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in ('XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'NVIM_APPNAME')}
+            with patch.object(installer.Path, 'home', return_value=home), \
+                 patch.dict(os.environ, environment, clear=True), \
+                 patch.object(installer, 'build_shell_preview', return_value=b'test display builtin'), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with patch('sys.argv', ['install-editors.py', '--bash']):
+                    installer.main()
+                with patch('sys.argv', ['install-editors.py', '--neovim']):
+                    installer.main()
+            receipt = json.loads((home / '.local/state/badi/receipts/editors.json').read_text())
+            self.assertIn('.local/lib/badi/editors/shell/badi-preview.so', receipt['files'])
+            self.assertIn('.local/lib/badi/editors/neovim/bridge.mjs', receipt['files'])
+            self.assertNotIn('partial_components', receipt)
+
     def test_neovim_follows_xdg_data_home_and_refuses_linked_or_foreign_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary) / 'home'

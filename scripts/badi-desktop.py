@@ -691,7 +691,7 @@ def install_state():
                                     and isinstance(item.get("commit"), str)
                                     and (item["commit"] == "unknown" or re.fullmatch(r"[0-9a-f]{40}", item["commit"]))})
         partial = document.get("partial_components")
-        if isinstance(partial, list) and partial:
+        if name == "desktop" and isinstance(partial, list) and partial and all(isinstance(item, str) for item in partial):
             entry_state["partial_components"] = partial
         if len(versioned_commits) > 1 or (versioned_commits and versioned_commits != [document["source"].get("commit")]):
             entry_state["component_commits"] = versioned_commits

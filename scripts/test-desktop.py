@@ -1964,6 +1964,13 @@ sys.exit(1)
                     '.local/lib/badi/accessibility/daemon.py': {'sha256': 'e' * 64, 'commit': '1' * 40, 'dirty': False},
                 },
             }),
+            ('editors', {
+                'schema': 'badi.install-receipt.v1', 'installer': 'editors',
+                'installed_at': '2026-10-20T12:00:00Z',
+                'source': {'commit': 'b' * 40, 'dirty': False},
+                'partial_components': ['.local/lib/badi/editors/shell/badi-preview.so'],
+                'files': {'.local/lib/badi/editors/neovim/bridge.mjs': {'sha256': 'c' * 64, 'commit': 'b' * 40, 'dirty': False}},
+            }),
             ('omarchy-ui', {
                 'schema': 'badi.install-receipt.v1', 'installer': 'omarchy-ui',
                 'installed_at': '2026-10-19T12:00:00Z',
@@ -1984,6 +1991,7 @@ sys.exit(1)
              patch.object(desktop, 'control', return_value='{"metrics": {"provider_calls": 1}}'):
             report = desktop.health_report()
         self.assertEqual(report['install']['desktop']['component_commits'], ['a' * 40, 'b' * 40])
+        self.assertNotIn('partial_components', report['install']['editors'])
         self.assertTrue(any('multiple source commits' in note for note in report['notes']), report['notes'])
         self.assertTrue(any('omarchy-ui files are at ccccccc' in note for note in report['notes']), report['notes'])
         self.assertIn('(mixed: aaaaaaa, bbbbbbb)', desktop.doctor_text(report))
