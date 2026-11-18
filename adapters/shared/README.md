@@ -35,7 +35,7 @@ errors left an in-flight `local_model` request unaffected).
 | Neovim | Prose buffers, automatic after a 120 ms pause, or Ctrl+Shift+Space, which on a shown suggestion lists up to four other first words where the suggestion stood; a digit shows that word's continuation. Tab accepts one word and Ctrl+Right all of it, only while a suggestion is visible; a correction replaces its exact suffix. Leaving Insert mode dismisses ([details](../neovim/README.md)) | Neovim 0.12.5 headless, scripted bridge and real phrase broker; live with the real model in foot (0.12.5) and Ghostty (0.12.6) ([matrix](../neovim/README.md#tested-with)) |
 | LibreOffice Writer (spelling) | A finished misspelled word shows its correction; Alt+F7 shows one for the word at the caret; Alt+F7 again replaces it in one undo step, Escape dismisses ([details](../libreoffice/README.md)) | LibreOffice 26.8 headless, phrase fixture; the interactive Wayland window live (Alt+F7, replace, one Ctrl+Z) |
 
-Browser fields use the [IME-parity path](../../README.md#how-badi-edits-chromium-based-apps-and-zen)
+Browser fields use the [IME-parity path](../../docs/decisions/0003-ime-parity-append-only.md)
 instead.
 
 ## Install
@@ -84,7 +84,7 @@ the app's language hint applies. Persian half-spaces (U+200C) are kept only
 between the letters in
 [the orthographic fixture](../../protocol/orthographic-joiner-fixtures.json).
 `badi debug on` records content-free metadata for 15 minutes and appends each
-event to the shared [debug trace](../../README.md#debug-trace).
+event to the shared [debug trace](../../broker/README.md#debug-trace).
 
 ## Obsidian selection revision
 

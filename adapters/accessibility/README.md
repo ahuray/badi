@@ -479,7 +479,7 @@ With `badi debug on`, `debugtrace.py` adds each request, each preview drawn
 (placement and monitor-local box), declined (`uncalibrated_caret`,
 `right_to_left_text`, `monitor_unmatched`, `no_room`), mapped and hidden
 (`replaced`, `expired`, `withdrawn`) to the
-[debug trace](../../README.md#debug-trace).
+[debug trace](../../broker/README.md#debug-trace).
 
 ## Installation and the renderer flag
 

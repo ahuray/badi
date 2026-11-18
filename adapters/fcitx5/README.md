@@ -147,6 +147,10 @@ observer wire details.
   gets the notice "Badi could not confirm that correction — check the text".
   An update between the two edits gives no verdict. Native undo may take one
   step per edit (Omawrite 0.5.0, [tested with](#tested-with)).
+- **Emoji stay Fcitx's.** Fcitx 5 already supplies emoji through QuickPhrase
+  (`Super+;`, then a word such as `smile`) and its Emoji module. Badi adds no
+  `:shortcode` expansion: replacing `:smile` would delete text, which the
+  append-only apps cannot do, and Badi yields while Fcitx composes.
 
 ### Revising a selection
 
@@ -308,7 +312,7 @@ provides an editor transaction.
   (120 ms, then 240, 480 and 960 ms). A busy observer is retried every 20 ms. Badi's timers ask for 1 ms accuracy, because Fcitx's
   sd-event loop otherwise allows 250 ms of slack. With debug on,
   `inspect_sent` and `inspect_answered` time each inspection in the
-  [debug trace](../../README.md#debug-trace), beside each key's action and
+  [debug trace](../../broker/README.md#debug-trace), beside each key's action and
   each suggestion shown as the `overlay` or the `panel`.
 - **Invalidations.** One after input re-inspects at once. One without input
   re-inspects after 240, 480 and 960 ms and then waits for input
