@@ -48,16 +48,20 @@ const clearCandidate = () => {
 const initial = process.env.FAKE_BRIDGE_POLICY || 'automatic';
 const revisionReasons = JSON.parse(process.env.FAKE_BRIDGE_REVISION_REASONS || '[]');
 let policy = { connected: true, allowed: initial !== 'refused', automatic: initial === 'automatic' || initial === 'silent' };
+let policyReady = Promise.resolve();
+let releaseEpochPause = null;
 const report = state => send({ event: 'state', state, ...policy });
 
 log({ op: 'start' });
 if (initial !== 'silent') report(policy.allowed ? 'ready' : 'app_disabled');
-for await (const line of createInterface({ input: process.stdin })) {
+createInterface({ input: process.stdin }).on('line', line => void (async () => {
   const command = JSON.parse(line);
   log({ op: command.op, explicit: command.explicit, acceptance: command.acceptance, status: command.status, mode: command.mode });
   if (command.op === 'revise') {
+    const mine = ++generation;
     clearCandidate();
     if (command.selected.startsWith('slow ')) await delay(400);
+    if (mine !== generation) { send({ id: command.id, ok: false, reason: 'stale' }); return; }
     const reason = revisionReasons.shift();
     if (reason) {
       report(reason);
@@ -65,7 +69,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         ? { id: command.id, ok: true, text: null, reason, mode: command.mode,
           next_mode: nextRevisionMode(command.mode, command.selected) }
         : { id: command.id, ok: false, reason });
-      continue;
+      return;
     }
     let text = command.selected.replace('has went', 'went');
     if (command.mode === 'refine') text = text.charAt(0).toUpperCase() + text.slice(1);
@@ -84,9 +88,10 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (lateAccept) await delay(400);
     send({ id: command.id, ok: true, text, replace_selection: selection });
   } else if (command.op === 'suggest') {
+    await policyReady;
     if (!policy.allowed || (!command.explicit && !policy.automatic)) {
       send({ id: command.id, ok: false, reason: policy.allowed ? 'manual_required' : 'app_disabled_or_model_paused' });
-      continue;
+      return;
     }
     const mine = ++generation;
     clearCandidate();
@@ -94,7 +99,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     const rule = correction ? null : RULES.find(([end]) => command.before.endsWith(end));
     if (rule?.[0] === 'crash') process.exit(3);
     if (rule?.[0] === 'slow') await delay(400);
-    if (mine !== generation) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); continue; }
+    if (mine !== generation) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); return; }
     candidate = correction?.text ?? (rule ? rule[1] : null);
     replaceBefore = correction?.before ?? null;
     grantReplaceBefore = correction?.grant ?? null;
@@ -104,9 +109,9 @@ for await (const line of createInterface({ input: process.stdin })) {
       word: replaceBefore ? candidate : candidate?.match(/^ ?\S+/u)?.[0],
       ...(replaceBefore ? { replace_before: replaceBefore } : {}) });
   } else if (command.op === 'alternative') {
-    if (candidate === null) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); continue; }
-    if (candidate === ' for your time') { clearCandidate(); await delay(400); send({ id: command.id, ok: true, words: ['so', 'again'] }); continue; }
-    if (candidate === ' so much') { clearCandidate(); send({ id: command.id, ok: true, words: ['again'] }); continue; }
+    if (candidate === null) { send({ id: command.id, ok: false, reason: 'expired_or_unavailable' }); return; }
+    if (candidate === ' for your time') { clearCandidate(); await delay(400); send({ id: command.id, ok: true, words: ['so', 'again'] }); return; }
+    if (candidate === ' so much') { clearCandidate(); send({ id: command.id, ok: true, words: ['again'] }); return; }
     candidate = ALTERNATIVES.get(candidate) ?? null;
     replaceBefore = null;
     grantReplaceBefore = null;
@@ -140,11 +145,32 @@ for await (const line of createInterface({ input: process.stdin })) {
     clearCandidate();
     send({ event: 'clear' });
   } else if (command.op === 'status') {
+    await policyReady;
     send({ id: command.id, ok: true, ...policy });
+  } else if (command.op === 'epoch_pause' || command.op === 'epoch_allow' || command.op === 'clear_pause') {
+    // Emulates authority.changed or a pre-epoch paused clear arriving before policy.status resolves.
+    const allowAfter = command.op === 'epoch_allow';
+    generation++;
+    clearCandidate();
+    policy = { connected: true };
+    send({ event: 'clear' });
+    if (command.op === 'clear_pause') report('paused');
+    else send({ event: 'policy', connected: true });
+    policyReady = new Promise(resolve => {
+      releaseEpochPause = () => {
+        releaseEpochPause = null;
+        policy = { connected: true, allowed: allowAfter, automatic: allowAfter };
+        report(allowAfter ? 'ready' : 'paused');
+        resolve();
+      };
+    });
+  } else if (command.op === 'resolve_epoch_pause') {
+    releaseEpochPause?.();
   } else if (command.op === 'policy') {
     // A settings change, as the broker's new authority epoch reports it.
+    generation++;
     policy = { connected: true, allowed: command.allowed === true, automatic: command.automatic === true };
     clearCandidate();
     report(policy.allowed ? 'ready' : 'paused');
   }
-}
+})());

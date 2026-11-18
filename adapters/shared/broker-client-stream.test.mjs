@@ -333,3 +333,238 @@ test('a grant outlives the preview expiry until the editor reports its result', 
     await broker.close();
   }
 });
+
+test('authority epoch transitions clear policyKnown immediately and coalesce overlapping refreshes', async () => {
+  const directory = await mkdtemp('/tmp/badi-epoch-test-');
+  const path = join(directory, 'broker.sock');
+  let peer = null;
+  let policyQueries = 0;
+  let pendingPolicyReply = null;
+  const server = createServer(socket => {
+    peer = socket;
+    socket.on('error', () => {});
+    let buffer = Buffer.alloc(0);
+    socket.on('data', chunk => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (buffer.length >= 4 && buffer.length >= buffer.readUInt32LE() + 4) {
+        const message = JSON.parse(buffer.subarray(4, buffer.readUInt32LE() + 4));
+        buffer = buffer.subarray(buffer.readUInt32LE() + 4);
+        if (message.type === 'hello') {
+          socket.write(frame({ id: message.id, type: 'hello.ack', payload: {
+            selected_v: 2, max_frame_bytes: 65536, max_before_chars: 512, max_after_chars: 128,
+            enabled_capabilities: message.payload.capabilities } }));
+          socket.write(frame({ type: 'authority.changed', payload: { authority_epoch: 1, settings_revision: 1, paused: false } }));
+        } else if (message.type === 'policy.query') {
+          policyQueries++;
+          if (policyQueries === 1) {
+            socket.write(frame({ id: message.id, type: 'policy.status', payload: {
+              authority_epoch: 1, settings_revision: 1, paused: false, context_allowed: true,
+              display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always' } }));
+          } else {
+            pendingPolicyReply = payload => socket.write(frame({ id: message.id, type: 'policy.status', payload }));
+          }
+        }
+      }
+    });
+  });
+  server.listen(path);
+  await once(server, 'listening');
+  chmodSync(path, 0o600);
+  const client = new BrokerClient('neovim');
+  const states = [];
+  client.on('state', state => states.push(state));
+  try {
+    assert.equal(await client.connect(path), true);
+    assert.equal(client.policyKnown, true);
+
+    peer.write(frame({ type: 'authority.changed', payload: { authority_epoch: 2, settings_revision: 1, paused: true } }));
+    await delay(20);
+    assert.equal(client.policyKnown, false);
+    assert.equal(client.allowed, false);
+
+    // Concurrent ensurePolicy() callers share the in-flight query, and an
+    // epoch bump mid-query retries until the latest epoch settles.
+    const first = client.ensurePolicy();
+    const second = client.ensurePolicy();
+    assert.equal(policyQueries, 2);
+
+    peer.write(frame({ type: 'authority.changed', payload: { authority_epoch: 3, settings_revision: 2, paused: true } }));
+    await delay(20);
+    pendingPolicyReply({
+      authority_epoch: 2, settings_revision: 1, paused: true, context_allowed: false,
+      display_allowed: false, suggestions_allowed: false, learning_allowed: false, activation: 'never',
+    });
+    await delay(20);
+    assert.equal(policyQueries, 3, 'stale epoch reply triggers a query for the newer epoch');
+    pendingPolicyReply({
+      authority_epoch: 3, settings_revision: 2, paused: true, context_allowed: false,
+      display_allowed: false, suggestions_allowed: false, learning_allowed: false, activation: 'never',
+    });
+
+    assert.deepEqual(await Promise.all([first, second]), [false, false]);
+    assert.equal(client.policyKnown, true);
+    assert.equal(states.at(-1), 'paused');
+  } finally {
+    client.close();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('policy_never and paused clears invalidate in-flight policy queries, and unsettled epochs stay connected', async () => {
+  const directory = await mkdtemp('/tmp/badi-policy-clear-test-');
+  const path = join(directory, 'broker.sock');
+  let peer = null;
+  let epoch = 1;
+  let queries = 0;
+  const pendingReplies = [];
+  const commitResults = [];
+  let suggestionSession = null;
+  const server = createServer(socket => {
+    peer = socket;
+    socket.on('error', () => {});
+    let buffer = Buffer.alloc(0);
+    socket.on('data', chunk => {
+      buffer = Buffer.concat([buffer, chunk]);
+      while (buffer.length >= 4 && buffer.length >= buffer.readUInt32LE() + 4) {
+        const message = JSON.parse(buffer.subarray(4, buffer.readUInt32LE() + 4));
+        buffer = buffer.subarray(buffer.readUInt32LE() + 4);
+        if (message.type === 'hello') {
+          socket.write(frame({ id: message.id, type: 'hello.ack', payload: {
+            selected_v: 2, max_frame_bytes: 65536, max_before_chars: 512, max_after_chars: 128,
+            enabled_capabilities: message.payload.capabilities } }));
+          socket.write(frame({ type: 'authority.changed', payload: { authority_epoch: 1, settings_revision: 1, paused: false } }));
+        } else if (message.type === 'policy.query') {
+          queries++;
+          if (queries === 1) {
+            socket.write(frame({ id: message.id, type: 'policy.status', payload: {
+              authority_epoch: 1, settings_revision: 1, paused: false, context_allowed: true,
+              display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always' } }));
+          } else {
+            pendingReplies.push(payload => socket.write(frame({ id: message.id, type: 'policy.status', payload })));
+          }
+        } else if (message.type === 'suggest.request') {
+          suggestionSession = { session_id: message.session_id, focus_epoch: message.focus_epoch, revision: message.revision,
+            fingerprint: message.payload.fingerprint };
+          socket.write(frame({ id: message.id, type: 'suggestion.show', ...suggestionSession, payload: {
+            fingerprint: message.payload.fingerprint, suggestion_id: 's1', text: ' for your time',
+            accept_word: ' for', ttl_ms: 15000, provider: 'phrase_v1' } }));
+        } else if (message.type === 'control.request') {
+          socket.write(frame({ id: message.id, type: 'commit.prepare', ...suggestionSession, payload: {
+            fingerprint: message.payload.fingerprint, suggestion_id: message.payload.suggestion_id,
+            text: ' for your time', acceptance: 'all' } }));
+        } else if (message.type === 'commit.result') {
+          commitResults.push(message.payload.status);
+        }
+      }
+    });
+  });
+  server.listen(path);
+  await once(server, 'listening');
+  chmodSync(path, 0o600);
+  const client = new BrokerClient('neovim');
+  try {
+    assert.equal(await client.connect(path), true);
+    assert.equal(await client.suggest('thank you', { language: 'en' }), ' for your time');
+
+    // Start a policy.query, then deliver suggestion.clear(policy_never) before
+    // the pre-clear policy.status arrives: the stale allow must be discarded.
+    const refresh = client.checkPolicy();
+    await delay(20);
+    assert.equal(pendingReplies.length, 1);
+    peer.write(frame({ type: 'suggestion.clear', ...suggestionSession, payload: {
+      fingerprint: suggestionSession.fingerprint, suggestion_id: 's1', reason: 'policy_never' } }));
+    await delay(20);
+    assert.equal(client.policyKnown, false);
+    assert.equal(client.allowed, false);
+
+    pendingReplies.shift()({
+      authority_epoch: 1, settings_revision: 1, paused: false, context_allowed: true,
+      display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always',
+    });
+    await delay(20);
+    assert.equal(client.allowed, false, 'pre-clear policy.status cannot restore allow');
+    assert.equal(pendingReplies.length, 1, 'invalidated refresh re-queries cleanly');
+
+    epoch = 2;
+    peer.write(frame({ type: 'authority.changed', payload: { authority_epoch: epoch, settings_revision: 2, paused: false } }));
+    await delay(20);
+    pendingReplies.shift()({
+      authority_epoch: 1, settings_revision: 1, paused: false, context_allowed: true,
+      display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always',
+    });
+    await delay(20);
+    pendingReplies.shift()({
+      authority_epoch: 2, settings_revision: 2, paused: false, context_allowed: false,
+      display_allowed: false, suggestions_allowed: false, learning_allowed: false, activation: 'never',
+    });
+    assert.equal(await refresh, false);
+    assert.equal(client.policyKnown, true);
+
+    // When no session is open, a late policy_never clear immediately triggers a
+    // fresh policy.query and restores allow.
+    peer.write(frame({ type: 'suggestion.clear', session_id: 'retired-session', focus_epoch: 1, revision: 1, payload: {
+      fingerprint: 'older', suggestion_id: 's0', reason: 'policy_never' } }));
+    await delay(20);
+    assert.equal(client.policyKnown, false);
+    assert.equal(pendingReplies.length, 1, 'late clear with no session triggers automatic policy refresh');
+    pendingReplies.shift()({
+      authority_epoch: 2, settings_revision: 2, paused: false, context_allowed: true,
+      display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always',
+    });
+    await delay(20);
+    assert.equal(client.policyKnown, true);
+    assert.equal(client.allowed, true);
+
+    // While a live session holds an authorized grant, repeated clears for a
+    // retired session keep the live session's allow and commit.result intact.
+    assert.equal(await client.suggest('thank you', { language: 'en' }), ' for your time');
+    peer.write(frame({ type: 'suggestion.clear', session_id: 'older-retired', focus_epoch: 1, revision: 1, payload: {
+      fingerprint: 'older', suggestion_id: 's0', reason: 'policy_never' } }));
+    await delay(20);
+    peer.write(frame({ type: 'revision.clear', session_id: 'older-retired', focus_epoch: 1, revision: 1, payload: {
+      fingerprint: 'older', reason: 'policy_never' } }));
+    await delay(20);
+    pendingReplies.shift()({
+      authority_epoch: 2, settings_revision: 2, paused: false, context_allowed: true,
+      display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always',
+    });
+    await delay(20);
+    assert.equal(client.allowed, true, 'second retired-session clear still preserves live policy');
+    const grant = await client.authorize('all');
+    client.report(grant, 'applied');
+    await delay(20);
+    assert.deepEqual(commitResults, ['applied']);
+    pendingReplies.shift()({
+      authority_epoch: 2, settings_revision: 2, paused: false, context_allowed: true,
+      display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always',
+    });
+    await delay(20);
+
+    // A burst of ten rapid epoch bumps settles once the latest epoch answers.
+    const burst = client.checkPolicy();
+    for (let step = 0; step < 10; step++) {
+      await delay(10);
+      epoch++;
+      peer.write(frame({ type: 'authority.changed', payload: { authority_epoch: epoch, settings_revision: epoch, paused: false } }));
+      await delay(10);
+      pendingReplies.shift()({
+        authority_epoch: epoch - 1, settings_revision: epoch - 1, paused: false, context_allowed: true,
+        display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always',
+      });
+    }
+    await delay(20);
+    pendingReplies.shift()({
+      authority_epoch: epoch, settings_revision: epoch, paused: false, context_allowed: true,
+      display_allowed: true, suggestions_allowed: true, learning_allowed: false, activation: 'always',
+    });
+    assert.equal(await burst, true);
+    assert.equal(client.connected, true);
+    assert.equal(client.policyKnown, true);
+    assert.equal(client.allowed, true);
+  } finally {
+    client.close();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

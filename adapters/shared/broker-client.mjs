@@ -68,6 +68,8 @@ export class BrokerClient extends EventEmitter {
   #generation = 0;
   #profile;
   #policy = null;
+  #policyVersion = 0;
+  #policyRefresh = null;
   #textReplacement;
   #selectionRevision;
   #revision = null;
@@ -93,6 +95,7 @@ export class BrokerClient extends EventEmitter {
   }
 
   get connected() { return this.#hello && this.#epoch !== null && !this.#closed; }
+  get policyKnown() { return !this.#closed && this.#policy !== null && this.#policy.authority_epoch === this.#epoch; }
   get automaticAllowed() { return this.allowed && this.#policy.activation === 'always'; }
   get replacementBefore() { return this.#candidate?.replaceBefore; }
   // The words of the numbered list now shown, or null.
@@ -100,10 +103,21 @@ export class BrokerClient extends EventEmitter {
   // What Tab takes of the shown candidate, which previews draw brighter.
   get acceptWord() { return this.#candidate?.acceptWord; }
 
+  #invalidatePolicy() {
+    this.#policy = null;
+    this.#policyVersion++;
+  }
+
+  async ensurePolicy() {
+    if (!this.connected) return false;
+    if (this.policyKnown) return this.allowed;
+    return this.#refreshPolicy();
+  }
+
   async checkPolicy() {
     if (!this.connected) return false;
-    await this.#refreshPolicy();
-    return this.allowed;
+    this.#invalidatePolicy();
+    return this.#refreshPolicy();
   }
 
   async connect(socketPath = join(process.env.XDG_RUNTIME_DIR ?? '', 'badi/broker.sock')) {
@@ -144,7 +158,7 @@ export class BrokerClient extends EventEmitter {
         const ready = () => { clearTimeout(timeout); resolve(); };
         this.once('authority', ready);
       });
-      await this.#refreshPolicy();
+      await this.#refreshPolicy({ strict: true });
       return this.allowed;
     } catch (error) { this.close(); throw error; }
   }
@@ -168,26 +182,66 @@ export class BrokerClient extends EventEmitter {
     return response.payload.native_withheld;
   }
 
-  async #refreshPolicy() {
-    this.#policy = null;
-    const epoch = this.#epoch;
-    const response = await this.#rpc('policy.query', { target: this.#target(randomUUID()) }, 'policy.status');
-    const policy = response.payload;
-    if (!counter(policy.authority_epoch) || !counter(policy.settings_revision) ||
-        !['paused', 'context_allowed', 'display_allowed', 'suggestions_allowed', 'learning_allowed']
-          .every(key => typeof policy[key] === 'boolean') ||
-        !['always', 'manual', 'never'].includes(policy.activation) ||
-        (policy.language_override !== undefined &&
-          (!['en', 'de', 'fa', 'fr', 'es', 'pt'].includes(policy.language_override) || !policy.suggestions_allowed)) ||
-        (policy.learning_allowed && !policy.suggestions_allowed) ||
-        (policy.suggestions_allowed && (!policy.context_allowed || !policy.display_allowed)) ||
-        (policy.paused && (policy.context_allowed || policy.display_allowed ||
-          policy.suggestions_allowed || policy.learning_allowed))) {
-      throw new Error('Invalid editor policy');
-    }
-    if (epoch !== this.#epoch || policy.authority_epoch !== epoch) return;
-    this.#policy = policy;
-    this.emit('state', this.allowed ? 'ready' : policy.paused ? 'paused' : 'app_disabled');
+  #refreshPolicy({ strict = false } = {}) {
+    if (this.#policyRefresh) return this.#policyRefresh;
+    const run = (async () => {
+      let staleReplies = 0;
+      let rpcFailures = 0;
+      while (!this.#closed && this.#epoch !== null) {
+        const epoch = this.#epoch;
+        const version = this.#policyVersion;
+        let response;
+        try {
+          response = await this.#rpc('policy.query', { target: this.#target(randomUUID()) }, 'policy.status');
+          rpcFailures = 0;
+        } catch (error) {
+          if (this.#closed) throw error;
+          if (version !== this.#policyVersion || epoch !== this.#epoch) {
+            staleReplies = 0;
+            continue;
+          }
+          if (!strict && ++rpcFailures < 2) continue;
+          this.#fail('Policy unavailable');
+          throw error;
+        }
+        const policy = response.payload;
+        if (!counter(policy.authority_epoch) || !counter(policy.settings_revision) ||
+            !['paused', 'context_allowed', 'display_allowed', 'suggestions_allowed', 'learning_allowed']
+              .every(key => typeof policy[key] === 'boolean') ||
+            !['always', 'manual', 'never'].includes(policy.activation) ||
+            (policy.language_override !== undefined &&
+              (!['en', 'de', 'fa', 'fr', 'es', 'pt'].includes(policy.language_override) || !policy.suggestions_allowed)) ||
+            (policy.learning_allowed && !policy.suggestions_allowed) ||
+            (policy.suggestions_allowed && (!policy.context_allowed || !policy.display_allowed)) ||
+            (policy.paused && (policy.context_allowed || policy.display_allowed ||
+              policy.suggestions_allowed || policy.learning_allowed))) {
+          const invalid = new Error('Invalid editor policy');
+          this.#fail(invalid.message);
+          throw invalid;
+        }
+        if (this.#closed || this.#epoch === null) return false;
+        if (version !== this.#policyVersion || epoch !== this.#epoch) {
+          staleReplies = 0;
+          continue;
+        }
+        if (policy.authority_epoch !== epoch) {
+          if (++staleReplies >= 4) {
+            const unsettled = new Error('Invalid editor policy');
+            this.#fail(unsettled.message);
+            throw unsettled;
+          }
+          continue;
+        }
+        this.#policy = policy;
+        this.emit('state', this.allowed ? 'ready' : policy.paused ? 'paused' : 'app_disabled');
+        return this.allowed;
+      }
+      return false;
+    })().finally(() => {
+      if (this.#policyRefresh === run) this.#policyRefresh = null;
+    });
+    this.#policyRefresh = run;
+    return run;
   }
 
   async suggest(before, { language = 'en', explicit = true, after = '', targetId } = {}) {
@@ -450,8 +504,8 @@ export class BrokerClient extends EventEmitter {
 
   report(grant, status) {
     if (!['applied', 'stale', 'blocked', 'failed'].includes(status)) throw new Error('Invalid commit result');
-    if (!this.#session || !sameCoordinates(grant, this.#session) ||
-        grant.fingerprint !== this.#session.fingerprint || !this.allowed) return;
+    if (this.#closed || !this.#session || !sameCoordinates(grant, this.#session) ||
+        grant.fingerprint !== this.#session.fingerprint || (this.policyKnown && !this.allowed)) return;
     this.#send('commit.result', { fingerprint: grant.fingerprint, suggestion_id: grant.suggestion_id, status },
       grant.control_id, grant);
     this.cancel();
@@ -541,11 +595,22 @@ export class BrokerClient extends EventEmitter {
         const epoch = message.payload.authority_epoch;
         const initial = this.#epoch === null;
         if (!counter(epoch) || (this.#epoch !== null && epoch <= this.#epoch)) throw new Error('Invalid authority');
-        this.#epoch = epoch; this.#policy = null; this.#session = null; this.cancel();
+        this.#epoch = epoch; this.#invalidatePolicy(); this.#session = null; this.cancel();
         this.#send('authority.ack', { authority_epoch: epoch });
         this.emit('authority');
-        if (this.#hello && !initial) void this.#refreshPolicy().catch(() => this.#fail('Policy unavailable'));
+        if (this.#hello && !initial) void this.#refreshPolicy().catch(() => undefined);
         continue;
+      }
+      if ((message.type === 'suggestion.clear' || message.type === 'revision.clear') &&
+          (message.payload.reason === 'paused' || message.payload.reason === 'policy_never')) {
+        if (this.#session === null || message.session_id === this.#session.session_id) {
+          this.#invalidatePolicy();
+          if (this.#session === null && this.#hello) this.emit('authority');
+          if (this.#hello) void this.#refreshPolicy().catch(() => undefined);
+        } else {
+          this.#policyVersion++;
+          if (this.#hello) void this.#refreshPolicy().catch(() => undefined);
+        }
       }
       const pending = this.#pending.get(message.id);
       if (pending && pending.session && ['session_id', 'focus_epoch', 'revision'].some(key => message[key] !== pending.session[key]) &&

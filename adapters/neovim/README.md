@@ -123,10 +123,13 @@ the comment colour in bold. Set either group to restyle it.
   next eligible keystroke starts a new one. A reconnect only refreshes policy
   and never replays text.
 - **Policy first.** Every state the bridge reports carries the broker's
-  policy for Neovim. The plugin reads no buffer text for a request that
-  policy refuses (paused, `badi app nvim off`, or an automatic request under
-  a manual grant); until the bridge has reported one, it asks with a
-  content-free `status` first. When `badi-broker.service` is stopped, typing
+  policy for Neovim, and an `authority.changed` epoch clears cached policy
+  until its coalesced refresh completes. The plugin reads no buffer text for a
+  request that policy refuses (paused, `badi app nvim off`, or an automatic
+  request under a manual grant); until the bridge has reported the current
+  epoch's policy, it asks with a content-free `status` first, and an explicit
+  request supersedes any automatic `status` check in flight. When
+  `badi-broker.service` is stopped, typing
   in an eligible prose buffer starts it in the background, and an explicit
   request waits up to 20 seconds for it; opening or focusing Neovim does not.
   The bridge checks the policy again before it sends anything to the broker.
@@ -155,7 +158,10 @@ the comment colour in bold. Set either group to restyle it.
   has no text after the caret; Neovim sends the rest of the caret line there,
   so live corrections are at a line end (later lines do not block one). It
   reports `applied` only after reading back exactly
-  the expected line and caret; anything else is `failed` or `stale`.
+  the expected line and caret; anything else is `failed` or `stale`. Only a
+  word acceptance with remaining words asks at once for the carried remainder;
+  accepting a full suggestion or a correction ignores its own `TextChangedI`
+  tick until further typing.
 - **Undo.** The edit breaks the undo sequence before and after itself
   (`undolevels`), so one `u` removes exactly an accepted insertion or restores
   a replaced suffix; typing before it stays, and typing after it is separate.

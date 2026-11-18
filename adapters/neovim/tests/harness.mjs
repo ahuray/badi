@@ -31,6 +31,7 @@ vim.o.lines = 20
 vim.cmd.runtime('plugin/badi.lua')
 function _G.badi_test_state()
   local badi = require('badi')
+  vim.cmd.redraw()
   local cursor = vim.api.nvim_win_get_cursor(0)
   local screen = {}
   local position = vim.fn.screenpos(0, cursor[1], 1)

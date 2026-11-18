@@ -620,13 +620,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Broker structure left by the review: move the remaining inline
       tests into `<module>/tests.rs` when those files are next touched.
 
-- [ ] `adapters/neovim/broker.test.mjs` timed out once in CI waiting for
-      `paused` after `badi pause` and an explicit request (#118, a change
-      outside Neovim), and passed on rerun and in three local runs. If it
-      recurs, find whether the plugin's status or the broker's pause
-      reaches it late. On #123 (no Neovim change) `plugin.test.mjs:38`
-      failed once the same way: after the pause the virtual text was still
-      `thank you`, not the suggestion; it passed on rerun and five local runs.
 - [ ] `adapters/shell/test-preview.py` failed once in CI in
       `test_the_display_timer_runs_only_while_a_preview_is_held`: the PTY
       never emitted `HOOK:`, only a cleared line (#133, no shell change).

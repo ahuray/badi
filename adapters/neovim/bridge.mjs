@@ -29,8 +29,17 @@ const send = stdio.writeJson;
 client.on('clear', () => send({ event: 'clear' }));
 client.on('update', text => send({ event: 'update', text, word: client.acceptWord }));
 // Each state carries the policy as it now stands, so Neovim reads no buffer
-// text for a request the broker would refuse.
-const policy = () => ({ connected: client.connected, allowed: client.allowed, automatic: client.automaticAllowed });
+// text for a request the broker would refuse. When an authority epoch
+// invalidates cached policy, omit `allowed` until the new epoch resolves.
+const policy = () => ({
+  connected: client.connected,
+  ...(!client.connected || client.policyKnown
+    ? { allowed: client.allowed, automatic: client.automaticAllowed }
+    : {}),
+});
+client.on('authority', () => {
+  if (client.connected) send({ event: 'policy', ...policy() });
+});
 client.on('state', state => {
   if (typeof state === 'string' && /^[a-z_]{1,48}$/.test(state)) {
     if (revisionRequest) revisionRequest.reason = state;
@@ -56,6 +65,8 @@ async function suggest(command) {
     if (command.explicit) client.pauseRetries();
     const ready = await requestBroker({ waitMs: command.explicit ? 20000 : 0 });
     await client.connect(undefined, { immediate: command.explicit || ready }).catch(() => false);
+  } else if (!client.policyKnown) {
+    await client.ensurePolicy().catch(() => false);
   }
   if (!client.allowed) return { ok: false, reason: reason() };
   if (!command.explicit && !client.automaticAllowed) return { ok: false, reason: 'manual_required' };
@@ -85,6 +96,8 @@ async function handle(command) {
         client.pauseRetries();
         await requestBroker({ waitMs: 20000 });
         await client.connect(undefined, { immediate: true }).catch(() => false);
+      } else if (!client.policyKnown) {
+        await client.ensurePolicy().catch(() => false);
       }
       if (!client.allowed) return { ok: false, reason: reason() };
       grant = null;
@@ -162,7 +175,10 @@ async function handle(command) {
         if (explicit) client.pauseRetries();
         const ready = await requestBroker({ waitMs: explicit ? 20000 : 0 });
         await client.connect(undefined, { immediate: explicit || ready }).catch(() => false);
+      } else if (!client.policyKnown) {
+        await client.ensurePolicy().catch(() => false);
       }
+      if (client.connected && !client.policyKnown) return { ok: false, reason: 'expired_or_unavailable' };
       return { ok: true, ...policy() };
     }
     default:

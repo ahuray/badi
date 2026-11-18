@@ -202,6 +202,10 @@ test('a pause shows inline grey text; Ctrl+Right inserts it all as one undo step
   assert.deepEqual(state.cursor, [2, 23]);
   assert.equal(state.preview, null);
   assert.equal(state.status.status, 'applied');
+  const suggestsAfterFullAccept = (await editor.operations()).filter(entry => entry.op === 'suggest').length;
+  await delay(120);
+  assert.equal((await editor.state()).status.status, 'applied', 'Full accept does not arm a follow-up request');
+  assert.equal((await editor.operations()).filter(entry => entry.op === 'suggest').length, suggestsAfterFullAccept);
   await editor.send(' again<Esc>');
   await editor.until(current => current.lines[1] === 'thank you for your time again', 'typing after');
   await editor.send('u');
@@ -228,6 +232,10 @@ test('a correction replaces exactly the misspelled suffix including a typed spac
   assert.deepEqual(state.cursor, [1, Buffer.byteLength('Grüße, die address ')]);
   assert.equal(state.preview, null);
   assert.equal(state.status.status, 'applied');
+  const suggestsAfterCorrection = (await editor.operations()).filter(entry => entry.op === 'suggest').length;
+  await delay(120);
+  assert.equal((await editor.state()).status.status, 'applied', 'Correction accept does not arm a follow-up request');
+  assert.equal((await editor.operations()).filter(entry => entry.op === 'suggest').length, suggestsAfterCorrection);
   await editor.send('today<Esc>');
   await editor.until(current => current.lines[0] === 'Grüße, die address today', 'typing after correction');
   await editor.send('u');
@@ -382,7 +390,7 @@ test('a result for text that changed in flight is never shown', { skip }, async 
   await markdown(editor, 'i');
   await editor.until(current => current.status.policy === 'automatic', 'policy');
   await editor.send('please be slow');
-  await delay(100);
+  await editor.until(current => current.status.pending, 'in-flight request');
   await editor.send('er');
   await delay(700);
   const state = await editor.state();
@@ -497,6 +505,56 @@ test('a paused broker or a blocked Neovim gets no buffer text, and a grant resum
   await delay(200);
   assert.equal((await editor.operations()).filter(entry => entry.op === 'suggest').length, suggested,
     'A pause after the broker paused sends nothing');
+});
+
+test('an explicit request during an authority pause refresh reads no text and keeps its refusal status', { skip }, async t => {
+  const editor = await fakeEditor(t);
+  await markdown(editor, 'ithank you');
+  await editor.until(current => current.preview === ' for your time', 'preview before pause');
+  const suggestedBefore = (await editor.operations()).filter(entry => entry.op === 'suggest').length;
+  const job = await bridgeJob(editor);
+  await editor.command(`call chansend(${job}, '{"op":"epoch_pause"}' .. "\\n")`);
+  await editor.until(current => current.preview === null && current.status.policy === 'unknown', 'epoch cleared policy');
+  await editor.command('lua require("badi").request(true)');
+  await editor.until(current => current.status.pending === true, 'status refresh awaited');
+  await editor.command(`call chansend(${job}, '{"op":"resolve_epoch_pause"}' .. "\\n")`);
+  const state = await editor.until(current =>
+    current.status.policy === 'refused' && current.status.status === 'app_disabled_or_model_paused',
+    'refusal survives late paused state');
+  assert.equal((await editor.operations()).filter(entry => entry.op === 'suggest').length, suggestedBefore,
+    'Unresolved epoch policy reads no buffer text');
+  assert.match(state.messages, /Badi: app disabled or model paused/u);
+
+  // Also cover an explicit request already in flight when a real paused clear
+  // arrives with connected:true and no allowed field before policy.status lands.
+  await editor.command('messages clear');
+  await editor.command(`call chansend(${job}, '{"op":"policy","allowed":true,"automatic":false}' .. "\\n")`);
+  await editor.until(current => current.status.policy === 'manual', 'manual policy');
+  await editor.send(' <BS><CR>please be slow');
+  await editor.command('lua require("badi").request(true)');
+  await editor.until(current => current.status.pending === true, 'explicit suggest in flight');
+  await editor.command(`call chansend(${job}, '{"op":"clear_pause"}' .. "\\n")`);
+  const clearedState = await editor.until(current =>
+    !current.status.pending && current.status.policy === 'unknown'
+      && current.status.status === 'app_disabled_or_model_paused',
+    'in-flight explicit request reports refusal on clear');
+  assert.equal(clearedState.preview, null);
+  assert.match(clearedState.messages, /Badi: app disabled or model paused/u);
+  await editor.command(`call chansend(${job}, '{"op":"resolve_epoch_pause"}' .. "\\n")`);
+  const settledState = await editor.until(current => current.status.policy === 'refused', 'paused policy settled');
+  assert.equal(settledState.status.status, 'app_disabled_or_model_paused');
+
+  // An explicit Visual revision supersedes a moved status check in flight.
+  await editor.send('<Esc>');
+  await editor.command('call setline(1, "I has went.")');
+  await editor.command(`call chansend(${job}, '{"op":"epoch_allow"}' .. "\\n")`);
+  await editor.until(current => current.status.policy === 'unknown', 'epoch cleared before revise');
+  await editor.send('gg0ve<C-S-Space>');
+  await editor.until(current => current.status.pending === true, 'initial revise status check in flight');
+  await editor.send('$<C-S-Space>');
+  await editor.command(`call chansend(${job}, '{"op":"resolve_epoch_pause"}' .. "\\n")`);
+  const revised = await editor.until(current => current.status.status === 'revision', 'explicit revise superseded moved status');
+  assert.match(revised.preview, /\[-has /);
 });
 
 test('manual policy reads the buffer only for an explicit request', { skip }, async t => {
