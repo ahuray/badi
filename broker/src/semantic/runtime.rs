@@ -179,6 +179,7 @@ pub struct LlamaCppLaunch {
     model_alias: String,
     startup_timeout: Duration,
     threads: usize,
+    cpu_mask: Option<String>,
     fixture_behavior: Option<FixtureBehavior>,
     profile: WritingProfile,
     launcher: Launcher,
@@ -203,6 +204,7 @@ impl LlamaCppLaunch {
             model_alias: model_alias.into(),
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads,
+            cpu_mask: None,
             fixture_behavior: None,
             profile: WritingProfile::PRODUCTION,
             launcher: Launcher::Direct,
@@ -239,6 +241,7 @@ impl LlamaCppLaunch {
             model_alias: "fixture-en-v1".to_owned(),
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             threads: 1,
+            cpu_mask: None,
             fixture_behavior: Some(behavior),
             profile: WritingProfile::PRODUCTION,
             launcher: Launcher::Direct,
@@ -256,6 +259,14 @@ impl LlamaCppLaunch {
     /// Launches with `profile` instead of [`WritingProfile::PRODUCTION`].
     pub fn with_writing_profile(mut self, profile: WritingProfile) -> Result<Self, RuntimeError> {
         self.profile = profile;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Restricts the runtime's inference worker threads (`--cpu-mask`,
+    /// non-strict) to the given canonical lowercase hexadecimal CPU mask.
+    pub fn with_cpu_mask(mut self, cpu_mask: Option<String>) -> Result<Self, RuntimeError> {
+        self.cpu_mask = cpu_mask;
         self.validate()?;
         Ok(self)
     }
@@ -397,11 +408,16 @@ impl LlamaCppLaunch {
     fn runtime_command(&self) -> Result<Command, RuntimeError> {
         if self.launcher == Launcher::ParentDeathHelper {
             #[cfg(target_os = "linux")]
-            return super::process::launch_command(self.binary.path()).map_err(RuntimeError::Spawn);
+            return super::process::launch_command(self.binary.path(), self.cpu_mask.as_deref())
+                .map_err(RuntimeError::Spawn);
             #[cfg(not(target_os = "linux"))]
             return Err(RuntimeError::InvalidConfig("parent_death_unavailable"));
         }
-        Ok(Command::new(self.binary.path()))
+        let mut command = Command::new(self.binary.path());
+        if let Some(mask) = &self.cpu_mask {
+            command.args(["--cpu-mask", mask]);
+        }
+        Ok(command)
     }
 
     /// The identity this launch's runtime will report.
@@ -426,6 +442,7 @@ impl LlamaCppLaunch {
             ubatch_size: Some(profile.batch_size),
             memory_map: profile.memory_map,
             full_swa_cache: profile.full_swa_cache,
+            cpu_mask: self.cpu_mask.clone(),
         }
     }
 
@@ -465,6 +482,11 @@ impl LlamaCppLaunch {
         }
         if self.threads == 0 || self.threads > 256 {
             return Err(RuntimeError::InvalidConfig("threads"));
+        }
+        if let Some(mask) = &self.cpu_mask {
+            if self.fixture_behavior.is_some() || !valid_cpu_mask(mask) {
+                return Err(RuntimeError::InvalidConfig("cpu_mask"));
+            }
         }
         if self.startup_timeout.is_zero() || self.startup_timeout > MAX_STARTUP_TIMEOUT {
             return Err(RuntimeError::InvalidConfig("startup_timeout"));
@@ -514,6 +536,26 @@ pub struct StableRuntimeIdentity {
     /// sliding-window cache.
     #[serde(skip_serializing_if = "default_swa_cache")]
     pub full_swa_cache: bool,
+    /// Canonical lowercase hexadecimal `--cpu-mask` passed to `llama-server`
+    /// when hybrid performance cores were detected; omitted when unpinned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_mask: Option<String>,
+}
+
+/// Whether `mask` is a canonical non-zero lowercase hexadecimal CPU mask
+/// (`0x1`.. up to 512 CPUs / 128 hex digits) suitable for `llama-server
+/// --cpu-mask`.
+#[must_use]
+pub(crate) fn valid_cpu_mask(mask: &str) -> bool {
+    let Some(hex) = mask.strip_prefix("0x") else {
+        return false;
+    };
+    !hex.is_empty()
+        && hex.len() <= 128
+        && !hex.starts_with('0')
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // Serde's required signature.

@@ -14,7 +14,7 @@ const languageOf = row => row.language.toLowerCase().split('-')[0];
 // pass through serde_json::Value and may have alphabetically sorted object keys.
 const RUNTIME_KEYS = ['launch_contract_id', 'binary_sha256', 'runtime_bundle_manifest_sha256',
   'model_sha256', 'model_size', 'model_alias', 'model_origin', 'threads', 'context_size',
-  'gpu_layers', 'batch_size', 'ubatch_size', 'memory_map', 'full_swa_cache'];
+  'gpu_layers', 'batch_size', 'ubatch_size', 'memory_map', 'full_swa_cache', 'cpu_mask'];
 const hash = value => createHash('sha256').update(JSON.stringify(Object.fromEntries(
   RUNTIME_KEYS.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]])))).digest('hex');
 // These modes answer through the broker's provider (the worker's baseline

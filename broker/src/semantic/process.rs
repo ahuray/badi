@@ -18,20 +18,31 @@ use rustix::process::{Pid, Signal, getppid, set_parent_process_death_signal};
 pub const EXEC_HELPER_FLAG: &str = "__exec-owned-runtime";
 const HELPER_ERROR: &str = "runtime_helper_failed";
 
-pub(crate) fn launch_command(binary: &Path) -> io::Result<Command> {
+pub(crate) fn launch_command(binary: &Path, cpu_mask: Option<&str>) -> io::Result<Command> {
     let mut command = Command::new(std::env::current_exe()?);
     command
         .arg(EXEC_HELPER_FLAG)
         .arg(std::process::id().to_string())
         .arg(binary);
+    if let Some(mask) = cpu_mask {
+        command.args(["--cpu-mask", mask]);
+    }
     Ok(command)
 }
 
 /// Replaces this single-threaded helper with the already verified runtime.
 /// The caller must dispatch here before constructing a Tokio runtime.
 pub fn exec_runtime_helper(args: &[OsString]) -> Result<Infallible, &'static str> {
-    let [parent, binary] = args else {
-        return Err(HELPER_ERROR);
+    let (parent, binary, cpu_mask) = match args {
+        [parent, binary] => (parent, binary, None),
+        [parent, binary, flag, mask] if flag == "--cpu-mask" => {
+            let mask = mask
+                .to_str()
+                .filter(|value| super::runtime::valid_cpu_mask(value))
+                .ok_or(HELPER_ERROR)?;
+            (parent, binary, Some(mask))
+        }
+        _ => return Err(HELPER_ERROR),
     };
     let parent = parent
         .to_str()
@@ -47,7 +58,11 @@ pub fn exec_runtime_helper(args: &[OsString]) -> Result<Infallible, &'static str
     validate_unprivileged_executable(binary)?;
     // exec preserves the process ID, group, cleared runtime environment and
     // death signal. Never fork another child or change credentials here.
-    let _ = Command::new(binary).exec();
+    let mut runtime = Command::new(binary);
+    if let Some(mask) = cpu_mask {
+        runtime.args(["--cpu-mask", mask]);
+    }
+    let _ = runtime.exec();
     Err(HELPER_ERROR)
 }
 

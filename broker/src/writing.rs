@@ -618,9 +618,93 @@ pub fn pinned_runtime_launch(
         RUNTIME_SHA256,
         RUNTIME_BYTES,
     )?)?;
-    Ok(LlamaCppLaunch::new(
-        binary, bundle, weights, alias, threads,
-    )?)
+    // On hybrid CPUs (both `cpu_core/cpus` and `cpu_atom/cpus` present and
+    // disjoint), bind worker threads to online performance cores via
+    // `--cpu-mask` (non-strict). Under battery `power-saver` Linux/EAS
+    // otherwise parks all four threads on E-cores at half decode speed.
+    // Deliberately read `system/cpu/online` rather than `sched_getaffinity`:
+    // `intel_lpmd` transiently narrows `user.slice` `cpuset.cpus` to E-cores
+    // while idle before weight loading wakes P-cores, and `llama-server`
+    // falls back cleanly to the cgroup's allowed CPUs if disjoint.
+    let cpu_mask = performance_cpu_mask(Path::new("/sys/devices"), threads);
+    Ok(LlamaCppLaunch::new(binary, bundle, weights, alias, threads)?.with_cpu_mask(cpu_mask)?)
+}
+
+const MAX_MASK_CPUS: u16 = 512;
+
+pub(crate) fn performance_cpu_mask(devices_root: &Path, threads: usize) -> Option<String> {
+    if threads == 0 {
+        return None;
+    }
+    let pcores =
+        parse_cpu_list(&std::fs::read_to_string(devices_root.join("cpu_core/cpus")).ok()?)?;
+    let ecores =
+        parse_cpu_list(&std::fs::read_to_string(devices_root.join("cpu_atom/cpus")).ok()?)?;
+    if pcores.is_empty() || ecores.is_empty() || !pcores.is_disjoint(&ecores) {
+        return None;
+    }
+    let online_path = devices_root.join("system/cpu/online");
+    let pcores = if online_path.exists() {
+        let online = parse_cpu_list(&std::fs::read_to_string(online_path).ok()?)?;
+        pcores.intersection(&online).copied().collect()
+    } else {
+        pcores
+    };
+    if pcores.len() < threads {
+        return None;
+    }
+    Some(format_cpu_mask_hex(&pcores))
+}
+
+fn parse_cpu_list(raw: &str) -> Option<std::collections::BTreeSet<u16>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut cpus = std::collections::BTreeSet::new();
+    for segment in trimmed.split(',') {
+        if segment.is_empty() {
+            return None;
+        }
+        if let Some((start, end)) = segment.split_once('-') {
+            let start = parse_cpu_index(start)?;
+            let end = parse_cpu_index(end)?;
+            if start > end {
+                return None;
+            }
+            for cpu in start..=end {
+                cpus.insert(cpu);
+            }
+        } else {
+            cpus.insert(parse_cpu_index(segment)?);
+        }
+    }
+    (!cpus.is_empty()).then_some(cpus)
+}
+
+fn parse_cpu_index(value: &str) -> Option<u16> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value.parse::<u16>().ok().filter(|&cpu| cpu < MAX_MASK_CPUS)
+}
+
+fn format_cpu_mask_hex(cpus: &std::collections::BTreeSet<u16>) -> String {
+    let max_cpu = usize::from(*cpus.iter().next_back().expect("non-empty CPU set"));
+    let mut nibbles = vec![0_u8; max_cpu / 4 + 1];
+    for &cpu in cpus {
+        let cpu = usize::from(cpu);
+        nibbles[cpu / 4] |= 1_u8 << (cpu % 4);
+    }
+    let mut mask = String::with_capacity(2 + nibbles.len());
+    mask.push_str("0x");
+    for &nibble in nibbles.iter().rev() {
+        mask.push(char::from(match nibble {
+            0..=9 => b'0' + nibble,
+            _ => b'a' + (nibble - 10),
+        }));
+    }
+    mask
 }
 
 #[derive(Clone, Copy)]

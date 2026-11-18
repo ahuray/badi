@@ -1142,3 +1142,63 @@ fn each_suggestion_length_bounds_its_words() {
         Some(" one two")
     );
 }
+
+#[test]
+fn hybrid_performance_cpu_mask_requires_disjoint_online_p_and_e_cores() {
+    use super::performance_cpu_mask;
+    use std::fs;
+
+    let write_sysfs =
+        |dir: &std::path::Path, core: Option<&str>, atom: Option<&str>, online: Option<&str>| {
+            let _ = fs::remove_dir_all(dir);
+            fs::create_dir_all(dir).unwrap();
+            if let Some(value) = core {
+                fs::create_dir_all(dir.join("cpu_core")).unwrap();
+                fs::write(dir.join("cpu_core/cpus"), value).unwrap();
+            }
+            if let Some(value) = atom {
+                fs::create_dir_all(dir.join("cpu_atom")).unwrap();
+                fs::write(dir.join("cpu_atom/cpus"), value).unwrap();
+            }
+            if let Some(value) = online {
+                fs::create_dir_all(dir.join("system/cpu")).unwrap();
+                fs::write(dir.join("system/cpu/online"), value).unwrap();
+            }
+        };
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("sysfs");
+
+    // Alder Lake i7-12700H topology: P-cores 0-11, E-cores 12-19.
+    write_sysfs(&root, Some("0-11\n"), Some("12-19\n"), Some("0-19\n"));
+    assert_eq!(performance_cpu_mask(&root, 4).as_deref(), Some("0xfff"));
+    assert_eq!(performance_cpu_mask(&root, 0), None);
+
+    // Non-contiguous P-cores and offline siblings filtered by system/cpu/online.
+    write_sysfs(&root, Some("0-3,8-11\n"), Some("4-7\n"), Some("0-7,8-9\n"));
+    assert_eq!(performance_cpu_mask(&root, 4).as_deref(), Some("0x30f"));
+
+    // High CPU indices past 64 bits still format canonically up to 511.
+    write_sysfs(&root, Some("64-67\n"), Some("0-3\n"), Some("0-67\n"));
+    assert_eq!(
+        performance_cpu_mask(&root, 4).as_deref(),
+        Some("0xf0000000000000000")
+    );
+
+    // Fewer online P-cores than requested threads stays unpinned to avoid spin contention.
+    write_sysfs(&root, Some("0-1\n"), Some("2-5\n"), Some("0-5\n"));
+    assert_eq!(performance_cpu_mask(&root, 3), None);
+    assert_eq!(performance_cpu_mask(&root, 2).as_deref(), Some("0x3"));
+
+    // Homogeneous CPUs, overlapping sets, malformed lists, or out-of-range indices return None.
+    write_sysfs(&root, Some("0-7\n"), None, Some("0-7\n"));
+    assert_eq!(performance_cpu_mask(&root, 4), None);
+    write_sysfs(&root, None, Some("0-7\n"), Some("0-7\n"));
+    assert_eq!(performance_cpu_mask(&root, 4), None);
+    write_sysfs(&root, Some("0-7\n"), Some("6-11\n"), Some("0-11\n"));
+    assert_eq!(performance_cpu_mask(&root, 4), None);
+    write_sysfs(&root, Some("0-11\n"), Some("12-19\n"), Some("bad\n"));
+    assert_eq!(performance_cpu_mask(&root, 4), None);
+    write_sysfs(&root, Some("508-512\n"), Some("0-3\n"), None);
+    assert_eq!(performance_cpu_mask(&root, 4), None);
+}

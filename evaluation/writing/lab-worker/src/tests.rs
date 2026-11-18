@@ -37,6 +37,7 @@ pub(crate) fn fixture_identity() -> StableRuntimeIdentity {
         ubatch_size: None,
         memory_map: true,
         full_swa_cache: false,
+        cpu_mask: None,
     }
 }
 

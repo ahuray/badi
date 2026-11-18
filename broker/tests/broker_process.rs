@@ -20,6 +20,37 @@ fn broker_exec_helper_runs_before_tokio_and_refuses_a_foreign_parent() -> Result
     assert!(output.status.success(), "helper failed: {output:?}");
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
 
+    let echo = std::fs::canonicalize("/bin/echo")?;
+    let masked = Command::new(env!("CARGO_BIN_EXE_badi-broker"))
+        .arg(EXEC_HELPER_FLAG)
+        .arg(std::process::id().to_string())
+        .arg(&echo)
+        .args(["--cpu-mask", "0xfff"])
+        .env_clear()
+        .process_group(0)
+        .output()?;
+    assert!(masked.status.success(), "masked helper failed: {masked:?}");
+    assert_eq!(masked.stdout, b"--cpu-mask 0xfff\n");
+    assert_eq!(masked.stderr, [] as [u8; 0]);
+
+    for invalid_extra in [
+        vec!["--cpu-mask", "0x0"],
+        vec!["--cpu-mask", "0xFFF"],
+        vec!["--other", "0xfff"],
+        vec!["--cpu-mask", "0xfff", "extra"],
+    ] {
+        let rejected = Command::new(env!("CARGO_BIN_EXE_badi-broker"))
+            .arg(EXEC_HELPER_FLAG)
+            .arg(std::process::id().to_string())
+            .arg(&target)
+            .args(invalid_extra)
+            .env_clear()
+            .process_group(0)
+            .output()?;
+        assert_eq!(rejected.status.code(), Some(1));
+        assert_eq!(rejected.stderr, b"runtime_helper_failed\n");
+    }
+
     let foreign_parent = rustix::process::getppid().ok_or("missing test parent")?;
     let output = Command::new(env!("CARGO_BIN_EXE_badi-broker"))
         .arg(EXEC_HELPER_FLAG)

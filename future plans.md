@@ -485,10 +485,6 @@ Measured alternatives that were not adopted are in the
       last token (p50 +76 ms, 4 of 92 shown past 550 ms at 15 W). Fewer
       generated tokens, or showing the first word once its own tokens and
       the rest pass, are candidates; each needs a held-out quality comparison.
-- [ ] Pin the runtime's four threads to performance cores (`taskset`/
-      `--cpu-mask`): one idle measurement saw 94/30 against 54/21 prompt/
-      generate tokens per second for Qwen3-1.7B, a second under load saw no
-      consistent gain. Measure on an idle machine before changing the launch.
 - [ ] Battery scheduling: finish the [paced trial](evaluation/power/battery-trial.py)
       on the balanced profile, real typing intervals and a privileged energy
       counter ([results so far](adapters/session/README.md#battery)).
