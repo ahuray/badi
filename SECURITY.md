@@ -7,14 +7,14 @@ are core security boundaries ([VISION.md](VISION.md),
 
 ## Supported versions
 
-Badi is pre-release software (`0.2.0` in [Cargo.toml](Cargo.toml)). Security
+Badi is pre-release software (`0.3.0` in [Cargo.toml](Cargo.toml)). Security
 fixes land on `main`; older commits and retired protocol v1 builds
 ([ADR 0007](docs/decisions/0007-retire-protocol-v1.md)) are not supported.
 
 | Version | Supported |
 | --- | --- |
-| `main` (`0.2.x` pre-release) | Yes |
-| Earlier commits and `< 0.2.0` | No |
+| `main` (`0.3.x` pre-release) | Yes |
+| Earlier commits and `< 0.3.0` | No |
 
 ## Reporting a vulnerability
 

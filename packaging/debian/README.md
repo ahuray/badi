@@ -50,7 +50,7 @@ The script builds the release broker and `badictl` (Cargo fetches the locked
 crates), and the Fcitx addon against the host's Fcitx with
 `dpkg-buildflags` hardening and without `-Werror`, then runs the addon's
 tests. It computes the library dependencies with `dpkg-shlibdeps`. The
-version is `0.1.0+r<commits>.g<commit>-1~debian13` (or `~ubuntu24.04`);
+version is `0.3.0+r<commits>.g<commit>-1~debian13` (or `~ubuntu24.04`);
 `BADI_DEB_VERSION` replaces it, and `DEBFULLNAME` and `DEBEMAIL` name the
 maintainer, `Badi local build <badi@localhost>` until one is chosen for
 publication. Build on each release: Debian's package needs Fcitx 5.1.12's

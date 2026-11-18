@@ -1,6 +1,6 @@
 pkgbase = badi-git
 	pkgdesc = Local writing suggestions for Linux, Omarchy first
-	pkgver = 0.2.0
+	pkgver = 0.3.0
 	pkgrel = 1
 	url = https://github.com/ahuray/badi
 	arch = x86_64

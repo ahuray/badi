@@ -32,10 +32,10 @@ fn taking_a_word_forgets_its_turn_down_at_that_spot() {
     let mut rejections = Rejections::default();
     let before = "Thank you so much for your ";
     rejections.record(&scope(), before, "interest in our products.", DISMISSED);
-    rejections.record(&scope(), "Kind regards, ", "Ahura", DISMISSED);
+    rejections.record(&scope(), "Kind regards, ", "Alex", DISMISSED);
     rejections.forget(&scope(), "thank you  SO much for your ", "Interest, really");
     assert!(!rejections.withholds(&scope(), before, "interest in our products."));
-    assert!(rejections.withholds(&scope(), "Kind regards, ", "Ahura"));
+    assert!(rejections.withholds(&scope(), "Kind regards, ", "Alex"));
 }
 
 #[test]

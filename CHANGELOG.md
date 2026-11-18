@@ -6,7 +6,11 @@ the [README](README.md) and the runbooks, open work in
 [docs/decisions](docs/decisions/). A behavior change adds one line under
 Unreleased in the same commit.
 
-## Unreleased
+## 0.3.0 (2026-11-18)
+
+- Aligned the workspace (`Cargo.toml`), root package manifest (`package.json`), Arch `PKGBUILD`, Debian packaging documentation and `SECURITY.md` at `0.3.0`.
+
+- Stopped `fcitx5` from aborting when it unloads Badi's addon (every `fcitx5 --replace`, such as an install, and logout): the observer client no longer runs a pending reply or invalidation into the addon being destroyed, the broker and observer connections close their sockets on teardown even when Fcitx's event loop refuses a source, and no teardown step lets an exception leave a destructor; each failed step is logged with its cause.
 
 - Invalidated and automatically refreshed cached Neovim and `BrokerClient` policy across `authority.changed` and current-session `paused` or `policy_never` revocations (keeping offline bridge `status` replies intact, preserving live-session policy and `commit.result` delivery across repeated retired-session clears, fencing in-flight `policy.query` replies, retrying transient `policy.query` failures before reconnecting, and coalescing refreshes until epoch bursts settle), preserved explicit Neovim refusal notices across pre-epoch `paused` clears and allowed explicit requests and revisions to supersede automatic or moved `status` checks, guarded Badi's own buffer edits against both synchronous and deferred `TextChangedI` callbacks so full and replacement acceptances do not schedule a spurious automatic request, and flushed headless screen redraws and `badictl` stdin closes in the Neovim test suite.
 
