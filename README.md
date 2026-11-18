@@ -635,6 +635,10 @@ without changing the installed model.
 
 | Read | For |
 | --- | --- |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Outside contributor setup, checks and pull requests |
+| [SECURITY.md](SECURITY.md) | Private vulnerability reporting and security scope |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Community standards and enforcement |
+| [Issue templates](.github/ISSUE_TEMPLATE/) | Bug reports and feature requests |
 | [AGENTS.md](AGENTS.md) | How to work on Badi: architecture, invariants, checks |
 | [VISION.md](VISION.md) | The product contract |
 | [future plans.md](<future plans.md>) | The only backlog, with the ordered next steps |

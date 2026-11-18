@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose an app integration, interaction or improvement within Badi's local contract
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening a request, check [VISION.md](https://github.com/ahuray/badi/blob/main/VISION.md) (including non-goals) and [future plans.md](https://github.com/ahuray/badi/blob/main/future%20plans.md) to see whether it is already planned or intentionally out of scope.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or writing workflow
+      description: What gap or friction did you hit, and in which Linux app, editor or desktop?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should Badi do, how should you trigger or accept it, and when should it stay quiet?
+    validations:
+      required: true
+
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Editing authority and privacy notes (optional)
+      description: How can this preserve exact field binding, native undo, explicit one-shot acceptance, and local-only privacy?
+    validations:
+      required: false
