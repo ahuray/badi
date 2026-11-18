@@ -38,10 +38,10 @@ observer wire details.
   | Key | When Badi takes it |
   | --- | --- |
   | Tab | Accepts the next word of a visible suggestion (a spelling correction whole). While that word's remainder is still returning on an observed or typed-line field, one Tab is held for it instead of reaching the app. On the manual path it also requests at the end of a phrase. Otherwise it stays the app's Tab. |
-  | Ctrl+Right | Accepts all of Badi's live candidate; otherwise the app's key. |
+  | Ctrl+Right, Ctrl+Shift+Y | Accepts all of Badi's live candidate; otherwise the app's key. |
   | Escape | Dismisses the suggestion, an alternative list or a notice. |
   | 1–9 | While Badi's numbered alternative list is up, shows the continuation of the word it numbers (a candidate click does the same); any other digit types normally. |
-  | Ctrl+Shift+Space, Ctrl+Shift+Y | Request, or on a shown continuation list up to four other first words as numbered candidates (ADR 0014); accept. |
+  | Ctrl+Shift+Space | Request, or on a shown continuation list up to four other first words as numbered candidates (ADR 0014), or revise a selection (ADR 0012, ADR 0013). |
   | Ctrl+Shift+Tab | Wherever Badi would take Tab (a suggestion shows, a Tab is held for its remainder, or Tab would request on the manual path: a granted app at an eligible caret): retires the suggestion and sends the app a real Tab. Otherwise, as in an app without a grant, it stays the app's key. |
 
 - **Literal Tab.** Ctrl+Shift+Tab is Cotypist's Option+Tab; Omarchy 4.0.6
@@ -89,9 +89,9 @@ observer wire details.
   request that brings the remainder.
 - **Manual request.** It needs a collapsed, non-composing, non-sensitive
   surrounding-text snapshot, the live `SurroundingText` capability, a valid
-  input-method language or explicit app override (English, German or Persian),
-  and a surrounding-text update since focus or the last authority change.
-  Until a request, text events only invalidate local state.
+  input-method language or explicit app override (`en`, `de`, `fa`, `fr`, `es`
+  or `pt`), and a surrounding-text update since focus or the last authority
+  change. Until a request, text events only invalidate local state.
 - **fcitx5-qt's surrounding echo.** Since fcitx5-qt 5.1.16
   ([upstream change](https://github.com/fcitx/fcitx5-qt/commit/bac684ce07d9df78ee37dab1cbdcebfa71bf24ec)),
   fcitx5-qt withdraws `SurroundingText` after every key: its own
@@ -197,7 +197,8 @@ step, as it does for typing over a selection.
 | Native exact | Any other granted id, e.g. `omawrite`, `com.github.xournalpp.xournalpp`, `telegram` | The manual unknown-identity contract, or an observed desktop field |
 | IME-parity browser | `chromium`, `chromium-browser`, `brave-origin`, `zen`, `zen-twilight` | Observed browser field only; origin policy; append-only |
 | IME-parity desktop | `chatgpt` (Codex), `code`, `com.anthropic.claude` (Claude), `cursor`, `discord`, `grok-bot`, `libreoffice` | Observed field of the same app only; app policy; append-only |
-| Unavailable | Other Gecko browsers (Firefox, other Zen builds and Flatpak ids, LibreWolf, Floorp, PWAsForFirefox, …), Chromium-family ids without an observer rule (Chrome, `brave`, `chrome-*`/`crx_*` web apps, Flatpak ids, Edge, Vivaldi, Opera, `electron*`, `code-oss`, `vscodium`, `vesktop`, …) and `obsidian`, whose plugin owns its fields | None |
+| Terminal | `com.mitchellh.ghostty`, `ghostty`, `foot`, `org.codeberg.dnkl.foot` | `TypedLine` path under an exact app rule ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)) |
+| Unavailable | Unlisted terminal emulators (`kitty`, `alacritty`, `konsole`, `wezterm`, `ptyxis`, `gnome-terminal`, `kgx`, …), other Gecko browsers (Firefox, other Zen builds and Flatpak ids, LibreWolf, Floorp, PWAsForFirefox, …), Chromium-family ids without an observer rule (Chrome, `brave`, `chrome-*`/`crx_*` web apps, Flatpak ids, Edge, Vivaldi, Opera, `electron*`, `code-oss`, `vscodium`, `vesktop`, …) and `obsidian` / `md.obsidian.obsidian`, whose plugin owns its fields | None |
 
 Gecko mail clients such as Thunderbird stay native exact. An Electron app with
 an unrelated id can only use the native exact manual contract.
@@ -238,9 +239,10 @@ the app; `badi debug` records `no_edit_path`.
 ### Terminals
 
 Terminals report the `Terminal` capability and no surrounding text. For an
-exact app rule on a listed terminal (only `com.mitchellh.ghostty` so far), the
-`TypedLine` path follows the line typed into that input context and uses it as
-the context ([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)).
+exact app rule on a listed terminal (`com.mitchellh.ghostty`, `ghostty`, `foot`
+or `org.codeberg.dnkl.foot`), the `TypedLine` path follows the line typed into
+that input context and uses it as the context
+([ADR 0009](../../docs/decisions/0009-terminals-use-the-typed-line.md)).
 `lineKey()` classifies each key with `lineEditFor()` and `TypedLine` applies
 it at a tracked caret: typing inserts, Backspace, Ctrl+W, Delete, Ctrl+D and
 Ctrl+K edit, and Left, Right, Home, End and Ctrl+A/B/E/F move, so the rest of
@@ -355,7 +357,7 @@ provides an editor transaction.
 
 ## Tested with
 
-Live on the development workstation: Arch Linux, native Wayland, Hyprland
+Live on an Arch Linux / Omarchy workstation: native Wayland, Hyprland
 0.56.2, Fcitx 5.1.23, input method `keyboard-us`, the real local model and
 disposable text in isolated profiles or scratch files, traced with
 `badi debug on --text`. A cell is evidence for that app version, not for its
@@ -390,7 +392,7 @@ What the live trials established, beyond those cells:
 - **On-demand broker start** (installed `aad8a21`, 2026-11-15): after
   `badi service stop` (`autostart: false`), `badi-broker.service` stayed
   inactive across 3.0 s while `badi-session.service` remained active; invoking
-  the installed Bash bridge against `/run/user/1000/badi/broker.sock`
+  the installed Bash bridge against `$XDG_RUNTIME_DIR/badi/broker.sock`
   cold-started `badi-broker.service` on demand in 1.45 s (`READY 1`), returned
   a `local_model` suggestion and cancelled cleanly, leaving `badi doctor`
   healthy (`Errors: 0`).
@@ -480,7 +482,7 @@ What the live trials established, beyond those cells:
 - **Quiet**: Escape quiet across edits, a request during quiet,
   narrow-field quiet before acquisition, and Omawrite's Open File dialog
   (`file_dialog`, explicit requests only).
-- **Neovim in Ghostty** (the user's LazyVim, 2026-10-17): with the Badi
+- **Neovim in Ghostty** (LazyVim, 2026-10-17): with the Badi
   plugin focused only Neovim asked, Tab and the chord reached Neovim, and
   after `:q` the shell's typed line suggested again.
 - **A prompt window's run-on line** (Claude Code in Ghostty, 2026-10-17):
@@ -493,9 +495,10 @@ What the live trials established, beyond those cells:
   phrases chose German from their own text. Not a quality score.
 
 Not yet tried live:
-- a real suspend and resume, and a VT switch;
 - a physical second monitor (only `eDP-1` plus virtual `headless wl_output`
-  tried), and non-US keyboard groups;
+  tried; real s2idle suspend/resume and VT switches are covered in the
+  [session matrix](../session/README.md#tested-with)), and non-US keyboard
+  groups;
 - a horizontally scrolled 100 CSS px input, which showed nothing on two
   explicit requests;
 - Google's search box (consent wall).
@@ -518,8 +521,9 @@ gets a launcher override with `GTK_IM_MODULE=fcitx` for its exact identity.
 On other desktops (GNOME, KDE Plasma, Debian and Ubuntu), the desktop
 starts Fcitx, so the installer never restarts it. It writes
 `~/.config/environment.d/50-badi-fcitx5.conf` with the same two directories
-as Omarchy's drop-in and this system's own addon directory
-(`/usr/lib/x86_64-linux-gnu/fcitx5` there), and Fcitx loads the addon at the
+as Omarchy's drop-in and the system Fcitx's own addon directory
+(such as `/usr/lib/fcitx5` on Arch or `/usr/lib/x86_64-linux-gnu/fcitx5` on
+Debian and Ubuntu), and Fcitx loads the addon at the
 next login ([Debian and Ubuntu](../../packaging/debian/README.md#install-from-a-checkout)).
 
 Each run that changes something backs up what it replaced under

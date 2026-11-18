@@ -347,19 +347,20 @@ prints pinned download advice and downloads nothing
   quickly; up to four threads, restricted via `--cpu-mask` (non-strict,
   recorded in `StableRuntimeIdentity::cpu_mask`) to online performance cores
   when Linux exposes disjoint `/sys/devices/cpu_core/cpus` and
-  `/sys/devices/cpu_atom/cpus` with at least that many online P-cores (`0xfff`
-  on `i7-12700H`), so battery `power-saver` does not strand inference threads
-  on E-cores while disjoint cgroup `cpuset` limits still fall back cleanly.
-  The GPU is not used: typing waits mostly on
-  generation, which the Iris Xe ran slower than the CPU.
+  `/sys/devices/cpu_atom/cpus` with at least that many online P-cores (for
+  example `0xfff` on an `i7-12700H`), so battery `power-saver` does not strand
+  inference threads on E-cores while disjoint cgroup `cpuset` limits still fall
+  back cleanly. The GPU is not used: integrated Vulkan offload generated slower
+  than the CPU on the benchmarked Iris Xe laptop ([tested with](#runtime-tested-with)),
+  and discrete-GPU qualification is not yet built.
 - **Memory.** CPU weights are copied instead of mapped, allowing repacking to
   release the original allocation; the output is the same either way.
 
 ### Runtime: tested with
 
-One machine (Iris Xe graphics); these are its numbers, not a universal
-latency. Rows after the first ran on the earlier pin, b10726, unless they
-name another build.
+Measured on one `i7-12700H` laptop (15 W sustained CPU limit, Iris Xe
+graphics); these are its numbers, not a universal latency. Rows after the first
+ran on the earlier pin, b10726, unless they name another build.
 
 | Change or setting | Setup | Result |
 | --- | --- | --- |
@@ -614,7 +615,7 @@ The exact rules live in [src/writing.rs](src/writing.rs).
 - **Token confidence gate.** Each continuation request asks the runtime for
   `n_probs: 1` (pre-sampling), and a continuation is shown only when every
   token of its shown text has a log-probability of at least −2.75
-  (`writing::CONFIDENCE_FLOOR`, user decision). Tokens wholly
+  (`writing::CONFIDENCE_FLOOR`). Tokens wholly
   inside the healed echo, a withheld stop token and the period restored for
   it do not count. Neither do the tokens that finish a half-typed English
   word the echo leaves open (` autom` then `atically`, or a typed lexicon
@@ -642,8 +643,8 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   and Persian (`TRAILING_SPACE_HEALING`). An unhealed request that ends in a
   space abstains before any model call: after a bare space a model must
   start a word without its usual leading-space token, and no reviewed model
-  continued one usefully. Gemma 3 1B heals English, German (by user
-  decision), Persian, French, Spanish and Portuguese.
+  continued one usefully. Gemma 3 1B heals English, German, Persian, French,
+  Spanish and Portuguese.
 - **Generation grammar.** Every continuation request carries a grammar that
   excludes what could never be shown: `<`, `>`, backticks and line breaks,
   and, when the typed text has no digit, digits in any script. Without it
@@ -681,7 +682,7 @@ The exact rules live in [src/writing.rs](src/writing.rs).
   A finished word that repeats the next one (`ha` + `d` before `had`) does
   not fit either.
 - **Language overrides.** Optional `language_overrides` settings map up to 64
-  canonical app ids to `en`, `de` or `fa`. `badi language APP TAG` sets one;
+  canonical app ids to `en`, `de`, `fa`, `fr`, `es` or `pt`. `badi language APP TAG` sets one;
   `reset` removes it. The broker applies the override only after context
   validation and policy admission, before generation. It never grants text
   access or changes editing authority. Settings changes retire live sessions.
@@ -807,7 +808,7 @@ The exact rules live in [src/writing.rs](src/writing.rs).
 
 ### Suggestion limits: tested with
 
-Lab rows are development or held-out comparisons on this machine, not
+Lab rows are development or held-out comparisons on one `i7-12700H` laptop, not
 universal scores.
 
 | Rule | Setup | Result |

@@ -41,40 +41,62 @@ current; it does not replace the system frontend.
 ## Writing assets
 
 Download separately as the desktop user, never as root. `badictl hardware`
-and `badictl models writing` report fit and pinned model advice. The following
-first-install commands fetch the balanced Qwen3-1.7B model (Apache-2.0) and
-the pinned llama.cpp CPU bundle (MIT). They refuse to overwrite existing
-assets. The broker independently verifies the model, archive, executable and
-bundle manifest before launching; an arbitrary system `llama-server` is not
-interchangeable.
+and `badictl models writing` report fit and pinned model advice. Every install
+needs the pinned llama.cpp CPU bundle (`llama-b11840`, MIT), which the broker
+verifies by archive, executable and bundle-manifest hash before launching (a
+system `llama-server` is not interchangeable):
 
 ```bash
 set -euo pipefail
 umask 077
 badi_data="$HOME/.local/share/badi"
 mkdir -p "$badi_data/models" "$badi_data/runtimes/downloads"
-test ! -e "$badi_data/models/Qwen3-1.7B-Q4_K_M.gguf"
 test ! -e "$badi_data/runtimes/llama-b11840"
 test ! -e "$badi_data/runtimes/downloads/llama-b11840-bin-ubuntu-x64.tar.gz"
 badi_stage=$(mktemp -d "$badi_data/.download.XXXXXXXX")
 trap 'rm -rf -- "$badi_stage"' EXIT
-curl --fail --location --connect-timeout 20 --max-time 1800 \
-  --output "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" \
-  'https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/daeb8e2d528a760970442092f6bf1e55c3b659eb/Qwen3-1.7B-Q4_K_M.gguf'
 curl --fail --location --connect-timeout 20 --max-time 300 \
   --output "$badi_stage/llama-b11840-bin-ubuntu-x64.tar.gz" \
   'https://github.com/ggml-org/llama.cpp/releases/download/b11840/llama-b11840-bin-ubuntu-x64.tar.gz'
 (
   cd "$badi_stage"
   sha256sum --check <<'SUMS'
-d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5  Qwen3-1.7B-Q4_K_M.gguf
 5f6e72e772a1264df279d6b7a848570fdc00e5d968b72e7a917d19e07da96400  llama-b11840-bin-ubuntu-x64.tar.gz
 SUMS
   tar --extract --gzip --file llama-b11840-bin-ubuntu-x64.tar.gz --no-same-owner
 )
-mv --no-clobber "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" "$badi_data/models/"
 mv --no-clobber "$badi_stage/llama-b11840" "$badi_data/runtimes/"
 mv --no-clobber "$badi_stage/llama-b11840-bin-ubuntu-x64.tar.gz" "$badi_data/runtimes/downloads/"
+```
+
+If you are installing from a checkout with `python3 scripts/install-desktop.py`,
+stop there: the installer lists the writing models that fit your device and
+downloads the one you pick. For a packaged install (`badi-git` or `.deb`), put a
+writing model in place before starting `badi-broker.service` (without one, the
+broker exits 78 and stays failed) — either run `badi model use ID` while
+`badi-broker.service` is still `inactive` in
+[User activation and removal](#user-activation-and-removal) below
+(`badictl models writing` prints the offline recommendation and catalog), or
+fetch the balanced Apache-2.0 `Qwen3-1.7B` model directly now:
+
+```bash
+set -euo pipefail
+umask 077
+badi_data="$HOME/.local/share/badi"
+mkdir -p "$badi_data/models"
+test ! -e "$badi_data/models/Qwen3-1.7B-Q4_K_M.gguf"
+badi_stage=$(mktemp -d "$badi_data/.download.XXXXXXXX")
+trap 'rm -rf -- "$badi_stage"' EXIT
+curl --fail --location --connect-timeout 20 --max-time 1800 \
+  --output "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" \
+  'https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/daeb8e2d528a760970442092f6bf1e55c3b659eb/Qwen3-1.7B-Q4_K_M.gguf'
+(
+  cd "$badi_stage"
+  sha256sum --check <<'SUMS'
+d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5  Qwen3-1.7B-Q4_K_M.gguf
+SUMS
+)
+mv --no-clobber "$badi_stage/Qwen3-1.7B-Q4_K_M.gguf" "$badi_data/models/"
 ```
 
 ## User activation and removal
@@ -85,28 +107,71 @@ addon copies and service overrides take precedence over package files. Keep
 their installer backups; migrate deliberately instead of mixing two builds.
 The package does not delete or rewrite them.
 
-On a fresh unlocked Omarchy session with the assets installed:
+On a fresh unlocked Omarchy session with only the runtime installed above,
+enable the helpers, download and start the device-recommended model (on battery
+discharging, `badictl models writing` recommends `qwen3-0.6b`; once on mains
+power, re-run `badi model` and pass its recommended id to `badi model use ID` if
+a balanced tier fits), allow an app and unpause:
 
 ```sh
-systemctl --user daemon-reload
-systemctl --user enable --now badi-accessibility.service badi-session.service
-systemctl --user start badi-broker.service
-systemctl --user restart omarchy-fcitx5.service
-badi doctor
-badi app omawrite on
+(
+  set -euo pipefail
+  systemctl --user daemon-reload
+  systemctl --user enable --now badi-accessibility.service badi-session.service
+  model_id=$(badictl models writing --json | python3 -c 'import json,sys; r=json.load(sys.stdin).get("recommended"); assert r, "no model fits"; print(r["id"])')
+  badi model use "$model_id"          # asks [y/N] on Gemma/Llama; add --accept-license unattended, or pass qwen3-1.7b / qwen3-0.6b
+  systemctl --user restart omarchy-fcitx5.service
+  badi app omawrite on
+  badi resume
+  badi doctor
+)
 ```
 
-`badi-broker.service` starts on demand when you type in an editable field or
-ask explicitly (`badi autostart on` loads it at login instead). The broker creates private settings with access denied by default. Follow
+For Gemma or Llama (`gemma-3-1b` on mains), `badi model use` stops until you
+answer `y` (or pass `--accept-license` when unattended, or pick an Apache-2.0
+model that fits such as `qwen3-1.7b` or `qwen3-0.6b`); the subshell halts before
+`badi app` and `badi resume` if `badi model use` does not exit `0`, so
+`badi-broker.service` is never started without a verified GGUF in
+`~/.local/share/badi/models/`. If available memory is temporarily tight and
+`badi model use "$model_id"` times out (`error_code=io`) after downloading the
+weights while the broker is still waiting for memory, run `badi service start`
+(60 s budget, reporting any memory wait) and then re-run `badi model use
+"$model_id"`, `badi app omawrite on` and `badi resume` once the socket answers.
+
+If you already fetched `Qwen3-1.7B` in [Writing assets](#writing-assets)
+instead, start `badi-broker.service` with `badi service start`:
+
+```sh
+(
+  set -euo pipefail
+  systemctl --user daemon-reload
+  systemctl --user enable --now badi-accessibility.service badi-session.service
+  badi service start
+  systemctl --user restart omarchy-fcitx5.service
+  badi app omawrite on
+  badi resume
+  badi doctor
+)
+```
+
+`badi-broker.service` starts on demand at later logins when you type in an
+editable field or ask explicitly (`badi autostart on` loads it at login
+instead). Without an installer-written `settings.json`, the broker initializes
+private settings **paused** and with every app and website denied, so `badi
+resume` (or the panel's pause switch) is required once alongside your app or
+site grants. Follow
 the [application setup and privacy controls](https://github.com/ahuray/badi/blob/main/README.md)
 for other apps and sites. Accessibility flags and desktop-wide
 `ScreenReaderEnabled` remain explicit user choices. Model readiness alone
 does not prove that an application exposes a supported field.
 
-A packaged install has no model yet: `badi model` shows the recommendation,
-and `badi model use ID` shows the terms that come with a Gemma or Llama model
-and downloads it only after you accept. The commands above fetch an Apache-2.0
-model instead.
+Before the broker starts, `badictl models writing` prints the offline
+recommendation and catalog; `badi model` queries the running broker once
+started, and `badi model use ID` shows any Gemma or Llama terms before
+downloading. Do not run `systemctl --user start badi-broker.service` before a
+verified catalog model is in `~/.local/share/badi/models/`: without one the
+broker exits 78 and marks the unit failed, blocking on-demand starts until a
+model is on disk and `badi service start` clears the failed state.
 
 The optional panel files are in `/usr/share/badi/omarchy`. For a fresh panel,
 create a new `io.github.ahuray.badi` directory under `~/.config/omarchy/plugins`,

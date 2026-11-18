@@ -3,8 +3,8 @@
 Badi builds, packages and installs on Debian 13 (trixie) and Ubuntu 24.04
 LTS (noble), x86-64 only, like its pinned llama.cpp runtime.
 [build-deb.sh](build-deb.sh) builds a binary package on the release it runs
-on, and [ci.sh](ci.sh) holds the CI steps for both releases. Nothing here is
-published.
+on, and [ci.sh](ci.sh) holds the CI steps for both releases. No prebuilt `.deb`
+repository is published yet.
 
 One part of the desktop contract differs from Omarchy's: the
 [field observer](../../adapters/accessibility/README.md) runs only in a
@@ -47,7 +47,7 @@ packaging/debian/build-deb.sh      # writes target/debian/badi_<version>_amd64.d
 ```
 
 The script builds the release broker and `badictl` (Cargo fetches the locked
-crates), and the Fcitx addon against this system's Fcitx with
+crates), and the Fcitx addon against the host's Fcitx with
 `dpkg-buildflags` hardening and without `-Werror`, then runs the addon's
 tests. It computes the library dependencies with `dpkg-shlibdeps`. The
 version is `0.3.0+r<commits>.g<commit>-1~debian13` (or `~ubuntu24.04`);
@@ -90,18 +90,53 @@ As each desktop user, never as root:
    [activation](../aur/README.md#user-activation-and-removal) describes:
    files under `~/.local` and `~/.config/systemd/user` take precedence over
    the package's.
-2. Download the pinned llama.cpp runtime with the
+2. Download the pinned llama.cpp runtime (and optionally the Apache-2.0
+   `Qwen3-1.7B` model) with the
    [writing-asset commands](../aur/README.md#writing-assets), which work
-   unchanged here. They also fetch an Apache-2.0 model; `badi model use ID`
-   switches later, showing a model's terms before it downloads.
-3. Start the services, which create private settings with every app denied:
+   unchanged on Debian and Ubuntu.
+3. Enable the session and observer units, then download and start the
+   device-recommended writing model (on battery discharging, `badictl models
+   writing` recommends `qwen3-0.6b`; once on mains power, re-run `badi model`
+   and pass its recommended id to `badi model use ID` if a balanced tier fits)
+   while `badi-broker.service` is still `inactive`:
 
    ```sh
-   systemctl --user daemon-reload
-   systemctl --user enable --now badi-session.service badi-accessibility.service
-   systemctl --user start badi-broker.service
+   (
+     set -euo pipefail
+     systemctl --user daemon-reload
+     systemctl --user enable --now badi-session.service badi-accessibility.service
+     model_id=$(badictl models writing --json | python3 -c 'import json,sys; r=json.load(sys.stdin).get("recommended"); assert r, "no model fits"; print(r["id"])')
+     badi model use "$model_id"        # asks [y/N] on Gemma/Llama; add --accept-license unattended, or pass qwen3-1.7b / qwen3-0.6b
+   )
    ```
 
+   For Gemma or Llama (`gemma-3-1b` on mains), answer `y` at the terms prompt
+   (or pass `--accept-license` when unattended, or pick an Apache-2.0 model that
+   fits such as `qwen3-1.7b` or `qwen3-0.6b`) so `badi model use` exits `0` and
+   places a verified GGUF in `~/.local/share/badi/models/` before you run step 5.
+   If available memory is temporarily tight and `badi model use "$model_id"`
+   times out (`error_code=io`) after downloading the weights while the broker is
+   still waiting for memory, run `badi service start` (60 s budget, reporting
+   any memory wait) and re-run `badi model use "$model_id"` once the socket
+   answers.
+
+   Or, if you already fetched `Qwen3-1.7B` in step 2, start the broker with
+   `badi service start` instead of running `badi model use` (do not start
+   `badi-broker.service` with no model in `~/.local/share/badi/models/`: it
+   exits 78 and marks the unit failed until a model is present and `badi service
+   start` clears the failure):
+
+   ```sh
+   (
+     set -euo pipefail
+     systemctl --user daemon-reload
+     systemctl --user enable --now badi-session.service badi-accessibility.service
+     badi service start
+   )
+   ```
+
+   Without an installer-written `settings.json`, the broker creates private
+   settings **paused** and with every app and website denied.
    `badi-broker.service` starts on demand at later logins (`badi autostart on`
    loads it at login instead). Outside a Hyprland, KDE Plasma 6 or GNOME session the observer stops at
    once, and `badi doctor` says so instead of reporting a problem; it names
@@ -111,7 +146,11 @@ As each desktop user, never as root:
    Ubuntu, or Fcitx 5 as the Virtual Keyboard in KDE Plasma's settings. Log
    out and back in. The packaged addon sits in Fcitx's own directory, so it
    needs no environment.
-5. Run `badi doctor`, then allow an app (`badi app ID on`) and the editors
+5. Once step 3 has exited `0` (so a verified catalog GGUF is in
+   `~/.local/share/badi/models/` — `badi app` and `badi resume` start
+   `badi-broker.service` on demand and must not run before a model is installed),
+   allow an app (`badi app ID on`) and the editors, unpause predictions with
+   `badi resume`, and check setup with `badi doctor`
    ([README](../../README.md#choose-where-badi-writes)).
 
 To remove it, stop and disable the three units, run `sudo apt purge badi`
@@ -119,8 +158,9 @@ and log in again. Settings, model and runtime stay in the home directory.
 
 ## Install from a checkout
 
-`python3 scripts/install-desktop.py` installs user-locally here as well,
-with the build dependencies above and no Node.js. It finds no
+`python3 scripts/install-desktop.py` installs user-locally on Debian and Ubuntu
+as well, with the build dependencies above, the pinned runtime from
+[Writing assets](../aur/README.md#writing-assets) and no Node.js. It finds no
 `omarchy-shell`, and then:
 
 - checks no lock state and never restarts Fcitx, since the desktop started
