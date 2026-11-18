@@ -1,0 +1,59 @@
+name: Bug report
+description: Report broken behavior, a missed safety check, or a setup failure
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Privacy first:** Never paste real typed prose, passwords, private document names, or output from `badi debug on --text`. Reproduce bugs with disposable text in a scratch document or isolated browser profile.
+
+        If this is a security or text-privacy vulnerability, stop here and report it privately via [SECURITY.md](https://github.com/ahuray/badi/blob/main/SECURITY.md).
+
+  - type: input
+    id: app
+    attributes:
+      label: App or editor, and version
+      description: Name the exact app, browser or editor where this happened and its version (see README.md for supported surfaces).
+      placeholder: e.g. Chromium 155, Zen 1.23.3b, LibreOffice Writer 26.8.1, Obsidian 1.14.4, Neovim 0.12.6, Bash 5.3
+    validations:
+      required: true
+
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop, compositor and distribution
+      description: Include your Linux distribution, Wayland compositor / desktop environment, and Fcitx 5 version when relevant.
+      placeholder: e.g. Omarchy 4.5 (Arch Linux, Hyprland 0.56, Fcitx 5.1.23) or Debian 13 (KDE Plasma 6.3.6, Fcitx 5.1.12)
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`badi doctor` output"
+      description: Paste the output of `badi doctor`, after deleting any `Snoozed:` line, private site origins, app ids, or personal file paths. Never paste typed text or `badi debug on --text` logs; if you also attach a `badi debug log` trace (from `badi debug on` without `--text`), note that it still records app ids and site `host=` fields, so reproduce on a disposable site or strip private hosts and app ids before pasting.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps using disposable text, what happened, and what you expected instead.
+      placeholder: |
+        1. Open a scratch field in ...
+        2. Type disposable text ...
+        3. Press ...
+        Actual: ...
+        Expected: ...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: no-private-text
+    attributes:
+      label: Privacy check
+      options:
+        - label: I checked that this issue contains no real typed prose, credentials, private site origins or `host=` entries, private app ids, personal paths, or `badi debug on --text` output.
+          required: true
