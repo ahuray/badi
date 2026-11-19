@@ -417,6 +417,64 @@ adapter hint stays. An explicit per-app language always wins. The text,
 fingerprint, caret and edit authority are unchanged, and no sample is
 retained.
 
+## Contrastive first token
+
+With Gemma 3 1B, an English suggestion's first token is chosen
+contrastively when Gemma 3 270M, the catalog's `contrast` for that model
+(same vocabulary, a fifth of the size), is installed beside it. Gemma 3 1B's
+English misses were generic lead-ins that any small model would also write
+([model fit](../docs/architecture/model-selection.md)).
+
+- **Where.** English requests whose first token starts the next word: after
+  a healed trailing space, or after a word that cannot still grow. A healed
+  unknown word or a lexicon word that begins a longer one (`the` that may
+  become `there`, even as the whole field) writes that word first and stays
+  greedy, and so does the retry that takes such a word as finished, which
+  has already spent part of the budget. Other languages, Lab completion
+  prefixes and alternatives are unchanged.
+- **Choice.** The writer's ten most likely first tokens and the contrast
+  model's 200 are read at once for the same prompt (one generated token
+  each, pre-sampling probabilities). Among the admissible tokens (none the
+  generation grammar excludes, the healed echo reproduced, a word started)
+  that are at least a tenth as likely as the writer's best and at or above
+  the confidence floor, the one maximising log p(1B) − 0.5 · log p(270M)
+  wins; a token outside the 270M's 200 counts as just below its least
+  likely one. When that is the writer's own best, the request runs as it
+  always did. Otherwise the generation grammar starts with that token, and
+  the same single streamed request, confidence floor and output checks
+  apply ([`semantic/contrast.rs`](src/semantic/contrast.rs)).
+- **Cost.** The writer's probe fills the prompt cache that its suggestion
+  then reuses, so the suggestion decodes the same tokens after one more
+  round trip, while the 270M model reads the prompt in parallel. The
+  runtime holds about 300 MB more ([tested with](#contrastive-first-token-tested-with)).
+- **Runtime.** Activation starts it after the writer, on the same pinned
+  runtime, hash-verified, at `llama-<pid>-contrast.sock` with its own launch
+  contract (`badi.writing.contrast.gemma3-270m.v1`, 64-token prompt
+  batches). The writing runtime owns it and stops it. Not installed, short
+  of memory or failing to start, the writer runs alone and greedy; the
+  startup line `contrast runtime attached|not_installed|no_memory|failed`,
+  after the provider line, and `badi model` say which. The reads stop
+  250 ms before the writing deadline, leaving the suggestion time to
+  generate; a read that fails or is still running then leaves that one
+  request greedy.
+- **Install.** `badi model use gemma-3-1b` and `scripts/install-desktop.py`
+  download it beside the model at its pinned revision, size and SHA-256. It
+  is under the same Gemma terms as the model it serves. The Lab adds it only
+  with `BADI_LAB_CONTRAST=on`
+  ([Lab runbook](../evaluation/writing/README.md#contrastive-first-token)).
+
+### Contrastive first token: tested with
+
+Gemma 3 1B with Gemma 3 270M Q8_0 on llama.cpp b11840, one `i7-12700H`
+laptop at the 15 W sustained limit. Reviews were blind, with the frozen Lab
+rubric and the production confidence floor applied.
+
+| Measure | Setup | Result |
+| --- | --- | --- |
+| Development screen (2026-11-18) | 78 English cases from the European, real-text, probe and boundary suites, stepwise harness, α 0.1 and λ 0.5 chosen here | Greedy 59 shown, 29 useful, 2 harmful; contrastive first token 59, 34, 2 (5 wins, 0 losses). Contrast at every token without the floor in the choice: 32 shown |
+| Held-out screen (2026-11-18) | 100 English prefixes written blind, settings fixed beforehand | Greedy 77 shown, 46 useful, 0 harmful; contrastive first token 79, 55, 0 (12 wins, 3 losses); its first token differed in 32 |
+| Request shape latency (2026-11-18) | 78 cases × 2 rounds, interleaved, cold prompts | One 8-token request p50 424, p90 552 ms; probe, parallel 270M read and the rest p50 536, p90 697 ms |
+
 ## Selection revision
 
 An explicit grammar check or refinement of one selection

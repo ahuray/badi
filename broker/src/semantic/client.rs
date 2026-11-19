@@ -57,6 +57,9 @@ const ALTERNATIVE_CANDIDATES: u8 = 8;
 const ALTERNATIVE_ATTEMPTS: usize = 3;
 // A non-streaming reply with candidate probabilities, and the settings echo.
 const MAX_CANDIDATES_RESPONSE_BYTES: usize = 64 * 1_024;
+/// The contrast model's reply lists [`super::contrast::CONTRAST_SCORES`]
+/// scored tokens beside the runtime's settings.
+const MAX_CONTRAST_RESPONSE_BYTES: usize = 256 * 1_024;
 /// Linux `sockaddr_un.sun_path` holds at most 108 bytes.
 const MAX_UNIX_SOCKET_BYTES: usize = 108;
 
@@ -77,11 +80,19 @@ pub(crate) fn is_owned_runtime_socket_name(name: &str) -> bool {
     let Some(pid) = name
         .strip_prefix("llama-")
         .and_then(|rest| rest.strip_suffix(".sock"))
-        .map(|rest| rest.strip_suffix("-revision").unwrap_or(rest))
+        .map(runtime_socket_pid)
     else {
         return false;
     };
     !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// The process id part of a runtime socket name without its `llama-` and
+/// `.sock`: the writing runtime's bare, the others' with their role suffix.
+pub(crate) fn runtime_socket_pid(rest: &str) -> &str {
+    rest.strip_suffix("-revision")
+        .or_else(|| rest.strip_suffix("-contrast"))
+        .unwrap_or(rest)
 }
 
 fn unix_socket_path_is_usable(path: &Path) -> bool {
@@ -461,6 +472,9 @@ pub struct SemanticClient {
     preferences: Arc<std::sync::RwLock<crate::writing::LanguagePreferences>>,
     /// The person's suggestion length, shared by this client's clones.
     length: Arc<std::sync::RwLock<crate::writing::SuggestionLength>>,
+    /// The writing model's contrast runtime, once it runs; shared by this
+    /// client's clones.
+    contrast: Arc<std::sync::OnceLock<SemanticClient>>,
 }
 
 impl SemanticClient {
@@ -473,7 +487,22 @@ impl SemanticClient {
             healing: crate::writing::TRAILING_SPACE_HEALING.to_vec(),
             preferences: Arc::default(),
             length: Arc::default(),
+            contrast: Arc::default(),
         })
+    }
+
+    /// Scores this client's first English token against `contrast`, the
+    /// client of the writing model's contrast runtime (module
+    /// [`super::contrast`]). Set once; `false` when one was already set.
+    #[must_use]
+    pub fn set_contrast(&self, contrast: Self) -> bool {
+        self.contrast.set(contrast).is_ok()
+    }
+
+    /// Whether a contrast runtime scores this client's English first tokens.
+    #[must_use]
+    pub fn has_contrast(&self) -> bool {
+        self.contrast.get().is_some()
     }
 
     /// This client healing the languages reviewed for the model whose
@@ -656,6 +685,13 @@ impl SemanticClient {
         if plan.sends_nothing() {
             return Ok(ObservedCompletion::language_abstention());
         }
+        let forced = self
+            .contrastive_start(&request, &plan, &cancellation, started, budget)
+            .await?;
+        let plan = crate::writing::CompletionPlan {
+            forced_start: forced.as_deref(),
+            ..plan
+        };
         let run = |plan| {
             self.complete_plan(
                 plan,
@@ -814,6 +850,7 @@ impl SemanticClient {
                 max_tokens: plan.max_tokens.saturating_sub(1).max(1),
                 digits: plan.digits,
                 finished_word_prompt: None,
+                forced_start: None,
             };
             let shape = StreamShape {
                 length,
@@ -939,6 +976,7 @@ impl SemanticClient {
                 max_tokens: plan.max_tokens.saturating_sub(1).max(1),
                 digits: plan.digits,
                 finished_word_prompt: None,
+                forced_start: None,
             };
             let shape = StreamShape {
                 length: crate::writing::SuggestionLength::Short,
@@ -980,6 +1018,77 @@ impl SemanticClient {
         Ok(words)
     }
 
+    /// The first token that starts an English suggestion when its
+    /// contrastive choice (module [`super::contrast`]) differs from the
+    /// writing model's own, else `None`. It runs only with a contrast
+    /// runtime, and only where the first token starts the next word, as it
+    /// was measured ([`crate::writing::CompletionPlan::first_token_starts_next_word`]).
+    /// The reads stop [`super::contrast::GENERATION_RESERVE`] before the
+    /// writing deadline. Any failure or lateness leaves the request greedy;
+    /// only cancellation ends it.
+    async fn contrastive_start(
+        &self,
+        request: &ProviderRequest,
+        plan: &crate::writing::CompletionPlan<'_>,
+        cancellation: &CancellationToken,
+        started: Instant,
+        budget: Duration,
+    ) -> Result<Option<String>, ClientError> {
+        let Some(contrast) = self.contrast.get() else {
+            return Ok(None);
+        };
+        let english = request
+            .language
+            .as_deref()
+            .and_then(crate::writing::WritingLanguage::from_tag)
+            == Some(crate::writing::WritingLanguage::English);
+        // The reads end early enough for the suggestion to generate.
+        let reads = budget.saturating_sub(super::contrast::GENERATION_RESERVE);
+        if !english
+            || self.completion_prefix.is_some()
+            || !plan.first_token_starts_next_word()
+            || started.elapsed() >= reads
+        {
+            return Ok(None);
+        }
+        let echo = plan.echo.unwrap_or_default();
+        // Both read the same prompt at once; the writer's read also fills
+        // the prompt cache its suggestion then reuses.
+        let (writer, scores) = tokio::join!(
+            self.first_token_scores(
+                plan,
+                super::contrast::WRITER_CANDIDATES.into(),
+                MAX_CANDIDATES_RESPONSE_BYTES,
+                cancellation,
+                started,
+                reads,
+            ),
+            contrast.first_token_scores(
+                plan,
+                super::contrast::CONTRAST_SCORES,
+                MAX_CONTRAST_RESPONSE_BYTES,
+                cancellation,
+                started,
+                reads,
+            ),
+        );
+        let (writer, scores) = match (writer, scores) {
+            (Err(ClientError::Cancelled), _) | (_, Err(ClientError::Cancelled)) => {
+                return Err(ClientError::Cancelled);
+            }
+            (Ok(writer), Ok(scores)) => (writer, scores),
+            _ => return Ok(None),
+        };
+        Ok(super::contrast::contrastive_choice(
+            &writer,
+            &scores,
+            echo,
+            plan.digits,
+            crate::writing::CONFIDENCE_FLOOR,
+        )
+        .map(str::to_owned))
+    }
+
     /// The model's most likely first tokens after `plan`'s prompt, best
     /// first, read before sampling from one generated token.
     async fn first_token_candidates(
@@ -989,9 +1098,36 @@ impl SemanticClient {
         started: Instant,
         budget: Duration,
     ) -> Result<Vec<String>, ClientError> {
+        Ok(self
+            .first_token_scores(
+                plan,
+                ALTERNATIVE_CANDIDATES.into(),
+                MAX_CANDIDATES_RESPONSE_BYTES,
+                cancellation,
+                started,
+                budget,
+            )
+            .await?
+            .into_iter()
+            .map(|token| token.text)
+            .collect())
+    }
+
+    /// The model's `count` most likely first tokens after `plan`'s prompt,
+    /// best first, with their pre-sampling log-probabilities, from one
+    /// generated token. Empty when the writing budget runs out first.
+    async fn first_token_scores(
+        &self,
+        plan: &crate::writing::CompletionPlan<'_>,
+        count: u16,
+        reply_limit: usize,
+        cancellation: &CancellationToken,
+        started: Instant,
+        budget: Duration,
+    ) -> Result<Vec<super::contrast::ScoredToken>, ClientError> {
         let mut payload = plan.payload();
         payload["n_predict"] = serde_json::json!(1);
-        payload["n_probs"] = serde_json::json!(ALTERNATIVE_CANDIDATES);
+        payload["n_probs"] = serde_json::json!(count);
         payload["post_sampling_probs"] = serde_json::json!(false);
         payload["stream"] = serde_json::json!(false);
         let body = serde_json::to_vec(&payload).map_err(|_| ClientError::InvalidRequest)?;
@@ -1007,7 +1143,7 @@ impl SemanticClient {
                 return Err(ClientError::UnexpectedStatus(response.status()));
             }
             ensure_content_type(&response, "application/json")?;
-            read_bounded_body(response, MAX_CANDIDATES_RESPONSE_BYTES).await
+            read_bounded_body(response, reply_limit).await
         };
         let body = tokio::select! {
             biased;
@@ -1019,7 +1155,7 @@ impl SemanticClient {
         };
         let reply: serde_json::Value =
             serde_json::from_slice(&body).map_err(|_| ClientError::MalformedStream)?;
-        Ok(first_token_texts(&reply))
+        Ok(first_token_scores(&reply))
     }
 
     /// The rest of the word at the caret from the request's vocabulary, in a
@@ -1949,9 +2085,10 @@ fn observed_completion(
     }
 }
 
-/// The candidate texts of a non-streaming reply's first token, best first:
-/// its `top_logprobs`, each read from its bytes when they are valid UTF-8.
-fn first_token_texts(reply: &serde_json::Value) -> Vec<String> {
+/// The candidates of a non-streaming reply's first token, best first: its
+/// `top_logprobs`, each read from its bytes when they are valid UTF-8, with
+/// its vocabulary id when reported.
+fn first_token_scores(reply: &serde_json::Value) -> Vec<super::contrast::ScoredToken> {
     let Some(candidates) = reply
         .get("completion_probabilities")
         .and_then(|value| value.get(0))
@@ -1960,7 +2097,7 @@ fn first_token_texts(reply: &serde_json::Value) -> Vec<String> {
     else {
         return Vec::new();
     };
-    let mut scored: Vec<(f64, String)> = candidates
+    let mut scored: Vec<super::contrast::ScoredToken> = candidates
         .iter()
         .filter_map(|candidate| {
             let logprob = candidate
@@ -1978,11 +2115,15 @@ fn first_token_texts(reply: &serde_json::Value) -> Vec<String> {
                 })
                 .and_then(|bytes| String::from_utf8(bytes).ok())
                 .or_else(|| candidate.get("token")?.as_str().map(str::to_owned))?;
-            Some((logprob, text))
+            Some(super::contrast::ScoredToken {
+                id: candidate.get("id").and_then(serde_json::Value::as_u64),
+                text,
+                logprob,
+            })
         })
         .collect();
-    scored.sort_by(|left, right| right.0.total_cmp(&left.0));
-    scored.into_iter().map(|(_, text)| text).collect()
+    scored.sort_by(|left, right| right.logprob.total_cmp(&left.logprob));
+    scored
 }
 
 /// How a streamed completion becomes a suggestion: the healed echo to strip,

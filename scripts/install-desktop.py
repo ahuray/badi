@@ -671,11 +671,16 @@ def require_writing_model(home, badictl, model_id=None, accept_license=False):
     advice = json.loads(subprocess.run([str(badictl), "models", "writing", "--json"], capture_output=True,
                                        text=True, check=True, timeout=15).stdout)
     models = Path(home) / ".local/share/badi/models"
+    installed = None
     for model in advice["catalog"]:
         path = models / model["filename"]
         if (path.is_file() and path.stat().st_size == model["download_bytes"]
                 and badi_install.file_sha256(path) == model["sha256"]):
-            return model
+            # Settings may choose any installed model, so each gets its helper.
+            badi_install.offer_contrast_model(model, models)
+            installed = installed or model
+    if installed:
+        return installed
     choices = writing_model_choices(advice)
     recommended = (advice.get("recommended") or {}).get("id")
     if model_id is None:
@@ -709,6 +714,7 @@ def require_writing_model(home, badictl, model_id=None, accept_license=False):
     if badi_install.model_terms(model):
         badi_install.record_model_terms(home, model)
     badi_install.download_model(model, models)
+    badi_install.offer_contrast_model(model, models)
     return model
 
 

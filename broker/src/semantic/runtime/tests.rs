@@ -312,9 +312,11 @@ fn runtime_socket_stays_inside_a_private_directory() -> Result<(), Box<dyn Error
     let live = private.join("llama-1.sock");
     let dead = private.join("llama-999999999.sock");
     let dead_revision = private.join("llama-999999999-revision.sock");
+    let dead_contrast = private.join("llama-999999999-contrast.sock");
     let _live_listener = std::os::unix::net::UnixListener::bind(&live)?;
     std::os::unix::net::UnixListener::bind(&dead)?;
     std::os::unix::net::UnixListener::bind(&dead_revision)?;
+    std::os::unix::net::UnixListener::bind(&dead_contrast)?;
     let socket = super::prepare_runtime_socket(&private, super::SocketRole::Writing)?;
     assert_eq!(
         socket,
@@ -324,6 +326,7 @@ fn runtime_socket_stays_inside_a_private_directory() -> Result<(), Box<dyn Error
     assert!(live.exists(), "a live process keeps its socket");
     assert!(!dead.exists(), "a dead process does not keep a socket");
     assert!(!dead_revision.exists(), "nor its revision runtime");
+    assert!(!dead_contrast.exists(), "nor its contrast runtime");
     // The revision runtime's socket sits beside the writing runtime's and
     // never replaces it.
     let writing = std::os::unix::net::UnixListener::bind(&socket)?;
@@ -335,6 +338,21 @@ fn runtime_socket_stays_inside_a_private_directory() -> Result<(), Box<dyn Error
     assert!(socket.exists(), "the writing socket stays");
     assert!(crate::semantic::client::is_owned_runtime_socket_name(
         revision
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+    ));
+    let contrast = super::prepare_runtime_socket(&private, super::SocketRole::Contrast)?;
+    assert_eq!(
+        contrast,
+        private.join(format!("llama-{}-contrast.sock", std::process::id()))
+    );
+    assert!(
+        socket.exists(),
+        "the writing socket stays beside the contrast one"
+    );
+    assert!(crate::semantic::client::is_owned_runtime_socket_name(
+        contrast
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default()
@@ -479,6 +497,7 @@ fn owned_runtime_at(endpoint: std::net::SocketAddr) -> Result<OwnedRuntime, Box<
             full_swa_cache: false,
             cpu_mask: None,
         },
+        contrast: std::sync::OnceLock::new(),
     })
 }
 
@@ -578,4 +597,33 @@ fn verify_observed_file(path: &Path) -> Result<VerifiedFile, Box<dyn Error>> {
         super::encode_lower_hex(Sha256::digest(&bytes)),
         u64::try_from(bytes.len()).unwrap_or(u64::MAX),
     )?)?)
+}
+
+#[test]
+fn an_attached_contrast_runtime_stops_with_its_writing_runtime() -> Result<(), Box<dyn Error>> {
+    let endpoint = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 9));
+    let writing = owned_runtime_at(endpoint)?;
+    assert!(!writing.client().has_contrast());
+    let contrast = owned_runtime_at(endpoint)?;
+    let contrast_id = contrast.process_id().ok_or("contrast child")?;
+    assert!(writing.attach_contrast(Box::new(contrast)).is_ok());
+    assert!(
+        writing.client().has_contrast(),
+        "the client scores against it"
+    );
+    assert_eq!(writing.contrast_process_id(), Some(contrast_id));
+    let second = owned_runtime_at(endpoint)?;
+    let second_id = second.process_id().ok_or("second child")?;
+    let refused = writing
+        .attach_contrast(Box::new(second))
+        .err()
+        .ok_or("a second attach")?;
+    assert_eq!(refused.process_id(), Some(second_id), "it is handed back");
+    drop(refused);
+    writing.shutdown()?;
+    assert!(
+        !Path::new(&format!("/proc/{contrast_id}")).exists(),
+        "the contrast process stops with the writing one"
+    );
+    Ok(())
 }

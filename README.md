@@ -25,7 +25,9 @@ candidate) takes it all.
   `badi suggest fa on`, which `badi languages` and the panel do not offer).
   Right after a space, a suggestion appears only in a language the model heals
   (Gemma 3 1B: all of these; Qwen and Llama: English and Persian);
-  `badi suggest LANG healing on` overrides that.
+  `badi suggest LANG healing on` overrides that. With Gemma 3 1B, a 0.3 GB
+  helper model makes English suggestions less generic
+  ([how](broker/README.md#contrastive-first-token)).
 - **Typo fixes:** `teh → the` in English out of the box; German, French, Spanish,
   Italian, Dutch and Polish after `badi spelling LANG on` and that language's
   Hunspell package (`badi spelling` names it).
@@ -158,7 +160,7 @@ badi apps blocklist                 # or: every observed app except blocked ones
 badi languages en de fr             # the languages you write in
 badi pause                          # badi resume; badi snooze quiets the focused app or site for 10 minutes
 badi model                          # your model, the recommendation and the choices
-badi model use gemma-3-1b           # download (pinned, hash-checked) and switch
+badi model use gemma-3-1b           # download (pinned, hash-checked) and switch; adds the English helper
 badi length short                   # one or two words; badi length normal for up to four
 badi stats                          # words saved per day and app, counts only
 badi doctor                         # what is wrong, if anything

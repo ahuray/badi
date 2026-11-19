@@ -828,16 +828,23 @@ fn activation_report_begins_with_the_provider_line() {
         model.filename, model.quantization
     );
     assert_eq!(
-        super::activation_report(&model, WarmUpReport::new(Duration::from_millis(412), None)),
-        format!("{provider}\nbadi-broker: writing runtime warm-up completed elapsed_ms=412")
+        super::activation_report(
+            &model,
+            WarmUpReport::new(Duration::from_millis(412), None),
+            &super::ContrastState::Attached
+        ),
+        format!(
+            "{provider}\nbadi-broker: writing runtime warm-up completed elapsed_ms=412\nbadi-broker: contrast runtime attached"
+        )
     );
     assert_eq!(
         super::activation_report(
             &model,
-            WarmUpReport::new(Duration::from_millis(2000), Some("timeout"))
+            WarmUpReport::new(Duration::from_millis(2000), Some("timeout")),
+            &super::ContrastState::Failed("spawn".to_owned())
         ),
         format!(
-            "{provider}\nbadi-broker: writing runtime warm-up failed class=timeout elapsed_ms=2000"
+            "{provider}\nbadi-broker: writing runtime warm-up failed class=timeout elapsed_ms=2000\nbadi-broker: contrast runtime failed reason=spawn"
         )
     );
 }
@@ -1201,4 +1208,59 @@ fn hybrid_performance_cpu_mask_requires_disjoint_online_p_and_e_cores() {
     assert_eq!(performance_cpu_mask(&root, 4), None);
     write_sysfs(&root, Some("508-512\n"), Some("0-3\n"), None);
     assert_eq!(performance_cpu_mask(&root, 4), None);
+}
+
+#[test]
+fn a_forced_start_is_written_before_anything_else() {
+    let request = crate::provider::ProviderRequest {
+        before: "It is easy to get discount airfare to the ".to_owned(),
+        after: String::new(),
+        language: Some("en".to_owned()),
+        vocabulary: None,
+    };
+    let plan = super::completion_plan(&request, super::TRAILING_SPACE_HEALING);
+    assert_eq!(plan.echo, Some(" "));
+    let grammar =
+        |plan: super::CompletionPlan<'_>| plan.payload()["grammar"].as_str().unwrap().to_owned();
+    assert_eq!(
+        grammar(plan),
+        "root ::= \" \" [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*"
+    );
+    // The forced token already starts with the echo it reproduces; the
+    // prompt, echo and budget stay the same.
+    let forced = super::CompletionPlan {
+        forced_start: Some(" Caribbean"),
+        ..plan
+    };
+    assert_eq!(
+        grammar(forced),
+        "root ::= \" Caribbean\" [^<>\\n\\r`0-9\u{660}-\u{669}\u{6f0}-\u{6f9}]*"
+    );
+    assert_eq!(forced.payload()["prompt"], plan.payload()["prompt"]);
+    assert_eq!(forced.payload()["n_predict"], plan.payload()["n_predict"]);
+}
+
+#[test]
+fn the_first_token_starts_the_next_word_only_after_a_finished_word() {
+    let plan = |before: &str| {
+        let request = crate::provider::ProviderRequest {
+            before: before.to_owned(),
+            after: String::new(),
+            language: Some("en".to_owned()),
+            vocabulary: None,
+        };
+        // The plan borrows the request, so answer inside the closure.
+        super::completion_plan(&request, super::TRAILING_SPACE_HEALING)
+            .first_token_starts_next_word()
+    };
+    // A healed trailing space, and a word that cannot grow.
+    assert!(plan("We asked the team to "));
+    assert!(plan("We asked"));
+    assert!(plan("Thanks for the update,"));
+    // A lexicon word that may still grow, even as the whole field, and an
+    // unknown word that is healed and written again first.
+    assert!(!plan("the"));
+    assert!(!plan("Rep"));
+    assert!(!plan("I will send the rep"));
+    assert!(!plan("Please find the docum"));
 }

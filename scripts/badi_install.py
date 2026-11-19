@@ -1105,6 +1105,36 @@ def download_model(model, directory):
     return target
 
 
+def ensure_contrast_model(model, directory):
+    """Downloads the small model that sharpens `model`'s English first word
+    (the catalog's `contrast`) unless a file of its pinned size and SHA-256 is
+    already there. Returns it, or None when `model` has none. It shares
+    `model`'s terms, so it asks nothing."""
+    contrast = model.get("contrast")
+    if not contrast:
+        return None
+    path = Path(directory) / contrast["filename"]
+    try:
+        present = (path.is_file() and path.stat().st_size == contrast["download_bytes"]
+                   and file_sha256(path) == contrast["sha256"])
+    except OSError:
+        present = False
+    if not present:
+        download_model(contrast, directory)
+    return contrast
+
+
+def offer_contrast_model(model, directory):
+    """ensure_contrast_model, but a failed download only warns: the broker
+    writes without the helper, so it never stops an install or a switch."""
+    try:
+        return ensure_contrast_model(model, directory)
+    except (OSError, RuntimeError) as error:
+        print(f"{model['contrast']['name']} was not downloaded ({error}); English suggestions stay "
+              f"as they were. Run badi model use {model['id']} to try again.", file=sys.stderr)
+        return None
+
+
 def run_installer(main):
     """Run an installer's main: its own refusals and a failed build step end
     with one line on stderr instead of a traceback."""

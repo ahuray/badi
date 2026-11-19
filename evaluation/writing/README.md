@@ -127,6 +127,16 @@ keeps one result line each.
   denominators.
 - **Status.** Every Lab case is development data, not a held-out benchmark.
 
+### Contrastive first token
+
+`BADI_LAB_CONTRAST=on node evaluation/writing/lab/run.mjs …` starts the
+installed writing model's contrast model beside it and scores English first
+tokens as production does when that model is installed
+([broker runbook](../../broker/README.md#contrastive-first-token)). It is off
+by default, so earlier runs stay comparable; a run that asks for it without
+the model installed, or with an explicit artifact, stops with
+`runtime_unavailable` instead of measuring greedy output.
+
 ### Style comparison
 
 The three style arms use the same provider as `production_boundary`, including

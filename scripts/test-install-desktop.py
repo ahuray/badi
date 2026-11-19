@@ -126,6 +126,27 @@ class DesktopInstallTests(unittest.TestCase):
                 self.assertEqual(installer.require_writing_model(home, 'badictl')['filename'], 'b.gguf')
                 download.assert_not_called()
 
+    def test_every_installed_model_gets_its_english_helper(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            first, second = b'first model', b'second model'
+            contrast = {'id': 'gemma-3-270m', 'name': 'Gemma 3 270M', 'filename': 'c.gguf',
+                        'download_bytes': 5, 'sha256': '1' * 64}
+            catalog = {'recommended': None, 'catalog': [
+                {'id': 'qwen3-0.6b', 'name': 'Qwen3 0.6B', 'license': 'Apache-2.0', 'fits': True,
+                 'filename': 'a.gguf', 'download_bytes': len(first), 'sha256': hashlib.sha256(first).hexdigest()},
+                {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B', 'license': 'Gemma', 'fits': True, 'contrast': contrast,
+                 'filename': 'b.gguf', 'download_bytes': len(second), 'sha256': hashlib.sha256(second).hexdigest()}]}
+            models = home / '.local/share/badi/models'
+            models.mkdir(parents=True)
+            (models / 'a.gguf').write_bytes(first)
+            (models / 'b.gguf').write_bytes(second)
+            reply = unittest.mock.Mock(stdout=json.dumps(catalog))
+            with patch.object(installer.subprocess, 'run', return_value=reply), \
+                 patch.object(installer.badi_install, 'download_model') as download:
+                self.assertEqual(installer.require_writing_model(home, 'badictl')['filename'], 'a.gguf')
+            download.assert_called_once_with(contrast, models)
+
     def test_the_first_model_downloads_only_after_its_terms_are_accepted(self):
         catalog = {'recommended': {'id': 'gemma-3-1b'}, 'catalog': [
             {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B', 'license': 'Gemma', 'fits': True,

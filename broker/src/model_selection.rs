@@ -119,6 +119,11 @@ pub struct ModelArtifact {
     /// each promoted by its own blind review against the unhealed prompt;
     /// `trailing_space_healing` in settings overrides it per language.
     pub healed_languages: &'static [&'static str],
+    /// The small model that scores this model's first English token
+    /// contrastively (broker README, contrastive first token): same
+    /// tokenizer, installed beside it, never a writing model itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contrast: Option<&'static ModelArtifact>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -177,6 +182,31 @@ const CODE_RUNTIME_CAVEAT: &str = "An instruct GGUF is not proof of fill-in-the-
 const WRITING_LANGUAGES: &[&str] = &["en", "de", "fr", "es", "fa", "pt"];
 const CODE_LANGUAGES: &[&str] = &["code"];
 
+/// Gemma 3 270M, the contrast model for Gemma 3 1B: one vocabulary, a
+/// fifth of the size. It only supplies the penalty in the first English
+/// token's contrastive score; it never writes a suggestion.
+pub const GEMMA_3_270M_CONTRAST: ModelArtifact = ModelArtifact {
+    id: "gemma-3-270m",
+    name: "Gemma 3 270M",
+    use_case: ModelUseCase::Writing,
+    tier: ModelTier::Compact,
+    repository: "ggml-org/gemma-3-270m-GGUF",
+    revision: "360e988e4c99209d62d171ca1a46aceb4b224791",
+    filename: "gemma-3-270m-Q8_0.gguf",
+    sha256: "e00cf79514204dfe2f4d6943f277ffea7fd8a4c8e955b4b7a869cfc157694881",
+    download_bytes: 291_543_744,
+    quantization: "Q8_0",
+    license: "Gemma",
+    runtime: "llama.cpp",
+    minimum_runtime_version: LLAMA_CPP_MINIMUM_VERSION,
+    prompt_format: WRITING_PROMPT_FORMAT,
+    runtime_caveat: WRITING_RUNTIME_CAVEAT,
+    languages: &["en"],
+    screen_useful: None,
+    healed_languages: &[],
+    contrast: None,
+};
+
 const WRITING_MODELS: [ModelArtifact; 4] = [
     ModelArtifact {
         id: "qwen3-0.6b",
@@ -197,6 +227,7 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         languages: WRITING_LANGUAGES,
         screen_useful: None,
         healed_languages: &["en", "fa"],
+        contrast: None,
     },
     ModelArtifact {
         id: "qwen3-1.7b",
@@ -217,6 +248,7 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         languages: WRITING_LANGUAGES,
         screen_useful: Some(33),
         healed_languages: &["en", "fa"],
+        contrast: None,
     },
     ModelArtifact {
         id: "llama-3.2-1b",
@@ -237,6 +269,7 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         languages: WRITING_LANGUAGES,
         screen_useful: Some(41),
         healed_languages: &["en", "fa"],
+        contrast: None,
     },
     ModelArtifact {
         id: "gemma-3-1b",
@@ -259,6 +292,7 @@ const WRITING_MODELS: [ModelArtifact; 4] = [
         // Each by blind review against the unhealed prompt (broker README,
         // languages and healing); German by user decision.
         healed_languages: &["en", "de", "fa", "fr", "es", "pt"],
+        contrast: Some(&GEMMA_3_270M_CONTRAST),
     },
 ];
 
@@ -282,6 +316,7 @@ const CODE_MODELS: [ModelArtifact; 3] = [
         languages: CODE_LANGUAGES,
         screen_useful: None,
         healed_languages: &[],
+        contrast: None,
     },
     ModelArtifact {
         id: "qwen2.5-coder-1.5b",
@@ -302,6 +337,7 @@ const CODE_MODELS: [ModelArtifact; 3] = [
         languages: CODE_LANGUAGES,
         screen_useful: None,
         healed_languages: &[],
+        contrast: None,
     },
     ModelArtifact {
         id: "qwen2.5-coder-7b",
@@ -322,6 +358,7 @@ const CODE_MODELS: [ModelArtifact; 3] = [
         languages: CODE_LANGUAGES,
         screen_useful: None,
         healed_languages: &[],
+        contrast: None,
     },
 ];
 

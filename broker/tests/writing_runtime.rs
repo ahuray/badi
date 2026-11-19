@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 #[ignore = "requires the pinned local writing model and runtime"]
 async fn installed_model_produces_continuations_and_spelling_replacements() {
     let directory = badi_broker::writing::data_directory().expect("model directory");
-    let (runtime, model, _) = badi_broker::writing::activate(directory, None)
+    let (runtime, model, _, _) = badi_broker::writing::activate(directory, None)
         .await
         .expect("verified runtime");
     eprintln!("model={}", model.filename);
@@ -99,7 +99,7 @@ async fn installed_model_produces_continuations_and_spelling_replacements() {
 #[tokio::test]
 #[ignore = "requires the pinned local writing model and runtime"]
 async fn installed_model_completes_partial_words_and_selected_languages() {
-    let (runtime, _, _) = badi_broker::writing::activate(
+    let (runtime, _, _, _) = badi_broker::writing::activate(
         badi_broker::writing::data_directory().expect("model directory"),
         None,
     )
@@ -212,7 +212,7 @@ fn digit_runs(text: &str) -> BTreeSet<String> {
 #[tokio::test]
 #[ignore = "requires the pinned local writing model and runtime"]
 async fn installed_model_never_shows_invented_numbers() {
-    let (runtime, _, _) = badi_broker::writing::activate(
+    let (runtime, _, _, _) = badi_broker::writing::activate(
         badi_broker::writing::data_directory().expect("model directory"),
         None,
     )
@@ -270,7 +270,7 @@ async fn installed_model_never_shows_invented_numbers() {
 #[tokio::test]
 #[ignore = "requires the pinned local writing model and runtime"]
 async fn installed_model_heals_trailing_spaces_within_the_explicit_budget() {
-    let (runtime, _, _) = badi_broker::writing::activate(
+    let (runtime, _, _, _) = badi_broker::writing::activate(
         badi_broker::writing::data_directory().expect("model directory"),
         None,
     )

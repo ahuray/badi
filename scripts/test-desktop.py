@@ -238,6 +238,44 @@ class DesktopTests(unittest.TestCase):
                 report = json.loads(output.getvalue())
                 self.assertEqual(report['rationale'], reasons)
                 self.assertEqual(report['recommended'], model['id'] if recommendation else None)
+                self.assertIsNone(report['contrast'], 'a model without a contrast model shows none')
+
+    def test_model_command_shows_the_english_contrast_model_of_the_one_in_use(self):
+        contrast = {'id': 'gemma-3-270m', 'name': 'Gemma 3 270M', 'filename': 'small.gguf',
+                    'download_bytes': 291543744}
+        model = {'id': 'gemma-3-1b', 'name': 'Gemma 3 1B', 'filename': 'model.gguf',
+                 'download_bytes': 806056736, 'license': 'Gemma', 'languages': ['en'],
+                 'screen_useful': 46, 'fits': True, 'contrast': contrast}
+        advice = {'recommended': model, 'hardware': {'memory': 8192}, 'rationale': ['fits'], 'catalog': [model]}
+        with tempfile.TemporaryDirectory() as temporary:
+            for installed, state, expected in (
+                    (False, None, 'Add it with: badi model use gemma-3-1b'),
+                    (True, 'attached', 'Gemma 3 270M sharpens the first English word.'),
+                    (True, 'no_memory', 'did not fit the memory available at startup'),
+                    (True, None, 'starts with the next broker restart')):
+                with self.subTest(installed=installed, state=state):
+                    small = Path(temporary) / 'small.gguf'
+                    small.unlink(missing_ok=True)
+                    if installed:
+                        small.write_bytes(b'x')
+                    with patch.object(desktop, 'MODEL_DIRECTORY', Path(temporary)), \
+                         patch.object(desktop, 'model_advice', return_value=advice), \
+                         patch.object(desktop, 'active_model_file', return_value='model.gguf'), \
+                         patch.object(desktop, 'active_contrast_state', return_value=state), \
+                         patch.object(desktop, 'control', return_value='{}'), \
+                         contextlib.redirect_stdout(io.StringIO()) as output:
+                        desktop.main(['model'])
+                    self.assertIn(expected, output.getvalue())
+            with patch.object(desktop, 'MODEL_DIRECTORY', Path(temporary)), \
+                 patch.object(desktop, 'model_advice', return_value=advice), \
+                 patch.object(desktop, 'active_model_file', return_value='model.gguf'), \
+                 patch.object(desktop, 'active_contrast_state', return_value='attached'), \
+                 patch.object(desktop, 'control', return_value='{}'), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                desktop.main(['model', '--json'])
+            self.assertEqual(json.loads(output.getvalue())['contrast'],
+                             {'id': 'gemma-3-270m', 'name': 'Gemma 3 270M', 'bytes': 291543744,
+                              'installed': True, 'state': 'attached', 'for': 'gemma-3-1b'})
 
     def test_an_unknown_form_of_any_command_changes_nothing(self):
         untouched = AssertionError('an unknown form must not reach the broker, settings or systemd')

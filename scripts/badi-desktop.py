@@ -1130,6 +1130,17 @@ def model_advice():
 
 def active_model_file():
     """The model file the running broker loaded, from its content-free startup line."""
+    return startup_value(r"provider=local_model model=([A-Za-z0-9_.-]{1,120}\.gguf) ")
+
+
+def active_contrast_state():
+    """What the running broker's writing model does for its English first
+    word: attached, not_installed, no_memory, failed or none_for_model."""
+    return startup_value(r"badi-broker: contrast runtime ([a-z_]{1,20})")
+
+
+def startup_value(pattern):
+    """The first group of the running broker's latest startup line matching `pattern`."""
     try:
         identifier = badi_install.unit_value(SERVICE, "InvocationID")
         if not re.fullmatch(r"[a-f0-9]{32}", identifier):
@@ -1140,7 +1151,7 @@ def active_model_file():
     except (OSError, subprocess.SubprocessError, RuntimeError):
         return None
     for line in reversed(journal.stdout.splitlines()):
-        found = re.match(r"provider=local_model model=([A-Za-z0-9_.-]{1,120}\.gguf) ", line)
+        found = re.match(pattern, line)
         if found:
             return found[1]
     return None
@@ -1157,9 +1168,15 @@ def model_report(settings):
                "active": model["filename"] == active, "recommended": model["id"] == recommended,
                "chosen": model["id"] == settings.get("writing_model")}
               for model in advice["catalog"]]
+    in_use = next((model for model in advice["catalog"] if model["filename"] == active), None)
+    contrast = (in_use or {}).get("contrast")
     return {"schema": "badi.models.v1", "recommended": recommended,
             "chosen": settings.get("writing_model"), "memory_mib": advice["hardware"]["memory"],
-            "rationale": advice["rationale"], "models": models}
+            "rationale": advice["rationale"], "models": models,
+            "contrast": None if contrast is None else {
+                "id": contrast["id"], "name": contrast["name"], "bytes": contrast["download_bytes"],
+                "installed": (MODEL_DIRECTORY / contrast["filename"]).is_file(),
+                "state": active_contrast_state(), "for": in_use["id"]}}
 
 
 def print_models(report):
@@ -1181,6 +1198,26 @@ def print_models(report):
               f"{score:15} {model['license']:20} {state}")
     print("Scores are blind-reviewed useful suggestions in Badi's 2026-10-17 development screen, "
           "not a qualification. Switch with: badi model use ID")
+    print_contrast(report.get("contrast"))
+
+
+CONTRAST_STATES = {
+    "attached": "sharpens the first English word",
+    "no_memory": "is installed but did not fit the memory available at startup",
+    "failed": "did not start; the journal says why (badi doctor)",
+}
+
+
+def print_contrast(contrast):
+    """The small model beside the active one, when it has one."""
+    if contrast is None:
+        return
+    if not contrast["installed"]:
+        print(f"English: {contrast['name']} ({contrast['bytes'] / 1e9:.2f} GB) would sharpen the first word of "
+              f"English suggestions. Add it with: badi model use {contrast['for']}")
+        return
+    state = CONTRAST_STATES.get(contrast["state"], "starts with the next broker restart")
+    print(f"English: {contrast['name']} {state}.")
 
 
 # The instruction model explicit revisions use (broker ADR 0012).
@@ -1276,6 +1313,7 @@ def use_model(model_id, accept_license):
         badi_install.record_model_terms(Path.home(), model)
     if not (MODEL_DIRECTORY / model["filename"]).is_file():
         badi_install.download_model(model, MODEL_DIRECTORY)
+    badi_install.offer_contrast_model(model, MODEL_DIRECTORY)
     update_settings(lambda document: document.update(writing_model=model["id"]))
     if not restart_service():
         raise RuntimeError("The model service did not answer after the restart. Run badi doctor.")

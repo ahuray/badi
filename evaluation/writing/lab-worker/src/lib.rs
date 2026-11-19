@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use badi_broker::model_selection::current_memory;
+use badi_broker::model_selection::{ModelArtifact, current_memory};
 use badi_broker::provider::{CompletionProvider, ProviderRequest};
 use badi_broker::semantic::client::ClientError;
 use badi_broker::semantic::provenance::verify_file;
@@ -269,9 +269,13 @@ pub async fn activate_with_options(
     threads: Option<InferenceThreads>,
 ) -> Result<OwnedRuntime, LabError> {
     let explicit_artifact = artifact.is_some();
-    let launch = match artifact {
-        Some(artifact) => artifact_launch(directory, artifact, threads).await,
-        None => installed_launch(directory, threads).await,
+    let (launch, installed) = match artifact {
+        Some(artifact) => artifact_launch(directory.clone(), artifact, threads)
+            .await
+            .map(|launch| (launch, None)),
+        None => installed_launch(directory.clone(), threads)
+            .await
+            .map(|(launch, model, threads)| (launch, Some((model, threads)))),
     }
     .map_err(|_| LabError::RuntimeUnavailable)?;
     let runtime = configure_launch(launch, prefill_batch, explicit_artifact, memory_map)
@@ -280,7 +284,23 @@ pub async fn activate_with_options(
         .await
         .map_err(|_| LabError::RuntimeUnavailable)?;
     runtime.set_language_preferences(&lab_language_preferences());
+    // `BADI_LAB_CONTRAST=on` adds the installed model's contrast runtime, as
+    // production does when it is installed; off by default, so earlier runs
+    // stay comparable. A run that asks for it and cannot have it stops.
+    if lab_contrast() {
+        let (model, threads) = installed.ok_or(LabError::RuntimeUnavailable)?;
+        let state = writing::attach_contrast(&runtime, directory, model, threads, true).await;
+        if state != writing::ContrastState::Attached {
+            eprintln!("badi-writing-lab: contrast runtime {state}");
+            return Err(LabError::RuntimeUnavailable);
+        }
+    }
     Ok(runtime)
+}
+
+/// Whether this run scores English first tokens contrastively.
+fn lab_contrast() -> bool {
+    std::env::var("BADI_LAB_CONTRAST").is_ok_and(|value| value == "on")
 }
 
 /// The language choices the Lab gives the provider: every language it
@@ -312,12 +332,14 @@ pub fn healed_languages(identity: &StableRuntimeIdentity) -> Vec<WritingLanguage
 async fn installed_launch(
     directory: PathBuf,
     selected: Option<InferenceThreads>,
-) -> Result<LlamaCppLaunch, WritingError> {
+) -> Result<(LlamaCppLaunch, ModelArtifact, usize), WritingError> {
     let (model, automatic) = writing::installed_model(&directory, None)?;
     if !writing::memory_fits(model, current_memory().available_mib) {
         return Err(WritingError::NoFit);
     }
-    writing::verify_launch(directory, model, selected_threads(automatic, selected)).await
+    let threads = selected_threads(automatic, selected);
+    let launch = writing::verify_launch(directory, model, threads).await?;
+    Ok((launch, model, threads))
 }
 
 /// An explicitly selected model artifact on the pinned runtime.

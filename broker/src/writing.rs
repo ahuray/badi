@@ -426,7 +426,7 @@ pub fn data_directory() -> Result<PathBuf, WritingError> {
 pub async fn activate(
     directory: PathBuf,
     chosen: Option<String>,
-) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
+) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport, ContrastState), WritingError> {
     start(directory, false, chosen).await
 }
 
@@ -438,7 +438,7 @@ pub async fn activate(
 pub async fn activate_contained(
     directory: PathBuf,
     chosen: Option<String>,
-) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
+) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport, ContrastState), WritingError> {
     start(directory, true, chosen).await
 }
 
@@ -446,10 +446,10 @@ async fn start(
     directory: PathBuf,
     contained: bool,
     chosen: Option<String>,
-) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport), WritingError> {
+) -> Result<(OwnedRuntime, ModelArtifact, WarmUpReport, ContrastState), WritingError> {
     let (model, threads) = installed_model(&directory, chosen.as_deref())?;
     wait_for_memory(model).await;
-    let launch = verify_launch(directory, model, threads).await?;
+    let launch = verify_launch(directory.clone(), model, threads).await?;
     let launch = if contained {
         launch.contained()
     } else {
@@ -460,7 +460,88 @@ async fn start(
     // request can queue behind this bounded job, and a failure only leaves the
     // first request cold.
     let warm_up = runtime.warm_up().await;
-    Ok((runtime, model, warm_up))
+    let contrast = attach_contrast(&runtime, directory, model, threads, contained).await;
+    Ok((runtime, model, warm_up, contrast))
+}
+
+/// The contrast runtime's launch: its own contract, and a larger prompt
+/// batch, since it reads each prompt whole while the writer does.
+pub const CONTRAST_PROFILE: crate::semantic::runtime::WritingProfile =
+    crate::semantic::runtime::WritingProfile {
+        launch_contract_id: "badi.writing.contrast.gemma3-270m.v1",
+        batch_size: 64,
+        ..crate::semantic::runtime::WritingProfile::PRODUCTION
+    };
+
+/// What became of a writing model's contrast runtime at activation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContrastState {
+    /// Scoring English first tokens beside the writing runtime.
+    Attached,
+    /// The writing model has no contrast model.
+    NoneForModel,
+    /// Its file is not installed (`badi model use` installs it).
+    NotInstalled,
+    /// Available memory is too short for it now; the writer runs alone.
+    NoMemory,
+    /// It did not verify or start; the writer runs alone.
+    Failed(String),
+}
+
+impl std::fmt::Display for ContrastState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Attached => formatter.write_str("attached"),
+            Self::NoneForModel => formatter.write_str("none_for_model"),
+            Self::NotInstalled => formatter.write_str("not_installed"),
+            Self::NoMemory => formatter.write_str("no_memory"),
+            Self::Failed(reason) => write!(formatter, "failed reason={reason}"),
+        }
+    }
+}
+
+/// Starts `model`'s contrast model (module [`crate::semantic::contrast`])
+/// beside `runtime` when it is installed under `directory` and fits the
+/// memory available now, and attaches it. Without it suggestions stay
+/// greedy, so no outcome here is an error.
+pub async fn attach_contrast(
+    runtime: &OwnedRuntime,
+    directory: PathBuf,
+    model: ModelArtifact,
+    threads: usize,
+    contained: bool,
+) -> ContrastState {
+    let Some(contrast) = model.contrast.copied() else {
+        return ContrastState::NoneForModel;
+    };
+    if !directory.join("models").join(contrast.filename).is_file() {
+        return ContrastState::NotInstalled;
+    }
+    if !memory_fits(contrast, current_memory().available_mib) {
+        return ContrastState::NoMemory;
+    }
+    let launch = match verify_launch(directory, contrast, threads).await {
+        Ok(launch) => launch,
+        Err(error) => return ContrastState::Failed(error.to_string()),
+    };
+    let launch = match launch.with_writing_profile(CONTRAST_PROFILE) {
+        Ok(launch) => launch.for_contrast(),
+        Err(error) => return ContrastState::Failed(error.to_string()),
+    };
+    let launch = if contained {
+        launch.contained()
+    } else {
+        launch
+    };
+    let started = match launch.spawn().await {
+        Ok(started) => started,
+        Err(error) => return ContrastState::Failed(error.to_string()),
+    };
+    let _ = started.warm_up().await;
+    match runtime.attach_contrast(Box::new(started)) {
+        Ok(()) => ContrastState::Attached,
+        Err(_) => ContrastState::Failed("already_attached".to_owned()),
+    }
 }
 
 async fn wait_for_memory(model: ModelArtifact) {
@@ -513,11 +594,16 @@ fn memory_retry_delay(
 
 /// Content-free startup lines, provider line first: log readers such as the
 /// Fcitx broker smoke lane require the log to begin with it. Only the memory
-/// wait lines can precede it, and only when startup had to wait.
+/// wait lines can precede it, and only when startup had to wait. The
+/// contrast line is the one `badi model` reads.
 #[must_use]
-pub fn activation_report(model: &ModelArtifact, warm_up: WarmUpReport) -> String {
+pub fn activation_report(
+    model: &ModelArtifact,
+    warm_up: WarmUpReport,
+    contrast: &ContrastState,
+) -> String {
     format!(
-        "provider=local_model model={} quantization={}\nbadi-broker: writing runtime warm-up {warm_up}",
+        "provider=local_model model={} quantization={}\nbadi-broker: writing runtime warm-up {warm_up}\nbadi-broker: contrast runtime {contrast}",
         model.filename, model.quantization
     )
 }
@@ -720,6 +806,10 @@ pub(crate) struct CompletionPlan<'a> {
     /// healed answer's first token does not extend that word
     /// ([`CompletionPlan::finished_word`]).
     pub(crate) finished_word_prompt: Option<&'a str>,
+    /// The first token the suggestion must start with, echo included: the
+    /// contrastive choice ([`crate::semantic::contrast`]) when it differs
+    /// from the model's own. The grammar writes it before anything else.
+    pub(crate) forced_start: Option<&'a str>,
 }
 
 /// Languages whose trailing ASCII space is healed for a model outside the
@@ -841,6 +931,7 @@ pub(crate) fn completion_plan<'a>(
         max_tokens,
         digits: request.before.chars().any(|c| ascii_digit(c).is_some()),
         finished_word_prompt: checked.then_some(context),
+        forced_start: None,
     }
 }
 
@@ -854,6 +945,7 @@ pub(crate) fn next_word_plan(request: &ProviderRequest) -> CompletionPlan<'_> {
         max_tokens: CONTINUATION_TOKENS,
         digits: request.before.chars().any(|c| ascii_digit(c).is_some()),
         finished_word_prompt: None,
+        forced_start: None,
     }
 }
 
@@ -964,6 +1056,23 @@ impl CompletionPlan<'_> {
         self.prompt.trim().is_empty() || self.prompt.ends_with(' ')
     }
 
+    /// Whether the first generated token starts the next word: after a
+    /// healed run of spaces, or with no echo after a word that cannot still
+    /// be half typed. An unknown word is healed and rewritten first, and a
+    /// lexicon word that begins a longer one (`the`, `rep`) may still grow,
+    /// even when it is the whole field.
+    pub(crate) fn first_token_starts_next_word(&self) -> bool {
+        if self.finished_word_prompt.is_some() {
+            return false;
+        }
+        match self.echo {
+            Some(echo) => !echo.is_empty() && echo.bytes().all(|byte| byte == b' '),
+            None => {
+                healing_prefix(self.prompt).is_none() && typed_lexicon_word(self.prompt).is_none()
+            }
+        }
+    }
+
     /// The plan that takes the typed lexicon word as finished, for a healed
     /// answer whose first token does not write the whole word: it spelled out
     /// something else from pieces (`and` became `andash`, `contains` became
@@ -981,6 +1090,7 @@ impl CompletionPlan<'_> {
             max_tokens: CONTINUATION_TOKENS,
             digits: self.digits,
             finished_word_prompt: None,
+            forced_start: None,
         })
     }
 
@@ -1004,9 +1114,13 @@ impl CompletionPlan<'_> {
         };
         // With an echo, generate at the earlier boundary, reproduce the exact
         // removed bytes, then let the streaming reader remove only that echo.
-        let echo = self.echo.map_or_else(String::new, |echo| {
-            serde_json::to_string(echo).expect("echo is serializable") + " "
-        });
+        // A forced start already begins with the echo it reproduces.
+        let echo = self
+            .forced_start
+            .or(self.echo)
+            .map_or_else(String::new, |start| {
+                serde_json::to_string(start).expect("echo is serializable") + " "
+            });
         payload["grammar"] = Value::String(format!("root ::= {echo}{class}*"));
         // Before a typed lexicon word, a lone space token let the model meet
         // the echo without writing the word (` ` then `finger` for ` fin`).

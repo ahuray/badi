@@ -51,7 +51,10 @@ promotes another.
   Harmful suggestions were 5 to 12 per model. Gemma 3 1B stays the
   recommendation; English is its weakest language, and Granite H-Tiny writes
   the best English and German but needs a larger machine. Differences of
-  about five points are within the noise of 60 to 78 requests.
+  about five points are within the noise of 60 to 78 requests. Gemma 3
+  270M beside it now chooses the first English token contrastively when
+  installed: its misses were generic lead-ins
+  ([contrastive first token](../../broker/README.md#contrastive-first-token)).
 
   Gemma 4 E2B base (i1-Q4_K_M, 3.43 GB) ran the same suites, settings and
   seed paired with a Gemma 3 1B rerun at the 28 W limit, every suggestion

@@ -86,6 +86,7 @@ enum Launcher {
 enum SocketRole {
     Writing,
     Revision,
+    Contrast,
 }
 
 impl SocketRole {
@@ -93,6 +94,7 @@ impl SocketRole {
         match self {
             Self::Writing => format!("llama-{pid}.sock"),
             Self::Revision => format!("llama-{pid}-revision.sock"),
+            Self::Contrast => format!("llama-{pid}-contrast.sock"),
         }
     }
 }
@@ -279,6 +281,14 @@ impl LlamaCppLaunch {
         self
     }
 
+    /// This launch as the contrast runtime: `llama-<pid>-contrast.sock`
+    /// beside the writing runtime's socket.
+    #[must_use]
+    pub const fn for_contrast(mut self) -> Self {
+        self.socket_role = SocketRole::Contrast;
+        self
+    }
+
     /// Launches through this executable's parent-death helper, so the runtime
     /// cannot outlive it. The executable must dispatch the helper's flag
     /// before it starts Tokio or any other thread. Linux only.
@@ -366,6 +376,7 @@ impl LlamaCppLaunch {
             endpoint: RuntimeAddress::Unix(socket_path),
             token_credential: token,
             identity,
+            contrast: std::sync::OnceLock::new(),
         };
         post_spawn_hook(runtime.process_id().ok_or(RuntimeError::MissingChild)?);
         if let Err(error) = self.confirm_artifacts_unchanged() {
@@ -577,9 +588,31 @@ pub struct OwnedRuntime {
     #[allow(dead_code)]
     token_credential: SecretToken,
     identity: StableRuntimeIdentity,
+    /// The contrast runtime this writing runtime owns, once attached: it
+    /// stops when this one does.
+    contrast: std::sync::OnceLock<Box<OwnedRuntime>>,
 }
 
 impl OwnedRuntime {
+    /// Gives this writing runtime its `contrast` runtime: its client then
+    /// scores English first tokens against it, and it stops with this one.
+    /// Returns it back when one is already attached.
+    pub fn attach_contrast(&self, contrast: Box<Self>) -> Result<(), Box<Self>> {
+        let client = contrast.client.clone();
+        self.contrast.set(contrast)?;
+        // Set once with the runtime above, so the client has none yet.
+        let _ = self.client.set_contrast(client);
+        Ok(())
+    }
+
+    /// The attached contrast runtime's process, while one is attached.
+    #[must_use]
+    pub fn contrast_process_id(&self) -> Option<u32> {
+        self.contrast
+            .get()
+            .and_then(|contrast| contrast.process_id())
+    }
+
     #[must_use]
     pub const fn client(&self) -> &SemanticClient {
         &self.client
@@ -685,6 +718,8 @@ impl OwnedRuntime {
     }
 
     fn terminate(&mut self) -> Result<ExitStatus, RuntimeError> {
+        // The contrast runtime is only useful beside this one.
+        drop(self.contrast.take());
         let child = self
             .child
             .get_mut()
@@ -984,7 +1019,7 @@ fn retire_dead_runtime_sockets(directory: &Path) -> Result<(), RuntimeError> {
         let Some(pid) = name
             .strip_prefix("llama-")
             .and_then(|rest| rest.strip_suffix(".sock"))
-            .map(|rest| rest.strip_suffix("-revision").unwrap_or(rest))
+            .map(crate::semantic::client::runtime_socket_pid)
             .and_then(|pid| pid.parse::<u32>().ok())
         else {
             continue;

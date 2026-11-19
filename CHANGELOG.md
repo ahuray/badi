@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Chose the first token of English suggestions contrastively with Gemma 3 1B: Gemma 3 270M, downloaded beside it by `badi model use gemma-3-1b` and the installer, runs as a second pinned runtime, and among the 1B's likely first tokens the one it finds least obvious starts the suggestion (55 against 46 useful on 100 held-out prefixes); `badi model` shows its state and the Lab adds it with `BADI_LAB_CONTRAST=on`.
+
 - Moved the broker's remaining inline unit-test modules (`ipc`, `protocol`, `metrics`, `policy`, `language`, `build_info`, `revision::runtime`, `engine::acceptance`, `engine::type_through` and `semantic::{process, client, wire, provenance}`) into `<module>/tests.rs` without changing any test; the binary root `main.rs` keeps its three tests inline.
 
 ## 0.3.0 (2026-11-18)

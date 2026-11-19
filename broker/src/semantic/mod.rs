@@ -4,6 +4,7 @@
 //! The writing provider activates them.
 
 pub mod client;
+pub(crate) mod contrast;
 pub mod pinned_runtime;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]

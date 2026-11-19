@@ -181,13 +181,13 @@ async fn start_provider(
                 let directory = directory
                     .map_or_else(badi_broker::writing::data_directory, Ok)
                     .map_err(model_error)?;
-                let (runtime, model, warm_up) =
+                let (runtime, model, warm_up, contrast) =
                     badi_broker::writing::activate_contained(directory, chosen_model)
                         .await
                         .map_err(model_error)?;
                 eprintln!(
                     "{}",
-                    badi_broker::writing::activation_report(&model, warm_up)
+                    badi_broker::writing::activation_report(&model, warm_up, &contrast)
                 );
                 Ok(Arc::new(runtime))
             }

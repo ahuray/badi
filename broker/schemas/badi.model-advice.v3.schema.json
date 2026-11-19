@@ -175,6 +175,10 @@
           "type": "array",
           "items": { "enum": ["en", "de", "fa", "fr", "es", "pt"] },
           "uniqueItems": true
+        },
+        "contrast": {
+          "description": "The small model that scores this model's first English token contrastively; same tokenizer, installed beside it, never a writing model itself. Absent when the model has none.",
+          "$ref": "#/$defs/artifactFields"
         }
       }
     },

@@ -836,6 +836,38 @@ class DownloadModelTests(unittest.TestCase):
                 self.download(temporary, data, self.Response(data, fail_after=8))
             self.assertEqual(os.listdir(temporary), [], 'no .part file after an interrupted download')
 
+    def test_a_models_contrast_model_is_fetched_only_when_missing_or_resized(self):
+        data = b'contrast-0123456789'
+        contrast = {**self.MODEL, 'filename': 'contrast.gguf', 'download_bytes': len(data),
+                    'sha256': hashlib.sha256(data).hexdigest()}
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch('urllib.request.urlopen', side_effect=lambda *_a, **_k: self.Response(data)) as fetch, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(badi_install.ensure_contrast_model(self.MODEL, temporary))
+            self.assertEqual(badi_install.ensure_contrast_model({**self.MODEL, 'contrast': contrast}, temporary),
+                             contrast)
+            self.assertEqual((Path(temporary) / 'contrast.gguf').read_bytes(), data)
+            badi_install.ensure_contrast_model({**self.MODEL, 'contrast': contrast}, temporary)
+            self.assertEqual(fetch.call_count, 1, 'a file of the pinned size is kept')
+            (Path(temporary) / 'contrast.gguf').write_bytes(b'short')
+            badi_install.ensure_contrast_model({**self.MODEL, 'contrast': contrast}, temporary)
+            self.assertEqual(fetch.call_count, 2, 'a wrong size downloads it again')
+            self.assertEqual((Path(temporary) / 'contrast.gguf').read_bytes(), data)
+            (Path(temporary) / 'contrast.gguf').write_bytes(b'x' * len(data))
+            badi_install.ensure_contrast_model({**self.MODEL, 'contrast': contrast}, temporary)
+            self.assertEqual(fetch.call_count, 3, 'so does the right size with the wrong hash')
+            self.assertEqual((Path(temporary) / 'contrast.gguf').read_bytes(), data)
+
+    def test_a_failed_contrast_download_only_warns(self):
+        contrast = {**self.MODEL, 'name': 'Helper', 'filename': 'contrast.gguf', 'download_bytes': 4, 'sha256': '0' * 64}
+        model = {**self.MODEL, 'id': 'gemma-3-1b', 'contrast': contrast}
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch('urllib.request.urlopen', side_effect=OSError('offline')), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertIsNone(badi_install.offer_contrast_model(model, temporary))
+            self.assertIn('badi model use gemma-3-1b', errors.getvalue())
+            self.assertEqual(os.listdir(temporary), [])
+
 
 class RunInstallerTests(unittest.TestCase):
     def run_failing(self, error):
