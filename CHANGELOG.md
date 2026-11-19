@@ -6,6 +6,10 @@ the [README](README.md) and the runbooks, open work in
 [docs/decisions](docs/decisions/). A behavior change adds one line under
 Unreleased in the same commit.
 
+## Unreleased
+
+- Moved the broker's remaining inline unit-test modules (`ipc`, `protocol`, `metrics`, `policy`, `language`, `build_info`, `revision::runtime`, `engine::acceptance`, `engine::type_through` and `semantic::{process, client, wire, provenance}`) into `<module>/tests.rs` without changing any test; the binary root `main.rs` keeps its three tests inline.
+
 ## 0.3.0 (2026-11-18)
 
 - Aligned the workspace (`Cargo.toml`), root package manifest (`package.json`), Arch `PKGBUILD`, Debian packaging documentation and `SECURITY.md` at `0.3.0`.
