@@ -170,7 +170,10 @@ class FcitxThemeTests(unittest.TestCase):
         font = unittest.mock.Mock(stdout='JetBrainsMono Nerd Font\n')
         with patch.object(installer.Path, 'home', return_value=home), \
              patch.dict(os.environ, {'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_STATE_HOME': str(home / '.local/state'),
-                                     'XDG_DATA_HOME': str(home / '.local/share')}), \
+                                     'XDG_DATA_HOME': str(home / '.local/share'),
+                                     # The terminal lists and configs stay inside the test home too.
+                                     'XDG_CONFIG_DIRS': str(home / 'etc/xdg'), 'XDG_DATA_DIRS': str(home / 'usr/share'),
+                                     'XDG_CURRENT_DESKTOP': 'Hyprland'}), \
              patch.object(installer, 'ipc', side_effect=lambda *call: answers[call]), \
              patch.object(installer.subprocess, 'run', side_effect=fake_run(enabled=True, font=font)), \
              patch('sys.argv', ['install-omarchy-ui.py']), \
@@ -202,6 +205,224 @@ class FcitxThemeTests(unittest.TestCase):
             colors = theme.palette({'background': background, 'foreground': foreground, 'accent': foreground})
             self.assertGreaterEqual(theme.contrast(colors['text'], background), 4.5 if
                                     theme.contrast(foreground, background) >= 4.5 else 1)
+
+    INSTALLED_TERMINALS = ('com.mitchellh.ghostty.desktop', 'Alacritty.desktop', 'alacritty.desktop',
+                           'kitty.desktop', 'foot.desktop', 'footclient.desktop')
+
+    TERMINAL_ENTRY = '[Desktop Entry]\nType=Application\nExec=sh\nCategories=System;TerminalEmulator;\n'
+
+    @staticmethod
+    def isolated_environment(home, desktop='Hyprland'):
+        """XDG paths inside the temporary home, so no test reads this machine's lists."""
+        return {'XDG_CONFIG_DIRS': str(home / 'etc/xdg'), 'XDG_DATA_HOME': str(home / '.local/share'),
+                'XDG_DATA_DIRS': str(home / 'usr/share'), 'XDG_CURRENT_DESKTOP': desktop}
+
+    def read_font(self, configs, family='JetBrainsMono Nerd Font', installed=INSTALLED_TERMINALS):
+        theme = installer.fcitx_theme()
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            applications = home / 'usr/share/applications'
+            applications.mkdir(parents=True)
+            for entry in installed:
+                (applications / entry).write_text(self.TERMINAL_ENTRY)
+            for relative, content in configs.items():
+                path = home / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if isinstance(content, bytes):
+                    path.write_bytes(content)
+                else:
+                    path.write_text(content)
+            with patch.object(theme.subprocess, 'run', return_value=unittest.mock.Mock(stdout=f'{family}\n')):
+                return theme.font(home, self.isolated_environment(home))
+
+    def test_font_reads_the_preferred_terminal_across_all_four_terminals(self):
+        cases = (
+            ('com.mitchellh.ghostty.desktop\n', {'.config/ghostty/config': 'font-size = 11\n'}, 11),
+            ('Alacritty.desktop\n', {
+                '.config/ghostty/config': 'font-size = 9\n',
+                '.config/alacritty/alacritty.toml': '[font]\nnormal = { family = "Mono" }\nsize = 12\n',
+            }, 12),
+            ('alacritty.desktop\n', {
+                '.config/ghostty/config': 'font-size = 9\n',
+                '.config/alacritty/alacritty.toml': '[font]\nsize = 13\n',
+            }, 13),
+            ('kitty.desktop\n', {
+                '.config/ghostty/config': 'font-size = 9\n',
+                '.config/kitty/kitty.conf': '# comment\nfont_size 14.0\n',
+            }, 14),
+            ('foot.desktop\n', {
+                '.config/ghostty/config': 'font-size = 9\n',
+                '.config/foot/foot.ini': 'font=JetBrainsMono Nerd Font:size=15\n\n[csd]\nfont=Sans:size=8\n',
+            }, 15),
+            ('footclient.desktop\n', {
+                '.config/ghostty/config': 'font-size = 9\n',
+                '.config/foot/foot.ini': 'font=JetBrainsMono Nerd Font:style=Regular:size=16\n',
+            }, 16),
+        )
+        for terminals, configs, expected in cases:
+            with self.subTest(terminals=terminals.strip(), expected=expected):
+                self.assertEqual(self.read_font({'.config/xdg-terminals.list': terminals, **configs}),
+                                 f'JetBrainsMono Nerd Font {expected}')
+
+    def test_font_skips_comments_and_unknown_entries_and_falls_back_to_ghostty_or_default(self):
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': '\n  # preferred later\norg.wezfurlong.wezterm.desktop\nkitty.desktop\n',
+            '.config/ghostty/config': 'font-size = 9\n',
+            '.config/kitty/kitty.conf': 'font_size 13\n',
+        }), 'JetBrainsMono Nerd Font 13')
+        self.assertEqual(self.read_font({'.config/ghostty/config': 'font-size = 9\n'}),
+                         'JetBrainsMono Nerd Font 9')
+        self.assertEqual(self.read_font({}), 'JetBrainsMono Nerd Font 10')
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': '# only unknown\norg.wezfurlong.wezterm.desktop\n',
+            '.config/ghostty/config': 'font-size = 9\n',
+        }), 'JetBrainsMono Nerd Font 9')
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'org.wezfurlong.wezterm.desktop\n',
+        }), 'JetBrainsMono Nerd Font 10')
+
+    def test_font_follows_xdg_terminal_execs_own_list_order(self):
+        # Stock Omarchy: no user list, the packaged Hyprland list names foot.
+        self.assertEqual(self.read_font({
+            'usr/share/xdg-terminal-exec/hyprland-xdg-terminals.list': 'foot.desktop\n',
+            '.config/foot/foot.ini': 'font=JetBrainsMono Nerd Font:size=14\n',
+            '.config/ghostty/config': 'font-size = 9\n',
+        }), 'JetBrainsMono Nerd Font 14')
+        # The user's list comes first, and the desktop's own list before the shared one.
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'foot.desktop\n',
+            '.config/hyprland-xdg-terminals.list': 'kitty.desktop\n',
+            'usr/share/xdg-terminal-exec/hyprland-xdg-terminals.list': 'foot.desktop\n',
+            '.config/kitty/kitty.conf': 'font_size 12\n',
+            '.config/foot/foot.ini': 'font=Mono:size=14\n',
+        }), 'JetBrainsMono Nerd Font 12')
+        # A terminal that is not installed, and an exclusion line, are passed over.
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': '-com.mitchellh.ghostty.desktop\nkitty.desktop\nfoot.desktop\n',
+            '.config/kitty/kitty.conf': 'font_size 12\n',
+            '.config/foot/foot.ini': 'font=Mono:size=14\n',
+        }, installed=('foot.desktop',)), 'JetBrainsMono Nerd Font 14')
+        # An installed terminal Badi cannot read is still the one that opens.
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'org.wezfurlong.wezterm.desktop\nkitty.desktop\n',
+            '.config/kitty/kitty.conf': 'font_size 12\n',
+            '.config/ghostty/config': 'font-size = 9\n',
+        }, installed=('org.wezfurlong.wezterm.desktop', 'kitty.desktop')), 'JetBrainsMono Nerd Font 9')
+
+    def test_an_entry_xdg_terminal_exec_would_not_run_is_passed_over(self):
+        configs = {
+            '.config/xdg-terminals.list': 'foot.desktop\nkitty.desktop\n',
+            '.config/kitty/kitty.conf': 'font_size 14\n',
+            '.config/foot/foot.ini': 'font=Mono:size=15\n',
+        }
+        for leftover in ('TryExec=badi-no-such-terminal\nExec=sh\n', 'Hidden=true\nExec=sh\n',
+                         'Categories=Utility;\nExec=sh\n', 'Exec=badi-no-such-terminal --server\n'):
+            with self.subTest(leftover=leftover.splitlines()[0]):
+                foot = '[Desktop Entry]\n' + leftover + ('' if leftover.startswith('Categories')
+                                                         else 'Categories=TerminalEmulator;\n')
+                self.assertEqual(self.read_font({**configs, '.local/share/applications/foot.desktop': foot}),
+                                 'JetBrainsMono Nerd Font 14')
+
+    def test_foot_reads_the_system_config_without_a_user_one(self):
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'foot.desktop\n',
+            'etc/xdg/foot/foot.ini': 'font=JetBrainsMono Nerd Font:size=14\n',
+            '.config/ghostty/config': 'font-size = 9\n',
+        }), 'JetBrainsMono Nerd Font 14')
+
+    def test_the_last_size_setting_wins(self):
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'foot.desktop\n',
+            '.config/foot/foot.ini': 'font=JetBrainsMono Nerd Font:size=16\nfont=Iosevka\n',
+            '.config/ghostty/config': 'font-size = 9\n',
+        }), 'JetBrainsMono Nerd Font 9')
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'kitty.desktop\n',
+            '.config/kitty/kitty.conf': 'font_size 12\nfont_size 48\n',
+            '.config/ghostty/config': 'font-size = 9\n',
+        }), 'JetBrainsMono Nerd Font 9')
+
+    def test_alacritty_reads_its_config_where_alacritty_finds_it(self):
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'Alacritty.desktop\n',
+            '.config/alacritty.toml': '[font]\nsize = 16\n',
+            '.config/ghostty/config': 'font-size = 9\n',
+        }), 'JetBrainsMono Nerd Font 16')
+
+    def test_kitty_layers_the_users_config_over_the_systems(self):
+        # Omarchy's template leaves the size to /etc/xdg/kitty/kitty.conf.
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'kitty.desktop\n',
+            '.config/kitty/kitty.conf': 'include theme.conf\n# font_size 12\n',
+            'etc/xdg/kitty/kitty.conf': 'font_size        9.0\n',
+            '.config/ghostty/config': 'font-size = 13\n',
+        }), 'JetBrainsMono Nerd Font 9')
+        # A size of the user's own overrides it.
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'kitty.desktop\n',
+            '.config/kitty/kitty.conf': 'font_size 11\n',
+            'etc/xdg/kitty/kitty.conf': 'font_size 9.0\n',
+        }), 'JetBrainsMono Nerd Font 11')
+
+    def test_font_rounds_decimal_sizes_and_ignores_out_of_range_values(self):
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'kitty.desktop\n',
+            '.config/kitty/kitty.conf': 'font_size 10.5\n',
+        }), 'JetBrainsMono Nerd Font 11')
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'kitty.desktop\n',
+            '.config/kitty/kitty.conf': 'font_size 9.6\n',
+        }), 'JetBrainsMono Nerd Font 10')
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'Alacritty.desktop\n',
+            '.config/alacritty/alacritty.toml': '[font]\nsize = 11.4\n',
+        }), 'JetBrainsMono Nerd Font 11')
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'foot.desktop\n',
+            '.config/foot/foot.ini': 'font=JetBrainsMono Nerd Font:size=5.0\n',
+        }), 'JetBrainsMono Nerd Font 5')
+        self.assertEqual(self.read_font({
+            '.config/xdg-terminals.list': 'com.mitchellh.ghostty.desktop\n',
+            '.config/ghostty/config': 'font-size = 40.0\n',
+        }), 'JetBrainsMono Nerd Font 40')
+        for invalid in ('4', '41', '0', '-9', '120'):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(self.read_font({
+                    '.config/xdg-terminals.list': 'kitty.desktop\n',
+                    '.config/kitty/kitty.conf': f'font_size {invalid}\n',
+                    '.config/ghostty/config': 'font-size = 9\n',
+                }), 'JetBrainsMono Nerd Font 9')
+        self.assertEqual(self.read_font({'.config/ghostty/config': 'font-size = 99\n'}),
+                         'JetBrainsMono Nerd Font 10')
+
+    def test_font_falls_back_on_malformed_or_unreadable_configs_without_raising(self):
+        for broken in ('[font\nsize = ???\n', 'font = "not a table"\n', '[font]\nsize = true\n',
+                       '[font]\nsize = nan\n', b'\xff\xfe\x00\x80'):
+            with self.subTest(broken=broken):
+                self.assertEqual(self.read_font({
+                    '.config/xdg-terminals.list': 'Alacritty.desktop\n',
+                    '.config/alacritty/alacritty.toml': broken,
+                    '.config/ghostty/config': 'font-size = 9\n',
+                }), 'JetBrainsMono Nerd Font 9')
+        if os.geteuid() != 0:
+            theme = installer.fcitx_theme()
+            with tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary)
+                (home / '.config').mkdir()
+                (home / '.config/xdg-terminals.list').write_text('kitty.desktop\n')
+                unreadable = home / '.config/kitty/kitty.conf'
+                unreadable.parent.mkdir()
+                unreadable.write_text('font_size 14\n')
+                unreadable.chmod(0)
+                try:
+                    environment = self.isolated_environment(home)
+                    applications = home / 'usr/share/applications'
+                    applications.mkdir(parents=True)
+                    (applications / 'kitty.desktop').write_text(self.TERMINAL_ENTRY)
+                    with patch.object(theme.subprocess, 'run', return_value=unittest.mock.Mock(stdout='Mono\n')):
+                        self.assertEqual(theme.font(home, environment), 'Mono 10')
+                finally:
+                    unreadable.chmod(0o600)
 
 
 if __name__ == '__main__':

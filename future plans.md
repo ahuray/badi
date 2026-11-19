@@ -506,11 +506,9 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
       floating-terminal installer, menu entries for settings and removal,
       default keys for the session helper's `pause-toggle` and
       `open-settings` portal shortcuts, and theme colours for the preview.
-- [ ] Leftovers of the 2026-10-20 Omarchy 4.0.6 audit: the panel's Fcitx
-      theme takes its font size only from Ghostty's config (`fcitx-theme.py`),
-      each bar instance registers the `badi-writing` IPC target (several
-      monitors may duplicate it), and no non-US Fcitx keyboard group has been
-      tried.
+- [ ] Leftovers of the 2026-10-20 Omarchy 4.0.6 audit: each bar instance
+      registers the `badi-writing` IPC target (several monitors may duplicate
+      it), and no non-US Fcitx keyboard group has been tried.
 - [ ] Signed updates. The broker service is already sandboxed: no network,
       a read-only home except its own two directories, only `badi/` in the
       runtime directory, a read-only model directory and no core dumps
