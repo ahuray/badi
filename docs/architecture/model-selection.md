@@ -83,9 +83,9 @@ promotes another.
   | Qwen3 0.6B (compact) | 15 | 23 | 3 | 17 | 20 | 10 | 14 (3/1/3/7/0) | 223 | 26 | 1.0 GB |
 
   Qwen3.5 0.8B base lifted useful full additions in all five languages (79
-  against 48, on-time 78 against 47; shown p50 217 against 224 ms) because
-  the post-trained Qwen3 0.6B abstains heavily in German (34 of 67), but
-  Qwen3.5 0.8B base also raised harmful additions in English, French and
+  against 48, on-time 78 against 47; shown p50 217 against 224 ms) at nearly
+  identical display counts (214 against 216 shown; 88 against 116 unhelpful
+  shown), but it also raised harmful additions in English, French and
   Portuguese (19 against 14 overall), re-reads the prompt after a backspace
   and has only a community base GGUF, so Qwen3 0.6B stays the compact
   choice unless the user trades the harm increase for the usefulness gain.
