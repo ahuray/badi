@@ -631,9 +631,6 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 
 ### Engineering upkeep
 
-- [ ] Broker structure left by the review: move the remaining inline
-      tests into `<module>/tests.rs` when those files are next touched.
-
 - [ ] `adapters/shell/test-preview.py` failed once in CI in
       `test_the_display_timer_runs_only_while_a_preview_is_held`: the PTY
       never emitted `HOOK:`, only a cleared line (#133, no shell change).
