@@ -580,9 +580,22 @@ suggestion, acceptance, update and uninstall, leaving nothing behind.
 - [ ] Offer Granite 4.0 H-Tiny base on machines that fit it: best English and
       German in that screen, but 7.7 GB peak and 96 of 325 requests over
       550 ms here.
-- [ ] Compare Qwen3.5 0.8B base with Qwen3 0.6B as the compact choice (battery,
-      no AVX2): it was the fastest screened model (p95 301 ms, no miss) at 35%
-      useful against Gemma 3 1B's 46%, but Qwen3 0.6B was not screened.
+- [ ] Compact model choice (battery, no AVX2): in a paired 325-request
+      [European-language screen](docs/architecture/model-selection.md) on
+      2026-11-19 (`production_boundary`, four threads, all languages healed,
+      15 W PL1, blind per-language review; text-only evidence in
+      `~/.local/state/badi/archive/compact-comparison-2026-11-19`),
+      Qwen3.5 0.8B base (`mradermacher/Qwen3.5-0.8B-Base-GGUF`, Q4_K_M,
+      0.53 GB) beat the catalog's Qwen3 0.6B (`Qwen/Qwen3-0.6B-GGUF`, Q8_0,
+      0.64 GB) on useful additions in all five languages (79 vs 48, 24% vs
+      15%: en 28 vs 23%, de 15 vs 3%, fr 30 vs 17%, es 32 vs 20%, pt 17 vs
+      10%; p50 221 vs 223 ms, 25 vs 26 cold battery-`quiet` misses, 1.0 GB
+      peak), but raised harmful additions from 14 to 19 (en 3 → 4, fr 3 → 5,
+      pt 0 → 3; de 1 → 1, es 7 → 6), re-reads the prompt after a backspace,
+      and has no official base GGUF. Qwen3 0.6B stays in
+      `broker/src/model_selection.rs` under the no-per-language-harm-increase
+      rule until a user decision accepts that trade-off or a lower-harm
+      sub-1B base model appears.
 - [ ] Spelling for Persian, which has no cased letters and needs its own word
       shape rather than the European one.
 - [ ] Screen the base models no Lab run has seen yet (checked 2026-10-24; no

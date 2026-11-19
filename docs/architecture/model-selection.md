@@ -17,8 +17,9 @@ promotes another.
   fit, within the tier the device allows (compact on battery or without
   AVX2), it recommends the highest `screen_useful`: the blind-reviewed
   useful suggestions of 135 development requests in the 2026-10-17 Lab
-  screen (Gemma 3 1B 46, Llama 3.2 1B 41, Qwen3 1.7B 33; Qwen3 0.6B was not
-  screened and stays the compact choice). That is a screening score, not the
+  screen (Gemma 3 1B 46, Llama 3.2 1B 41, Qwen3 1.7B 33; Qwen3 0.6B did not
+  take part in that 135-case screen and stays the compact choice after the
+  paired compact comparison below). That is a screening score, not the
   qualification below. The advice lists the whole catalog, each entry marked
   whether it fits, for `badi model` and the panel's Model row, and each
   entry's `healed_languages`, the languages its own review heals.
@@ -67,6 +68,28 @@ promotes another.
   by user decision (2026-10-20) the catalog leaves it out until a model with
   a real gain reopens the question. Runs:
   `output/writing/2026-10-19-gemma4-screen/`.
+
+  On 2026-11-19, the compact catalog choice (`Qwen/Qwen3-0.6B-GGUF`, Q8_0,
+  0.64 GB) ran the same 325 requests, settings (`production_boundary`, four
+  threads, every language healed, seed 42) and blind per-language review
+  paired with Qwen3.5 0.8B base (`mradermacher/Qwen3.5-0.8B-Base-GGUF`,
+  Q4_K_M, 0.53 GB) at the 15 W PL1 (185 requests per model on AC `balanced`,
+  zero misses; 140 on battery `quiet`, where `intel_lpmd` and `epp=power`
+  slowed cold launches equally):
+
+  | Model | All | en | de | fr | es | pt | Harmful (en/de/fr/es/pt) | p50 ms | > 550 ms | Peak |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | Qwen3.5 0.8B base | 24 | 28 | 15 | 30 | 32 | 17 | 19 (4/1/5/6/3) | 221 | 25 | 1.0 GB |
+  | Qwen3 0.6B (compact) | 15 | 23 | 3 | 17 | 20 | 10 | 14 (3/1/3/7/0) | 223 | 26 | 1.0 GB |
+
+  Qwen3.5 0.8B base lifted useful full additions in all five languages (79
+  against 48, on-time 78 against 47; shown p50 217 against 224 ms) because
+  the post-trained Qwen3 0.6B abstains heavily in German (34 of 67), but
+  Qwen3.5 0.8B base also raised harmful additions in English, French and
+  Portuguese (19 against 14 overall), re-reads the prompt after a backspace
+  and has only a community base GGUF, so Qwen3 0.6B stays the compact
+  choice unless the user trades the harm increase for the usefulness gain.
+  Text-only evidence: `~/.local/state/badi/archive/compact-comparison-2026-11-19`.
 - **The larger-model bench** (2026-10-18/19, [llm-bench](../../evaluation/llm-bench/README.md))
   scored 2–4B base models 1–5 on 30 synthetic German and English prompts
   and timed typing requests with Badi's own launch:
