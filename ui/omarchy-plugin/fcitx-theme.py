@@ -10,9 +10,11 @@ user chose is left alone.
 """
 
 import argparse
+import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +24,13 @@ THEME_NAME = "badi-omarchy"
 MARKER = "# Written by Badi's fcitx-theme.py; delete this file to use Fcitx's own theme."
 MIN_CONTRAST = 4.5
 HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+TERMINALS = {
+    "com.mitchellh.ghostty.desktop": "ghostty",
+    "alacritty.desktop": "alacritty",
+    "kitty.desktop": "kitty",
+    "foot.desktop": "foot",
+    "footclient.desktop": "foot",
+}
 
 
 def rgb(color):
@@ -155,7 +164,193 @@ Bottom=5
 """
 
 
-def font(home):
+def valid_size(value):
+    """An integer font size in 5..40, rounded from an int, float or numeric text."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    # Half points round up, as people read them (10.5 is 11, not 10).
+    size = math.floor(number + 0.5)
+    return size if 5 <= size <= 40 else None
+
+
+def read_lines(path):
+    """Lines of a UTF-8 config file, or empty when missing or unreadable."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").splitlines() if path.is_file() else []
+    except OSError:
+        return []
+
+
+def config_home(home, environ):
+    return Path(environ.get("XDG_CONFIG_HOME") or home / ".config")
+
+
+def search_dirs(value, default):
+    """The absolute directories of a colon-separated XDG search path."""
+    return [Path(entry) for entry in (value or default).split(":") if entry.startswith("/")]
+
+
+def ghostty_size(home, environ):
+    size = None
+    for line in read_lines(config_home(home, environ) / "ghostty/config"):
+        match = re.match(r"\s*font-size\s*=\s*([+-]?\d+(?:\.\d+)?)\s*$", line)
+        if match:
+            # The last setting wins, even one Badi cannot use.
+            size = valid_size(match.group(1))
+    return size
+
+
+def alacritty_size(home, environ):
+    user = config_home(home, environ)
+    directories = [user, *search_dirs(environ.get("XDG_CONFIG_DIRS"), "/etc/xdg")]
+    # Alacritty's own search: the first of these files that exists.
+    path = next((path for directory in directories
+                 for path in (directory / "alacritty/alacritty.toml", directory / "alacritty.toml")
+                 if path.is_file()), None)
+    try:
+        if path is None:
+            return None
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    font_table = config.get("font")
+    if not isinstance(font_table, dict):
+        return None
+    raw = font_table.get("size")
+    return valid_size(raw) if isinstance(raw, (int, float)) else None
+
+
+def first_config(home, environ, relative, explicit=None):
+    """The one config file a terminal loads: the first that exists in the
+    user's then the system's config directories, never merged."""
+    candidates = [config_home(home, environ) / relative,
+                  *(directory / relative for directory in search_dirs(environ.get("XDG_CONFIG_DIRS"), "/etc/xdg"))]
+    if explicit:
+        candidates.insert(0, Path(explicit) / Path(relative).name)
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def kitty_configs(home, environ):
+    """Every kitty.conf Kitty applies, lowest priority first: the system's,
+    then the user's, whose keys override them (Omarchy keeps its defaults in
+    /etc/xdg/kitty). KITTY_CONFIG_DIRECTORY replaces them all."""
+    if explicit := environ.get("KITTY_CONFIG_DIRECTORY"):
+        return [Path(explicit) / "kitty.conf"]
+    system = search_dirs(environ.get("XDG_CONFIG_DIRS"), "/etc/xdg")
+    return [*(directory / "kitty/kitty.conf" for directory in reversed(system)),
+            config_home(home, environ) / "kitty/kitty.conf"]
+
+
+def kitty_size(home, environ):
+    size = None
+    for line in (line for path in kitty_configs(home, environ) for line in read_lines(path)):
+        match = re.match(r"\s*font_size\s+([+-]?\d+(?:\.\d+)?)\s*$", line)
+        if match:
+            size = valid_size(match.group(1))
+    return size
+
+
+def foot_size(home, environ):
+    size = None
+    section = "main"
+    path = first_config(home, environ, "foot/foot.ini")
+    for line in read_lines(path) if path else []:
+        header = re.match(r"\s*\[([^\]]+)\]\s*(?:#.*)?$", line)
+        if header:
+            section = header.group(1).strip()
+            continue
+        if section != "main":
+            continue
+        match = re.match(r"\s*font\s*=\s*(.+)$", line)
+        if not match:
+            continue
+        primary = match.group(1).split("#", 1)[0].split(",", 1)[0]
+        # Each font= line replaces the last one whole, size included.
+        size = None
+        for attribute in primary.split(":")[1:]:
+            sized = re.match(r"\s*size\s*=\s*([+-]?\d+(?:\.\d+)?)\s*$", attribute)
+            if sized and (parsed := valid_size(sized.group(1))) is not None:
+                size = parsed
+    return size
+
+
+TERMINAL_SIZES = {
+    "ghostty": ghostty_size,
+    "alacritty": alacritty_size,
+    "kitty": kitty_size,
+    "foot": foot_size,
+}
+
+
+def terminal_lists(home, environ):
+    """xdg-terminal-exec's preference lists, most preferred first: each config
+    directory, then each data directory's xdg-terminal-exec folder, with the
+    current desktop's own list before the shared one."""
+    desktops = [name for name in environ.get("XDG_CURRENT_DESKTOP", "").lower().split(":") if name]
+    names = [f"{desktop}-xdg-terminals.list" for desktop in desktops] + ["xdg-terminals.list"]
+    configs = [config_home(home, environ), *search_dirs(environ.get("XDG_CONFIG_DIRS"), "/etc/xdg")]
+    data = search_dirs(environ.get("XDG_DATA_DIRS"), "/usr/local/share:/usr/share")
+    return ([directory / name for directory in configs for name in names]
+            + [directory / "xdg-terminal-exec" / name for directory in data for name in names])
+
+
+def installed(entry, home, environ):
+    """Whether xdg-terminal-exec would run this desktop entry: its first file
+    is a terminal emulator that is not hidden and whose TryExec is found."""
+    if "/" in entry:
+        return False
+    data_home = Path(environ.get("XDG_DATA_HOME") or home / ".local/share")
+    directories = [data_home, *search_dirs(environ.get("XDG_DATA_DIRS"), "/usr/local/share:/usr/share")]
+    path = next((directory / "applications" / entry for directory in directories
+                 if (directory / "applications" / entry).is_file()), None)
+    if path is None:
+        return False
+    fields, section = {}, None
+    for line in read_lines(path):
+        line = line.strip()
+        if line.startswith("["):
+            section = line
+        elif section == "[Desktop Entry]" and "=" in line and not line.startswith("#"):
+            key, value = line.split("=", 1)
+            fields.setdefault(key.strip(), value.strip())
+    search = environ.get("PATH", os.defpath)
+    try_exec = fields.get("TryExec")
+    command = fields.get("Exec", "").split()
+    return (fields.get("Hidden", "").lower() != "true"
+            and "TerminalEmulator" in fields.get("Categories", "").split(";")
+            and bool(command) and shutil.which(command[0].strip('"'), path=search) is not None
+            and not (try_exec and shutil.which(try_exec, path=search) is None))
+
+
+def preferred_terminal(home, environ):
+    """The terminal xdg-terminal-exec opens, when Badi knows it: the first
+    installed entry of its lists; `-` and `+` lines only filter fallbacks."""
+    for path in terminal_lists(home, environ):
+        for line in read_lines(path):
+            entry = line.strip().split(":", 1)[0].strip()
+            if not entry or entry.startswith(("#", "-", "+")) or not installed(entry, home, environ):
+                continue
+            return TERMINALS.get(entry.lower())
+    return None
+
+
+def terminal_size(home, environ):
+    """The preferred terminal's font size, falling back to Ghostty, then 10."""
+    terminal = preferred_terminal(home, environ)
+    if terminal and (size := TERMINAL_SIZES[terminal](home, environ)) is not None:
+        return size
+    if terminal != "ghostty" and (size := ghostty_size(home, environ)) is not None:
+        return size
+    return 10
+
+
+def font(home, environ=os.environ):
     """The Omarchy font at the terminal's size: the panel mostly appears in
     terminals, beside their text."""
     try:
@@ -163,15 +358,8 @@ def font(home):
                                 timeout=5, check=True).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         family = ""
-    size = 10
-    ghostty = home / ".config/ghostty/config"
-    if ghostty.is_file():
-        for line in ghostty.read_text(errors="replace").splitlines():
-            match = re.match(r"\s*font-size\s*=\s*(\d{1,2})(?:\.\d+)?\s*$", line)
-            if match:
-                size = int(match.group(1))
     family = family if re.fullmatch(r"[\w .+-]{1,80}", family) else "Sans"
-    return f"{family} {size}"
+    return f"{family} {terminal_size(home, environ)}"
 
 
 def files(home, environ=os.environ):
@@ -183,7 +371,7 @@ def files(home, environ=os.environ):
     written = [(data / "fcitx5/themes" / THEME_NAME / "theme.conf", theme(colors))]
     classicui = config / "fcitx5/conf/classicui.conf"
     if not classicui.exists() or classicui.read_text(errors="replace").startswith(MARKER):
-        face = font(home)
+        face = font(home, environ)
         written.append((classicui, f'{MARKER}\nTheme={THEME_NAME}\nDarkTheme={THEME_NAME}\n'
                                    f'UseDarkTheme=False\nFont="{face}"\nMenuFont="{face}"\n'))
     else:
