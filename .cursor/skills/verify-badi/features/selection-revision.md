@@ -4,7 +4,8 @@ Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar. The
 
 ## Sub-features
 
-- `revision-grammar` shows a grammar fix of the selection, or "Badi found nothing to change".
+- `revision-grammar` shows a grammar fix of the selection, or that nothing changed. An Fcitx field says "Badi found nothing to change". Neovim records `no_change` and does not print that sentence.
+  Obsidian's status line says "Badi · no change · Ctrl+Shift+Space tries another".
 - `revision-refine` replaces the shown fix with a refined wording on the next chord.
 - `revision-synonym` offers a synonym after refine when the selection is one to three words, and another synonym on each further press. A longer selection returns to grammar instead. Synonyms are one at a time, not a numbered list, in Fcitx, Obsidian and Neovim.
 - `revision-apply` replaces exactly the selection on Tab. Fcitx records `revision_confirmed` after the read-back; the editor clients report `commit.applied` after their native transaction and read-back.
@@ -14,7 +15,9 @@ Select one line of text and press Ctrl+Shift+Space: Badi checks its grammar. The
 ## How to get to it (user POV)
 
 - In an allowed Chromium-based app's plain text field, or a native exact field, select a line of disposable text with an error ("She dont know where is the station") and press Ctrl+Shift+Space. Press it again for a refined wording. On a short selection such as one word, press it again for a synonym, and again for another. A longer line's next press returns to grammar. A selection that is already correct shows "Badi found nothing to change", and the next press continues to the next mode of that same selection. Escape or an edit starts the cycle over.
-- Obsidian uses the same keys on one selected line, and also the grammar, refinement and synonym commands in its command palette. Neovim uses characterwise Visual mode in an allowed prose buffer. Their preview marks `[-removed]` and `[+added]`, and Tab applies one native undo transaction. See the [editor contract](../../../../adapters/shared/README.md#obsidian-selection-revision) and [Neovim contract](../../../../adapters/neovim/README.md). Bash and Writer do not revise selections through their editor integrations.
+- Obsidian uses the same keys on one selected line, and also the grammar, refinement and synonym commands in its command palette. Neovim uses characterwise Visual mode in an allowed prose buffer. Their preview marks `[-removed]` and `[+added]`, and Tab applies one native undo transaction. Neovim records `no_change` and does not print the Fcitx sentence.
+  When nothing changes, Obsidian's status line says "Badi · no change · Ctrl+Shift+Space tries another".
+  See the [editor contract](../../../../adapters/shared/README.md#obsidian-selection-revision) and [Neovim contract](../../../../adapters/neovim/README.md). Bash and Writer do not revise selections through their editor integrations.
 - The first request starts the revision model and takes a few seconds. The model stops after ten idle minutes.
 - `badi revise` reports model-file presence and size validity; `badi revise install` verifies its pinned hash and repairs or downloads it when needed. The panel's Revisions row offers the same action. File presence is not runtime readiness.
 - An unavailable model points to `badi revise`; after a refusal, Neovim's next chord starts with grammar. Only a successful result or explicit `no_change` advances the grammar/refine/synonym cycle.
@@ -29,7 +32,8 @@ Preconditions:
 
 - **Grammar fix and apply.** Select the sentence, press the chord, check the marked change in Fcitx's candidate list, press Tab. The Fcitx trace records `commit` events whose `reason` is `revision_dispatched_unverified`, then `revision_confirmed`, and the field reads the fixed sentence.
 - **Refine, synonym, and dismiss.** On a one-to-three-word selection, press the chord three times (grammar, refine, synonym), then Escape. The field and the selection are unchanged. On a longer line, the second press is refine and the next returns to grammar.
-- **Nothing to change.** A correct selection shows "Badi found nothing to change" (`no_change`). That answer does not restart the cycle: the next chord asks for the next mode of the same selection.
+- **Nothing to change.** A correct selection's broker answer is `no_change`. That answer does not restart the cycle: the next chord asks for the next mode of the same selection. Fcitx shows "Badi found nothing to change". Neovim records `no_change` and does not print that sentence.
+  Obsidian's status line says "Badi · no change · Ctrl+Shift+Space tries another".
 - **Refusal.** In a password field the trace shows no `revision.request` and no key lines.
 - **Editor source and broker boundary.** `npm run editors:check` and `npm run editors:integration` cover exact selection binding, cancellation, stale grants and native undo with the scripted and phrase-provider paths. They do not verify the local model or a terminal window.
 - **Actual Obsidian editor.** After building the release broker, `node adapters/obsidian/live.mjs --headless` exercises an isolated real Obsidian application with deterministic revisions; `--headless --local` instead uses installed local model assets. The runner checks the full marked preview, whole replacement, undo, synonyms, stale selection and clipped-preview refusal. Results and captures are saved under `output/playwright/`. Neither headless lane proves an installed Wayland plugin. See the current [tested boundary](../../../../adapters/shared/README.md#obsidian-selection-revision).

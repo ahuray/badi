@@ -30,5 +30,5 @@ Preconditions:
 
 - Chromium's share dialog previews the screen through a live portal stream, so the hold starts when the picker closes, before Share is pressed. That is intended: the preview is a capture too.
 - The picker takes focus, so a ghost visible before the share is usually gone before the hold starts. Withdrawing a visible suggestion is proven by the broker test, not by this trial.
-- Only xdg-desktop-portal-hyprland streams were tried. Other portal backends' node names are not checked.
+- A video source is a share when its node name starts with `xdg-desktop-portal-` or its media name starts with `xdph-streaming-`. Desktop trials used xdg-desktop-portal-hyprland. Other portal backends were not tried on a desktop.
 - A share hold makes `paused` true in `badictl status` although settings are not paused; read `desktop.screen_share`, not `paused`, to tell a hold from a pause.
