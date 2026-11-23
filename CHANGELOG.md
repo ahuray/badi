@@ -8,6 +8,8 @@ Unreleased in the same commit.
 
 ## Unreleased
 
+- Read the Omarchy Fcitx panel theme's font size in `fcitx-theme.py` from the terminal `xdg-terminal-exec` opens (its first runnable entry, in its own list order) and the config that terminal loads (Ghostty, Alacritty, Kitty with its system file, or foot), falling back to Ghostty's config and then 10.
+
 - Moved the broker's remaining inline unit-test modules (`ipc`, `protocol`, `metrics`, `policy`, `language`, `build_info`, `revision::runtime`, `engine::acceptance`, `engine::type_through` and `semantic::{process, client, wire, provenance}`) into `<module>/tests.rs` without changing any test; the binary root `main.rs` keeps its three tests inline.
 
 ## 0.3.0 (2026-11-18)

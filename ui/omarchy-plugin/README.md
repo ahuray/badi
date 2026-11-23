@@ -155,10 +155,19 @@ names its backup and the restore command instead.
 Terminals, and any field without the grey overlay, show Badi's suggestion
 in Fcitx's panel. [`fcitx-theme.py`](fcitx-theme.py) dresses it in the
 current Omarchy theme: the theme background with Omarchy's soft control
-border (the foreground at 40%), square corners, the Omarchy font at Ghostty's
-`font-size`, the word Tab takes in bold accent, and the rest softened to the
-dimmest shade that still reads at 4.5:1 (the accent falls back to the
-foreground below that). It writes `fcitx5/themes/badi-omarchy/theme.conf`
+border (the foreground at 40%), square corners, the Omarchy font at the
+preferred terminal's size, the word Tab takes in bold accent, and the rest
+softened to the dimmest shade that still reads at 4.5:1 (the accent falls
+back to the foreground below that). The font size comes from the terminal
+`xdg-terminal-exec` opens: the first entry of its lists (yours, then the
+system's and the packaged `hyprland-xdg-terminals.list`, the desktop's own
+list before the shared one) that it would run, a terminal emulator not
+hidden and with its `TryExec` found. For Ghostty, Alacritty, Kitty or foot
+it reads the config that terminal loads (Kitty's system file under yours,
+foot's first file); otherwise, or without a size, Ghostty's
+config and then 10. It reads no included or imported file, and foot's
+`pixelsize`, which has no point size, falls back the same way. It writes
+`fcitx5/themes/badi-omarchy/theme.conf`
 under `XDG_DATA_HOME` and, only when absent or written by Badi,
 `fcitx5/conf/classicui.conf`; a classicui.conf you wrote is left alone and
 named on the console. The updater installs the generator as
