@@ -14,7 +14,7 @@ Spelling offers one correction for a finished word. You accept it explicitly. Ba
 
 - In Ghostty (`badi app com.mitchellh.ghostty on`) or foot (`badi app foot on`), a correction looks like `teh → the` and Tab accepts it. The line is not submitted. Without that grant the typed line is not tracked. In Bash the correction is `original → corrected`, and Ctrl-X, then Tab accepts it. The line is not submitted.
 - In Obsidian, the misspelled word is replaced and one undo restores it.
-- In Writer, finish the word and pause for the infobar, or press Alt+F7, then Alt+F7 again to replace. Ctrl+Z restores the typo.
+- In Writer, finish the word and pause for the infobar, or press Alt+F7, then Alt+F7 again to replace. On GNOME the desktop Alt+F7 binding moves the window, so use the infobar's Replace button. Ctrl+Z restores the typo.
 - `badi spelling` lists languages. English is on by default.
 
 ## Driving it with verify-badi
