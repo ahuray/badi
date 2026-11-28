@@ -43,7 +43,7 @@ unicode-segmentation = "1.12"
 unicode-script = "0.5"
 uuid = { version = "1.18", features = ["serde", "v4"] }
 whatlang = "=0.18.0"
-jiff = { version = "0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
+jiff = { version = "1.0.3", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 
 [dev-dependencies]
 tokio = { version = "1.47", features = ["test-util"] }
